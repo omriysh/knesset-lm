@@ -22,8 +22,11 @@ Usage:
 
 import requests
 from functools import lru_cache
+from datetime import datetime, timezone
+from dateutil import parser
 
 OKNESSET_API = "https://backend.oknesset.org"
+OFFICIAL_KNESSET_NEW_API = "https://knesset.gov.il/OdataV4/ParliamentInfo"
 TIMEOUT      = 15
 
 
@@ -162,49 +165,70 @@ def get_committee_by_name(name: str, knesset_num: int = 25) -> list[dict]:
     ]
 
 
-def get_committee_members(committee_id: int, knesset_num: int = 25) -> list[dict]:
-    """
-    Return all MKs who held a position in a given committee during a given Knesset.
-    Uses the /members_mk_individual_committees/list endpoint.
-    Each entry contains: mk_id, full_name, party, role, start_date, finish_date.
-    """
-    url = f"{OKNESSET_API}/members_mk_individual_committees/list"
-    params = {"committee_id": committee_id, "knesset": knesset_num, "limit": 200}
-    response = requests.get(url, params=params, timeout=TIMEOUT)
-    response.raise_for_status()
-    positions = response.json()
+def get_committee_members(
+    committee_id: int,
+    knesset_num: int = 25,
+    date: datetime | None = None,
+) -> list[dict]:
 
-    # Enrich each position with the MK's name and party via the cached members list
-    current = _fetch_members(True)
-    former  = _fetch_members(False)
-    mk_lookup: dict[int, dict] = {
-        mk["mk_individual_id"]: mk
-        for mk in (current + former)
+    if date is None:
+        date = datetime.now(timezone.utc)
+
+    url = f"{OFFICIAL_KNESSET_NEW_API}/KNS_PersonToPosition"
+
+    params = {
+        "$expand": "KNS_Position,KNS_Person",
+        "$filter": f"KnessetNum eq {knesset_num} and CommitteeID eq {committee_id}",
+        "$top": 1000
     }
 
-    seen_ids: set = set()
-    members = []
-    for pos in positions:
-        mk_id = pos.get("mk_individual_id")
-        if mk_id is None or mk_id in seen_ids:
+    r = requests.get(url, params=params)
+    r.raise_for_status()
+
+    rows = r.json().get("value", [])
+
+    active_members: dict[int, dict] = {}
+
+    for row in rows:
+        start = parser.isoparse(row.get("StartDate"))
+        finish_raw = row.get("FinishDate")
+        finish = parser.isoparse(finish_raw) if finish_raw else None
+
+        # Filter by date
+        if start > date:
             continue
-        seen_ids.add(mk_id)
-        mk = mk_lookup.get(mk_id, {})
-        faction = _most_recent_faction(
-            [f for f in (mk.get("factions") or []) if f],
-            knesset_num
-        )
-        members.append({
-            "mk_id":      mk_id,
-            "full_name":  f"{mk.get('mk_individual_first_name', '')} {mk.get('mk_individual_name', '')}".strip() or pos.get("committee_name", ""),
-            "party":      faction["faction_name"].strip() if faction else None,
-            "role":       pos.get("position_name", ""),
-            "start_date": pos.get("start_date"),
-            "finish_date": pos.get("finish_date"),
+        if finish and finish < date:
+            continue
+
+        person = row.get("KNS_Person", {})
+        position = row.get("KNS_Position", {})
+
+        mk_id = row.get("PersonID")
+        full_name = f"{person.get('FirstName','')} {person.get('LastName','')}".strip()
+        role = position.get("PositionName")
+
+        # Deduplicate by mk_id
+        if mk_id not in active_members:
+            active_members[mk_id] = {
+                "mk_id": mk_id,
+                "full_name": full_name,
+                "roles": set(),
+            }
+
+        if role:
+            active_members[mk_id]["roles"].add(role)
+
+    # Convert roles set → sorted list
+    result = []
+    for member in active_members.values():
+        result.append({
+            "mk_id": member["mk_id"],
+            "full_name": member["full_name"],
+            "roles": sorted(member["roles"]),
         })
 
-    members.sort(key=lambda x: x["full_name"])
-    return members
+    result.sort(key=lambda x: x["full_name"])
+    return result
 
 
 def get_mk_profile(name: str, knesset_num: int = 25) -> dict | None:
