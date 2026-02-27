@@ -68,54 +68,13 @@ def _most_recent_faction(factions: list[dict], knesset_num: int) -> dict | None:
     return max(relevant, key=lambda f: f.get("start_date") or "")
 
 
-def _normalize_mk(mk: dict, knesset_num: int = 25) -> dict:
-    """Convert a raw member record into a clean, consistent dict."""
-    factions   = [f for f in (mk.get("factions") or []) if f]
-    ministries = [m for m in (mk.get("govministries") or []) if m]
-    committees = [c for c in (mk.get("committee_positions") or []) if c]
-    faction    = _most_recent_faction(factions, knesset_num)
-
-    return {
-        "mk_id":      mk.get("mk_individual_id"),
-        "person_id":  mk.get("PersonID"),
-        "first_name": mk.get("mk_individual_first_name", ""),
-        "last_name":  mk.get("mk_individual_name", ""),
-        "full_name":  f"{mk.get('mk_individual_first_name', '')} {mk.get('mk_individual_name', '')}".strip(),
-        "altnames":   mk.get("altnames") or [],
-        "is_current": mk.get("IsCurrent", False),
-        "email":      mk.get("mk_individual_email"),
-        "party":      faction["faction_name"].strip() if faction else None,
-        "factions":   [
-            {
-                "party":      f["faction_name"].strip(),
-                "start_date": f.get("start_date"),
-                "finish_date": f.get("finish_date"),
-                "knesset":    f.get("knesset"),
-            }
-            for f in factions
-        ],
-        "ministries": [
-            {
-                "ministry":   m.get("govministry_name", ""),
-                "position":   m.get("position_name", ""),
-                "start_date": m.get("start_date"),
-                "finish_date": m.get("finish_date"),
-                "knesset":    m.get("knesset"),
-            }
-            for m in ministries
-            if m.get("knesset") == knesset_num
-        ],
-        "committee_positions": committees,
-    }
-
-
 # ── Name Search ───────────────────────────────────────────────────────────────
 
 def _name_matches(mk: dict, query: str) -> bool:
     """Check if a query string matches any known name or altname of an MK."""
     query = query.strip()
     full  = f"{mk.get('mk_individual_first_name', '')} {mk.get('mk_individual_name', '')}".strip()
-    candidates = [full, mk.get("mk_individual_name", ""), mk.get("mk_individual_first_name", "")]
+    candidates = [full, f"{mk.get('mk_individual_name', '')} {mk.get('mk_individual_first_name', '')}".strip()]
     candidates += (mk.get("altnames") or [])
 
     query_lower = query.lower()
@@ -139,7 +98,7 @@ def get_all_mks(knesset_num: int = 25) -> list[dict]:
     Each entry contains: mk_id, full_name, party, is_current, email.
     """
     members = _get_all_members_raw(knesset_num)
-    result  = [_normalize_mk(mk, knesset_num) for mk in members]
+    result  = [mk for mk in members]
     result.sort(key=lambda x: x.get("last_name", ""))
     return result
 
@@ -169,16 +128,83 @@ def get_all_parties(knesset_num: int = 25) -> list[dict]:
 def get_mk_by_name(name: str, knesset_num: int = 25) -> list[dict]:
     """
     Search for MKs by name (Hebrew, partial, or altname).
-    Returns a list of normalized MK dicts.
+    Returns a list of MK dicts.
     """
     current = _fetch_members(True)
     former  = _fetch_members(False)
     matches = [
-        _normalize_mk(mk, knesset_num)
+        mk
         for mk in (current + former)
         if _name_matches(mk, name)
     ]
     return matches
+
+
+def get_committee_by_name(name: str, knesset_num: int = 25) -> list[dict]:
+    """
+    Search for Knesset committees by name (Hebrew, partial match) and Knesset number.
+    Uses the /committees_kns_committee/list endpoint.
+    Returns a list of dicts: {CommitteeID, Name, KnessetNum, IsCurrent}.
+    """
+    url = f"{OKNESSET_API}/committees_kns_committee/list"
+    params = {"Name": name, "KnessetNum": knesset_num, "limit": 100}
+    response = requests.get(url, params=params, timeout=TIMEOUT)
+    response.raise_for_status()
+    results = response.json()
+    return [
+        {
+            "CommitteeID": c["CommitteeID"],
+            "Name":        c.get("Name", ""),
+            "KnessetNum":  c.get("KnessetNum"),
+            "IsCurrent":   c.get("IsCurrent"),
+        }
+        for c in results
+    ]
+
+
+def get_committee_members(committee_id: int, knesset_num: int = 25) -> list[dict]:
+    """
+    Return all MKs who held a position in a given committee during a given Knesset.
+    Uses the /members_mk_individual_committees/list endpoint.
+    Each entry contains: mk_id, full_name, party, role, start_date, finish_date.
+    """
+    url = f"{OKNESSET_API}/members_mk_individual_committees/list"
+    params = {"committee_id": committee_id, "knesset": knesset_num, "limit": 200}
+    response = requests.get(url, params=params, timeout=TIMEOUT)
+    response.raise_for_status()
+    positions = response.json()
+
+    # Enrich each position with the MK's name and party via the cached members list
+    current = _fetch_members(True)
+    former  = _fetch_members(False)
+    mk_lookup: dict[int, dict] = {
+        mk["mk_individual_id"]: mk
+        for mk in (current + former)
+    }
+
+    seen_ids: set = set()
+    members = []
+    for pos in positions:
+        mk_id = pos.get("mk_individual_id")
+        if mk_id is None or mk_id in seen_ids:
+            continue
+        seen_ids.add(mk_id)
+        mk = mk_lookup.get(mk_id, {})
+        faction = _most_recent_faction(
+            [f for f in (mk.get("factions") or []) if f],
+            knesset_num
+        )
+        members.append({
+            "mk_id":      mk_id,
+            "full_name":  f"{mk.get('mk_individual_first_name', '')} {mk.get('mk_individual_name', '')}".strip() or pos.get("committee_name", ""),
+            "party":      faction["faction_name"].strip() if faction else None,
+            "role":       pos.get("position_name", ""),
+            "start_date": pos.get("start_date"),
+            "finish_date": pos.get("finish_date"),
+        })
+
+    members.sort(key=lambda x: x["full_name"])
+    return members
 
 
 def get_mk_profile(name: str, knesset_num: int = 25) -> dict | None:

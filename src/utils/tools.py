@@ -64,7 +64,7 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "get_committee_info",
+            "name": "get_committee_by_name",
             "description": (
                 "Look up a Knesset committee by name and return its members. "
                 "Use this to understand who participates in a given committee."
@@ -110,7 +110,7 @@ def dispatch(tool_name: str, args: dict) -> str:
                 return json.dumps({"error": f"No MK found matching '{args['name']}'"}, ensure_ascii=False)
             return json.dumps(result, ensure_ascii=False, default=str)
 
-        elif tool_name == "get_committee_info":
+        elif tool_name == "get_committee_by_name":
             knesset_num = args.get("knesset_num", 25)
             committees = get_committee_by_name(args["name"], knesset_num)
             if not committees:
