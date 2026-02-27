@@ -21,13 +21,21 @@ Usage:
 """
 
 import requests
+from urllib.parse import quote
 from functools import lru_cache
-from datetime import datetime, timezone
-from dateutil import parser
+import io
+import pdfplumber
 
 OKNESSET_API = "https://backend.oknesset.org"
 OFFICIAL_KNESSET_NEW_API = "https://knesset.gov.il/OdataV4/ParliamentInfo"
-TIMEOUT      = 15
+TIMEOUT = 30
+_DOC_GROUP_PRIORITY = [
+    "הצעת חוק לקריאה השנייה והשלישית",
+    "הצעת חוק לקריאה הראשונה",
+    "טקסט חוק מאוחד",
+    "חוק - פרסום ברשומות",
+]
+
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -69,6 +77,11 @@ def _most_recent_faction(factions: list[dict], knesset_num: int) -> dict | None:
     if not relevant:
         return None
     return max(relevant, key=lambda f: f.get("start_date") or "")
+
+
+def _fix_file_path(path: str) -> str:
+    """Normalize Knesset document URLs (backslashes → forward slashes)."""
+    return path.replace("\\", "/")
 
 
 # ── Name Search ───────────────────────────────────────────────────────────────
@@ -165,70 +178,48 @@ def get_committee_by_name(name: str, knesset_num: int = 25) -> list[dict]:
     ]
 
 
-def get_committee_members(
+def get_active_committee_members(
     committee_id: int,
     knesset_num: int = 25,
-    date: datetime | None = None,
+    current_only: bool = True,
 ) -> list[dict]:
-
-    if date is None:
-        date = datetime.now(timezone.utc)
-
+    """
+    Search for MKs the are a part of a certain committee in a given time.
+    Returns a list of (partial) MK dicts.
+    """
     url = f"{OFFICIAL_KNESSET_NEW_API}/KNS_PersonToPosition"
+    filter_expr = f"CommitteeID eq {committee_id} and KnessetNum eq {knesset_num}"
+    if current_only:
+        filter_expr += " and IsCurrent eq true"
 
     params = {
-        "$expand": "KNS_Position,KNS_Person",
-        "$filter": f"KnessetNum eq {knesset_num} and CommitteeID eq {committee_id}",
-        "$top": 1000
+        "$expand": "KNS_Person,KNS_Position",
+        "$filter": filter_expr,
+        "$top":    500,
     }
-
-    r = requests.get(url, params=params)
+    r = requests.get(url, params=params, timeout=TIMEOUT)
     r.raise_for_status()
 
-    rows = r.json().get("value", [])
-
-    active_members: dict[int, dict] = {}
-
-    for row in rows:
-        start = parser.isoparse(row.get("StartDate"))
-        finish_raw = row.get("FinishDate")
-        finish = parser.isoparse(finish_raw) if finish_raw else None
-
-        # Filter by date
-        if start > date:
-            continue
-        if finish and finish < date:
+    seen: dict[int, dict] = {}
+    for row in r.json().get("value", []):
+        person   = row.get("KNS_Person") or {}
+        position = row.get("KNS_Position") or {}
+        mk_id    = row.get("PersonID")
+        full_name = f"{person.get('FirstName', '')} {person.get('LastName', '')}".strip()
+        # DutyDesc is the gendered, committee-specific role string; fall back to Position.Description
+        duty = row.get("DutyDesc") or position.get("Description") or ""
+        
+        if 'מ"מ' in duty:
             continue
 
-        person = row.get("KNS_Person", {})
-        position = row.get("KNS_Position", {})
+        if mk_id not in seen:
+            seen[mk_id] = {"mk_id": mk_id, "full_name": full_name, "duty_desc": duty}
+        else:
+            # Prefer chair role over plain member if we see both
+            if 'יו"ר' in duty and 'יו"ר' not in seen[mk_id]["duty_desc"]:
+                seen[mk_id]["duty_desc"] = duty
 
-        mk_id = row.get("PersonID")
-        full_name = f"{person.get('FirstName','')} {person.get('LastName','')}".strip()
-        role = position.get("PositionName")
-
-        # Deduplicate by mk_id
-        if mk_id not in active_members:
-            active_members[mk_id] = {
-                "mk_id": mk_id,
-                "full_name": full_name,
-                "roles": set(),
-            }
-
-        if role:
-            active_members[mk_id]["roles"].add(role)
-
-    # Convert roles set → sorted list
-    result = []
-    for member in active_members.values():
-        result.append({
-            "mk_id": member["mk_id"],
-            "full_name": member["full_name"],
-            "roles": sorted(member["roles"]),
-        })
-
-    result.sort(key=lambda x: x["full_name"])
-    return result
+    return sorted(seen.values(), key=lambda x: x["full_name"])
 
 
 def get_mk_profile(name: str, knesset_num: int = 25) -> dict | None:
@@ -244,3 +235,198 @@ def get_mk_profile(name: str, knesset_num: int = 25) -> dict | None:
     if len(matches) > 1:
         result["other_matches"] = [m["full_name"] for m in matches[1:]]
     return result
+
+
+def get_law_or_bill_by_name(
+    name_part: str,
+    knesset_num: int | None = None,
+) -> dict | None:
+    """
+    Search for a bill/law by partial Hebrew name.
+    Returns the single most recently updated match, or None.
+    """
+    base_url = f"{OFFICIAL_KNESSET_NEW_API}/KNS_Bill"
+    filter_expr = f"contains(Name,'{name_part}')"
+    if knesset_num:
+        filter_expr += f" and KnessetNum eq {knesset_num}"
+
+    params = {
+        "$filter":  filter_expr,
+        "$expand":  "KNS_Status,KNS_BillInitiator($expand=KNS_Person)",
+        "$top":     1,                        # only the best match
+        "$orderby": "LastUpdatedDate desc",
+    }
+    r = requests.get(base_url, params=params, timeout=TIMEOUT)
+    r.raise_for_status()
+
+    bills = r.json().get("value", [])
+    if not bills:
+        return None
+
+    bill = bills[0]
+    initiators = [
+        {
+            "person_id": bi["KNS_Person"]["Id"],
+            "full_name": f"{bi['KNS_Person'].get('FirstName', '')} {bi['KNS_Person'].get('LastName', '')}".strip(),
+        }
+        for bi in (bill.get("KNS_BillInitiator") or [])
+        if bi.get("KNS_Person")
+    ]
+    return {
+        "bill_id":          bill.get("Id"),
+        "bill_name":        bill.get("Name"),
+        "bill_number":      bill.get("Number"),
+        "knesset_num":      bill.get("KnessetNum"),
+        "type":             bill.get("TypeDesc"),
+        "sub_type":         bill.get("SubTypeDesc"),
+        "status":           (bill.get("KNS_Status") or {}).get("Desc"),
+        "committee_id":     bill.get("CommitteeID"),
+        "publication_date": bill.get("PublicationDate"),
+        "last_updated":     bill.get("LastUpdatedDate"),
+        "initiators":       initiators,
+    }
+    
+
+def get_bill_documents(bill_id: int) -> list[dict]:
+    """
+    Return document metadata for a bill: title, type, and corrected URL.
+    Sorted by usefulness (latest reading first).
+    """
+    r = requests.get(
+        f"{OFFICIAL_KNESSET_NEW_API}/KNS_DocumentBill",
+        params={"$filter": f"BillID eq {bill_id}", "$top": 20},
+        timeout=TIMEOUT,
+    )
+    r.raise_for_status()
+
+    docs = r.json().get("value", [])
+
+    def _priority(doc):
+        desc = doc.get("GroupTypeDesc", "")
+        try:
+            return _DOC_GROUP_PRIORITY.index(desc)
+        except ValueError:
+            return len(_DOC_GROUP_PRIORITY)
+
+    docs.sort(key=_priority)
+    return [
+        {
+            "doc_id":    doc["Id"],
+            "bill_id":   bill_id,
+            "group":     doc.get("GroupTypeDesc"),
+            "format":    doc.get("ApplicationDesc"),
+            "url":       _fix_file_path(doc["FilePath"]),
+        }
+        for doc in docs
+        if doc.get("FilePath")
+    ]
+
+
+def get_bill_text(bill_id: int, max_chars: int = 8000) -> dict | None:
+    """
+    Fetch the most relevant document for a bill and extract its text.
+    Tries documents in priority order until one succeeds.
+    Returns {bill_id, doc_id, group, url, text} or None if all fail.
+    max_chars limits the returned text to avoid overwhelming the context window.
+    """
+    docs = get_bill_documents(bill_id)
+    if not docs:
+        return None
+
+    for doc in docs:
+        if doc["format"] not in ("PDF", "PPT"):  # skip non-PDF for now
+            continue
+        try:
+            response = requests.get(doc["url"], timeout=TIMEOUT)
+            response.raise_for_status()
+
+            with pdfplumber.open(io.BytesIO(response.content)) as pdf:
+                pages = []
+                for page in pdf.pages:
+                    text = page.extract_text(x_tolerance=2, y_tolerance=2)
+                    if text:
+                        pages.append(text)
+
+            full_text = "\n".join(pages).strip()
+            if not full_text:
+                continue  # try next doc
+
+            return {
+                "bill_id": bill_id,
+                "doc_id":  doc["doc_id"],
+                "group":   doc["group"],
+                "url":     doc["url"],
+                "text":    full_text[:max_chars],
+                "truncated": len(full_text) > max_chars,
+            }
+
+        except Exception:
+            continue  # try next doc
+
+    return None
+
+
+def get_bill_details(bill_id: int) -> dict | None:
+    # Request 1: bill + status only (no nested expand)
+    url = (
+        f"{OFFICIAL_KNESSET_NEW_API}/KNS_Bill({bill_id})"
+        f"?$expand=KNS_Status"
+    )
+    r = requests.get(url, timeout=TIMEOUT)
+    if r.status_code == 404:
+        return None
+    r.raise_for_status()
+    bill = r.json()
+
+    # Request 2: initiators separately
+    r2 = requests.get(
+        f"{OFFICIAL_KNESSET_NEW_API}/KNS_BillInitiator",
+        params={"$filter": f"BillID eq {bill_id}", "$expand": "KNS_Person", "$top": 20},
+        timeout=TIMEOUT,
+    )
+    r2.raise_for_status()
+    initiators = [
+        {
+            "person_id": bi["KNS_Person"]["Id"],
+            "full_name": f"{bi['KNS_Person'].get('FirstName', '')} {bi['KNS_Person'].get('LastName', '')}".strip(),
+        }
+        for bi in r2.json().get("value", [])
+        if bi.get("KNS_Person")
+    ]
+
+    return {
+        "bill_id":          bill.get("Id"),
+        "bill_name":        bill.get("Name"),
+        "bill_number":      bill.get("Number"),
+        "knesset_num":      bill.get("KnessetNum"),
+        "type":             bill.get("TypeDesc"),
+        "sub_type":         bill.get("SubTypeDesc"),
+        "status":           (bill.get("KNS_Status") or {}).get("Desc"),
+        "committee_id":     bill.get("CommitteeID"),
+        "publication_date": bill.get("PublicationDate"),
+        "last_updated":     bill.get("LastUpdatedDate"),
+        "initiators":       initiators,
+        "documents":        get_bill_documents(bill_id),
+    }
+
+
+def get_bill_details_by_name(bill_name: str) -> dict | None:
+    bill = get_law_or_bill_by_name(bill_name)
+    if not bill:
+        return None
+    return get_bill_details(bill["bill_id"])
+
+
+def get_bill_text_by_name(bill_name: str, knesset_num: int = 25, max_chars: int = 8000) -> dict | None:
+    bill = get_law_or_bill_by_name(bill_name, knesset_num)
+    if not bill:
+        return None
+    return get_bill_text(bill["bill_id"], max_chars)
+
+
+def get_active_committee_members_by_name(name: str, knesset_num: int = 25) -> list[dict]:
+    committees = get_committee_by_name(name, knesset_num)
+    if not committees:
+        return []
+    committee = committees[0]  # take the best match
+    return get_active_committee_members(committee["CommitteeID"], knesset_num)
