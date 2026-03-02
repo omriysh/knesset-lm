@@ -1,26 +1,21 @@
 """
 knesset_db.py
 
-Data access layer for Knesset member data.
-Uses the backend.oknesset.org REST API as primary source.
+Data access layer for Knesset data.
 
-API endpoints:
-    https://backend.oknesset.org/members?is_current=true   — current MKs
-    https://backend.oknesset.org/members?is_current=false  — former MKs
+External APIs:
+    https://backend.oknesset.org           — MK profiles, committee membership
+    https://knesset.gov.il/OdataV4/ParliamentInfo — bills, documents, committee sessions
 
-Each member record contains:
-    mk_individual_id, mk_individual_first_name, mk_individual_name,
-    PersonID, IsCurrent, altnames,
-    factions        — list of {faction_id, faction_name, start_date, finish_date, knesset}
-    committee_positions — list of committee roles
-    faction_chairpersons — list of faction chair periods
-    govministries   — list of {govministry_name, position_name, start_date, finish_date, knesset}
-
-Usage:
-    from utils.knesset_db import get_mk_profile, get_all_mks, get_all_parties
+Key public functions:
+    get_mk_profile(name, knesset_num=25)
+    get_active_committee_members_by_name(name, knesset_num=25)
+    get_bill_details_by_name(bill_name)
+    get_bill_text_by_name(bill_name, knesset_num=25)
+    get_committee_sessions_by_name(name, knesset_num=25)
+    get_session_protocol_text(session_id)
 """
 
-import requests
 from urllib.parse import quote
 from functools import lru_cache
 import io
@@ -28,9 +23,9 @@ import pdfplumber
 import fitz  # pymupdf
 import re
 
-OKNESSET_API = "https://backend.oknesset.org"
-OFFICIAL_KNESSET_NEW_API = "https://knesset.gov.il/OdataV4/ParliamentInfo"
-TIMEOUT = 30
+from utils.cache import SESSION
+from config import OKNESSET_API, OFFICIAL_KNESSET_NEW_API, API_TIMEOUT
+
 _DOC_GROUP_PRIORITY = [
     "הצעת חוק לקריאה השנייה והשלישית",
     "הצעת חוק לקריאה הראשונה",
@@ -39,8 +34,7 @@ _DOC_GROUP_PRIORITY = [
 ]
 _HEBREW_DATE_RE = re.compile(r',?\s*ה?תש[\u05d0-\u05ea]{1,3}["\u05f3][\u05d0-\u05ea](?:[–\-]\d{4})?')
 _BILL_TYPE_PREFIXES = ('הצעת חוק', 'חוק', 'תיקון לחוק')
-
-
+_PROTOCOL_NAME_SUBSTRINGS = ("פרוטוקול", "protocol")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -49,11 +43,11 @@ _BILL_TYPE_PREFIXES = ('הצעת חוק', 'חוק', 'תיקון לחוק')
 def _fetch_members(is_current: bool) -> list[dict]:
     """
     Fetch all members from the oknesset API.
-    Cached per session — current and former are cached separately.
+    lru_cache provides in-process deduplication on top of the disk cache.
     """
     url    = f"{OKNESSET_API}/members"
     params = {"is_current": "true" if is_current else "false"}
-    response = requests.get(url, params=params, timeout=TIMEOUT)
+    response = SESSION.get(url, params=params, timeout=API_TIMEOUT)
     response.raise_for_status()
     return response.json()
 
@@ -67,7 +61,6 @@ def _get_all_members_raw(knesset_num: int = 25) -> list[dict]:
     if knesset_num is None:
         return all_members
 
-    # Keep only members who had a faction in the requested Knesset
     result = []
     for mk in all_members:
         factions = [f for f in (mk.get("factions") or []) if f and f.get("knesset") == knesset_num]
@@ -101,10 +94,7 @@ def _is_garbage(text: str, threshold: float = 0.3) -> bool:
 
 
 def _extract_pdf_text_pymupdf(pdf_bytes: bytes) -> str:
-    """
-    Extract text from a PDF using PyMuPDF (fitz).
-    Handles more Hebrew font encodings than pdfplumber.
-    """
+    """Extract text from a PDF using PyMuPDF (fitz)."""
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     pages = []
     for page in doc:
@@ -116,9 +106,7 @@ def _extract_pdf_text_pymupdf(pdf_bytes: bytes) -> str:
 
 
 def _extract_pdf_text_pdfplumber(pdf_bytes: bytes) -> str:
-    """
-    Extract text from a PDF using pdfplumber (pdfminer backend).
-    """
+    """Extract text from a PDF using pdfplumber (pdfminer backend)."""
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         pages = []
         for page in pdf.pages:
@@ -131,11 +119,9 @@ def _extract_pdf_text_pdfplumber(pdf_bytes: bytes) -> str:
 def _extract_pdf_text(pdf_bytes: bytes) -> str:
     """
     Extract Hebrew text from a PDF, trying multiple engines.
-    PyMuPDF first (faster, handles more font encodings).
-    Falls back to pdfplumber if the result is garbage.
+    PyMuPDF first (faster, handles more font encodings), then pdfplumber.
     Returns empty string if all methods fail.
     """
-    # Try PyMuPDF first
     try:
         text = _extract_pdf_text_pymupdf(pdf_bytes)
         if text and not _is_garbage(text):
@@ -143,7 +129,6 @@ def _extract_pdf_text(pdf_bytes: bytes) -> str:
     except Exception:
         pass
 
-    # Fall back to pdfplumber
     try:
         text = _extract_pdf_text_pdfplumber(pdf_bytes)
         if text and not _is_garbage(text):
@@ -157,45 +142,30 @@ def _extract_pdf_text(pdf_bytes: bytes) -> str:
 def _sanitize_odata_search(name: str) -> str:
     """
     Prepare a bill name for use inside an OData contains() filter.
-    - Strips parenthetical clauses (which break OData parser)
-    - Escapes remaining single quotes as ''
-    - Collapses extra whitespace
+    Strips parenthetical clauses (which break the OData parser) and escapes quotes.
     """
-    # Remove anything inside parentheses (including nested)
     sanitized = re.sub(r'\(.*?\)', '', name)
-    # Collapse whitespace and strip
     sanitized = re.sub(r'\s+', ' ', sanitized).strip()
-    # Remove trailing comma/dash left after stripping parens
     sanitized = sanitized.strip(',-– ').strip()
-    # Escape single quotes for OData
     sanitized = sanitized.replace("'", "''")
     return sanitized
 
 
 def _bill_search_terms(name: str) -> list[str]:
     """
-    Generate a ranked list of OData search terms to try for a bill name.
-    Each term is progressively shorter/more lenient, maximising recall.
-
-    Strategy:
-      1. Full name, parentheses stripped  (most specific)
-      2. Hebrew date suffix also stripped  (removes התשפ"ד–2024 etc.)
-      3. Core subject noun phrase only     (strips leading type prefix too)
-      4. First 4 significant words of the subject  (widest net)
+    Generate a ranked list of OData search terms for a bill name.
+    Each term is progressively shorter/more lenient to maximise recall.
     """
     terms: list[str] = []
 
-    # Step 1 – strip parentheses
     step1 = _sanitize_odata_search(name)
     if step1:
         terms.append(step1)
 
-    # Step 2 – also strip Hebrew date suffix
     step2 = _HEBREW_DATE_RE.sub('', step1).strip().strip(',-– ').strip()
     if step2 and step2 != step1:
         terms.append(step2)
 
-    # Step 3 – strip leading type prefix ("הצעת חוק", "חוק" …)
     step3 = step2
     for prefix in _BILL_TYPE_PREFIXES:
         if step3.startswith(prefix):
@@ -204,13 +174,11 @@ def _bill_search_terms(name: str) -> list[str]:
     if step3 and step3 != step2:
         terms.append(step3)
 
-    # Step 4 – first 4 words of the subject (skip very short words like ה/ו/ב)
     words = [w for w in step3.split() if len(w) > 1]
     short = ' '.join(words[:4])
     if short and short != step3:
         terms.append(short)
 
-    # Escape single-quotes for OData in every term
     return [t.replace("'", "''") for t in terms if t]
 
 
@@ -255,7 +223,7 @@ def _search_bills_by_term(
         "$top":     top,
         "$orderby": "LastUpdatedDate desc",
     }
-    r = requests.get(base_url, params=params, timeout=TIMEOUT)
+    r = SESSION.get(base_url, params=params, timeout=API_TIMEOUT)
     r.raise_for_status()
     return r.json().get("value", [])
 
@@ -271,33 +239,25 @@ def _name_matches(mk: dict, query: str) -> bool:
     for name in candidates:
         if not name:
             continue
-        # Exact match
         if name.strip() == query:
             return True
-        # Query is a substring of name or vice versa (handles partial names)
         if query_lower in name.lower() or name.lower() in query_lower:
             return True
     return False
 
 
-# ── Public API ────────────────────────────────────────────────────────────────
+# ── Public API — MKs ──────────────────────────────────────────────────────────
 
 def get_all_mks(knesset_num: int = 25) -> list[dict]:
-    """
-    Return all MKs who served in a given Knesset, sorted by last name.
-    Each entry contains: mk_id, full_name, party, is_current, email.
-    """
+    """Return all MKs who served in a given Knesset, sorted by last name."""
     members = _get_all_members_raw(knesset_num)
-    result  = [mk for mk in members]
-    result.sort(key=lambda x: x.get("last_name", ""))
-    return result
+    return sorted(members, key=lambda x: x.get("last_name", ""))
 
 
 def get_all_parties(knesset_num: int = 25) -> list[dict]:
     """
     Return all parties/factions that had seats in a given Knesset,
     sorted by MK count descending.
-    Each entry contains: party, mk_count.
     """
     members = _get_all_members_raw(knesset_num)
     counts: dict[str, int] = {}
@@ -316,84 +276,10 @@ def get_all_parties(knesset_num: int = 25) -> list[dict]:
 
 
 def get_mk_by_name(name: str, knesset_num: int = 25) -> list[dict]:
-    """
-    Search for MKs by name (Hebrew, partial, or altname).
-    Returns a list of MK dicts.
-    """
+    """Search for MKs by name (Hebrew, partial, or altname)."""
     current = _fetch_members(True)
     former  = _fetch_members(False)
-    matches = [
-        mk
-        for mk in (current + former)
-        if _name_matches(mk, name)
-    ]
-    return matches
-
-
-def get_committee_by_name(name: str, knesset_num: int = 25) -> list[dict]:
-    """
-    Search for Knesset committees by name (Hebrew, partial match) and Knesset number.
-    Uses the /committees_kns_committee/list endpoint.
-    Returns a list of dicts: {CommitteeID, Name, KnessetNum, IsCurrent}.
-    """
-    url = f"{OKNESSET_API}/committees_kns_committee/list"
-    params = {"Name": name, "KnessetNum": knesset_num, "limit": 100}
-    response = requests.get(url, params=params, timeout=TIMEOUT)
-    response.raise_for_status()
-    results = response.json()
-    return [
-        {
-            "CommitteeID": c["CommitteeID"],
-            "Name":        c.get("Name", ""),
-            "KnessetNum":  c.get("KnessetNum"),
-            "IsCurrent":   c.get("IsCurrent"),
-        }
-        for c in results
-    ]
-
-
-def get_active_committee_members(
-    committee_id: int,
-    knesset_num: int = 25,
-    current_only: bool = True,
-) -> list[dict]:
-    """
-    Search for MKs the are a part of a certain committee in a given time.
-    Returns a list of (partial) MK dicts.
-    """
-    url = f"{OFFICIAL_KNESSET_NEW_API}/KNS_PersonToPosition"
-    filter_expr = f"CommitteeID eq {committee_id} and KnessetNum eq {knesset_num}"
-    if current_only:
-        filter_expr += " and IsCurrent eq true"
-
-    params = {
-        "$expand": "KNS_Person,KNS_Position",
-        "$filter": filter_expr,
-        "$top":    500,
-    }
-    r = requests.get(url, params=params, timeout=TIMEOUT)
-    r.raise_for_status()
-
-    seen: dict[int, dict] = {}
-    for row in r.json().get("value", []):
-        person   = row.get("KNS_Person") or {}
-        position = row.get("KNS_Position") or {}
-        mk_id    = row.get("PersonID")
-        full_name = f"{person.get('FirstName', '')} {person.get('LastName', '')}".strip()
-        # DutyDesc is the gendered, committee-specific role string; fall back to Position.Description
-        duty = row.get("DutyDesc") or position.get("Description") or ""
-        
-        if 'מ"מ' in duty:
-            continue
-
-        if mk_id not in seen:
-            seen[mk_id] = {"mk_id": mk_id, "full_name": full_name, "duty_desc": duty}
-        else:
-            # Prefer chair role over plain member if we see both
-            if 'יו"ר' in duty and 'יו"ר' not in seen[mk_id]["duty_desc"]:
-                seen[mk_id]["duty_desc"] = duty
-
-    return sorted(seen.values(), key=lambda x: x["full_name"])
+    return [mk for mk in (current + former) if _name_matches(mk, name)]
 
 
 def get_mk_profile(name: str, knesset_num: int = 25) -> dict | None:
@@ -411,41 +297,195 @@ def get_mk_profile(name: str, knesset_num: int = 25) -> dict | None:
     return result
 
 
-def get_law_or_bill_by_name(
-    name_part: str,
-    knesset_num: int | None = None,
-) -> dict | None:
+# ── Public API — Committees ───────────────────────────────────────────────────
+
+def get_committee_by_name(name: str, knesset_num: int = 25) -> list[dict]:
     """
-    Search for a bill/law by partial Hebrew name.
+    Search for Knesset committees by name (Hebrew, partial match).
+    Returns list of {CommitteeID, Name, KnessetNum, IsCurrent}.
+    """
+    url = f"{OKNESSET_API}/committees_kns_committee/list"
+    params = {"Name": name, "KnessetNum": knesset_num, "limit": 100}
+    response = SESSION.get(url, params=params, timeout=API_TIMEOUT)
+    response.raise_for_status()
+    return [
+        {
+            "CommitteeID": c["CommitteeID"],
+            "Name":        c.get("Name", ""),
+            "KnessetNum":  c.get("KnessetNum"),
+            "IsCurrent":   c.get("IsCurrent"),
+        }
+        for c in response.json()
+    ]
 
-    Tries progressively shorter/simpler search terms so that names the model
-    writes (which include amendment suffixes, Hebrew dates, etc.) still match
-    the more concise names stored in the Knesset API.
 
-    Returns the single best match (most recently updated), or None.
+def get_active_committee_members(
+    committee_id: int,
+    knesset_num: int = 25,
+    current_only: bool = True,
+) -> list[dict]:
+    """Get MKs on a committee. Returns list of {mk_id, full_name, duty_desc}."""
+    url = f"{OFFICIAL_KNESSET_NEW_API}/KNS_PersonToPosition"
+    filter_expr = f"CommitteeID eq {committee_id} and KnessetNum eq {knesset_num}"
+    if current_only:
+        filter_expr += " and IsCurrent eq true"
+
+    params = {
+        "$expand": "KNS_Person,KNS_Position",
+        "$filter": filter_expr,
+        "$top":    500,
+    }
+    r = SESSION.get(url, params=params, timeout=API_TIMEOUT)
+    r.raise_for_status()
+
+    seen: dict[int, dict] = {}
+    for row in r.json().get("value", []):
+        person   = row.get("KNS_Person") or {}
+        position = row.get("KNS_Position") or {}
+        mk_id    = row.get("PersonID")
+        full_name = f"{person.get('FirstName', '')} {person.get('LastName', '')}".strip()
+        duty = row.get("DutyDesc") or position.get("Description") or ""
+
+        if 'מ"מ' in duty:
+            continue
+
+        if mk_id not in seen:
+            seen[mk_id] = {"mk_id": mk_id, "full_name": full_name, "duty_desc": duty}
+        elif 'יו"ר' in duty and 'יו"ר' not in seen[mk_id]["duty_desc"]:
+            seen[mk_id]["duty_desc"] = duty
+
+    return sorted(seen.values(), key=lambda x: x["full_name"])
+
+
+def get_active_committee_members_by_name(name: str, knesset_num: int = 25) -> list[dict]:
+    """Look up committee by name, then return its active members."""
+    committees = get_committee_by_name(name, knesset_num)
+    if not committees:
+        return []
+    return get_active_committee_members(committees[0]["CommitteeID"], knesset_num)
+
+
+def get_committee_sessions(committee_id: int, knesset_num: int = 25) -> list[dict]:
+    """
+    List sessions for a committee from OData KNS_CommitteeSession, newest first.
+    Returns list of {session_id, date, committee_id, knesset_num}.
+    """
+    url = f"{OFFICIAL_KNESSET_NEW_API}/KNS_CommitteeSession"
+    params = {
+        "$filter":  f"CommitteeID eq {committee_id} and KnessetNum eq {knesset_num}",
+        "$select":  "Id,CommitteeID,KnessetNum,StartDate,Note",
+        "$orderby": "StartDate desc",
+        "$top":     1000,
+    }
+    r = SESSION.get(url, params=params, timeout=API_TIMEOUT)
+    r.raise_for_status()
+    return [
+        {
+            "session_id":   s["Id"],
+            "date":         (s.get("StartDate") or "")[:10],  # YYYY-MM-DD
+            "committee_id": s.get("CommitteeID"),
+            "knesset_num":  s.get("KnessetNum"),
+            "note":         s.get("Note"),
+        }
+        for s in r.json().get("value", [])
+    ]
+
+
+def get_committee_sessions_by_name(name: str, knesset_num: int = 25) -> list[dict]:
+    """Resolve committee by name, then return its sessions."""
+    committees = get_committee_by_name(name, knesset_num)
+    if not committees:
+        return []
+    return get_committee_sessions(committees[0]["CommitteeID"], knesset_num)
+
+
+def get_session_documents(session_id: int) -> list[dict]:
+    """
+    Return document metadata for a committee session from KNS_DocumentCommitteeSession.
+    Returns list of {doc_id, session_id, name, format, url}.
+    """
+    r = SESSION.get(
+        f"{OFFICIAL_KNESSET_NEW_API}/KNS_DocumentCommitteeSession",
+        params={"$filter": f"CommitteeSessionID eq {session_id}", "$top": 20},
+        timeout=API_TIMEOUT,
+    )
+    r.raise_for_status()
+    return [
+        {
+            "doc_id":     doc["Id"],
+            "session_id": session_id,
+            "name":       doc.get("DocumentName"),
+            "format":     doc.get("ApplicationDesc"),
+            "url":        _fix_file_path(doc["FilePath"]),
+        }
+        for doc in r.json().get("value", [])
+        if doc.get("FilePath")
+    ]
+
+
+def get_session_protocol_text(session_id: int, max_chars: int | None = None) -> dict | None:
+    """
+    Download and extract the protocol PDF for a committee session.
+    Prefers documents whose name contains 'פרוטוקול'.
+    Returns {session_id, doc_id, name, url, text} or None if nothing found.
+    """
+    docs = get_session_documents(session_id)
+
+    # Prefer protocol-named documents; fall back to all docs
+    protocol_docs = [
+        d for d in docs
+        if d["name"] and any(p in d["name"] for p in _PROTOCOL_NAME_SUBSTRINGS)
+    ]
+    candidates = protocol_docs or docs
+
+    for doc in candidates:
+        if doc["format"] != "PDF":
+            continue
+        try:
+            response = SESSION.get(doc["url"], timeout=API_TIMEOUT)
+            response.raise_for_status()
+            text = _extract_pdf_text(response.content)
+            if not text:
+                continue
+            if max_chars:
+                text = text[:max_chars]
+            return {
+                "session_id": session_id,
+                "doc_id":     doc["doc_id"],
+                "name":       doc["name"],
+                "url":        doc["url"],
+                "text":       text,
+            }
+        except Exception:
+            continue
+
+    return None
+
+
+# ── Public API — Bills ────────────────────────────────────────────────────────
+
+def get_law_or_bill_by_name(name_part: str, knesset_num: int | None = None) -> dict | None:
+    """
+    Search for a bill/law by partial Hebrew name using progressive term relaxation.
+    Returns the single best match, or None.
     """
     for term in _bill_search_terms(name_part):
         bills = _search_bills_by_term(term, knesset_num, top=3)
         if bills:
-            # Prefer the bill whose stored name best overlaps with the original query
             def _score(b: dict) -> int:
                 stored = b.get("Name") or ""
                 return sum(1 for ch in name_part if ch in stored)
             bills.sort(key=_score, reverse=True)
             return _bill_record_to_dict(bills[0])
-
     return None
-    
+
 
 def get_bill_documents(bill_id: int) -> list[dict]:
-    """
-    Return document metadata for a bill: title, type, and corrected URL.
-    Sorted by usefulness (latest reading first).
-    """
-    r = requests.get(
+    """Return document metadata for a bill, sorted by priority (latest reading first)."""
+    r = SESSION.get(
         f"{OFFICIAL_KNESSET_NEW_API}/KNS_DocumentBill",
         params={"$filter": f"BillID eq {bill_id}", "$top": 20},
-        timeout=TIMEOUT,
+        timeout=API_TIMEOUT,
     )
     r.raise_for_status()
 
@@ -461,11 +501,11 @@ def get_bill_documents(bill_id: int) -> list[dict]:
     docs.sort(key=_priority)
     return [
         {
-            "doc_id":    doc["Id"],
-            "bill_id":   bill_id,
-            "group":     doc.get("GroupTypeDesc"),
-            "format":    doc.get("ApplicationDesc"),
-            "url":       _fix_file_path(doc["FilePath"]),
+            "doc_id":  doc["Id"],
+            "bill_id": bill_id,
+            "group":   doc.get("GroupTypeDesc"),
+            "format":  doc.get("ApplicationDesc"),
+            "url":     _fix_file_path(doc["FilePath"]),
         }
         for doc in docs
         if doc.get("FilePath")
@@ -475,25 +515,17 @@ def get_bill_documents(bill_id: int) -> list[dict]:
 def get_bill_text(bill_id: int, max_chars: int = 8000) -> dict | None:
     """
     Fetch the most relevant document for a bill and extract its text.
-    Tries documents in priority order until one succeeds.
-    Returns {bill_id, doc_id, group, url, text} or None if all fail.
-    max_chars limits the returned text to avoid overwhelming the context window.
+    Returns {bill_id, doc_id, group, url, text, truncated} or None.
     """
-    docs = get_bill_documents(bill_id)
-    if not docs:
-        return None
-
-    for doc in docs:
-        if doc["format"] not in ("PDF",):
+    for doc in get_bill_documents(bill_id):
+        if doc["format"] != "PDF":
             continue
         try:
-            response = requests.get(doc["url"], timeout=TIMEOUT)
+            response = SESSION.get(doc["url"], timeout=API_TIMEOUT)
             response.raise_for_status()
-
             full_text = _extract_pdf_text(response.content)
             if not full_text:
-                continue  # try next doc
-
+                continue
             return {
                 "bill_id":   bill_id,
                 "doc_id":    doc["doc_id"],
@@ -502,30 +534,26 @@ def get_bill_text(bill_id: int, max_chars: int = 8000) -> dict | None:
                 "text":      full_text[:max_chars],
                 "truncated": len(full_text) > max_chars,
             }
-
         except Exception:
             continue
-
     return None
 
 
 def get_bill_details(bill_id: int) -> dict | None:
-    # Request 1: bill + status only (no nested expand)
-    url = (
-        f"{OFFICIAL_KNESSET_NEW_API}/KNS_Bill({bill_id})"
-        f"?$expand=KNS_Status"
+    """Return full bill metadata including status, type, initiators, and documents."""
+    r = SESSION.get(
+        f"{OFFICIAL_KNESSET_NEW_API}/KNS_Bill({bill_id})?$expand=KNS_Status",
+        timeout=API_TIMEOUT,
     )
-    r = requests.get(url, timeout=TIMEOUT)
     if r.status_code == 404:
         return None
     r.raise_for_status()
     bill = r.json()
 
-    # Request 2: initiators separately
-    r2 = requests.get(
+    r2 = SESSION.get(
         f"{OFFICIAL_KNESSET_NEW_API}/KNS_BillInitiator",
         params={"$filter": f"BillID eq {bill_id}", "$expand": "KNS_Person", "$top": 20},
-        timeout=TIMEOUT,
+        timeout=API_TIMEOUT,
     )
     r2.raise_for_status()
     initiators = [
@@ -565,11 +593,3 @@ def get_bill_text_by_name(bill_name: str, knesset_num: int = 25, max_chars: int 
     if not bill:
         return None
     return get_bill_text(bill["bill_id"], max_chars)
-
-
-def get_active_committee_members_by_name(name: str, knesset_num: int = 25) -> list[dict]:
-    committees = get_committee_by_name(name, knesset_num)
-    if not committees:
-        return []
-    committee = committees[0]  # take the best match
-    return get_active_committee_members(committee["CommitteeID"], knesset_num)
