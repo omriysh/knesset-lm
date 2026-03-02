@@ -25,6 +25,8 @@ from urllib.parse import quote
 from functools import lru_cache
 import io
 import pdfplumber
+import fitz  # pymupdf
+import re
 
 OKNESSET_API = "https://backend.oknesset.org"
 OFFICIAL_KNESSET_NEW_API = "https://knesset.gov.il/OdataV4/ParliamentInfo"
@@ -35,6 +37,9 @@ _DOC_GROUP_PRIORITY = [
     "טקסט חוק מאוחד",
     "חוק - פרסום ברשומות",
 ]
+_HEBREW_DATE_RE = re.compile(r',?\s*ה?תש[\u05d0-\u05ea]{1,3}["\u05f3][\u05d0-\u05ea](?:[–\-]\d{4})?')
+_BILL_TYPE_PREFIXES = ('הצעת חוק', 'חוק', 'תיקון לחוק')
+
 
 
 
@@ -84,7 +89,176 @@ def _fix_file_path(path: str) -> str:
     return path.replace("\\", "/")
 
 
-# ── Name Search ───────────────────────────────────────────────────────────────
+def _is_garbage(text: str, threshold: float = 0.3) -> bool:
+    """
+    Return True if more than `threshold` fraction of the text characters
+    are Unicode replacement characters (U+FFFD), indicating a failed decode.
+    """
+    if not text:
+        return True
+    garbage_count = text.count('\ufffd')
+    return (garbage_count / len(text)) > threshold
+
+
+def _extract_pdf_text_pymupdf(pdf_bytes: bytes) -> str:
+    """
+    Extract text from a PDF using PyMuPDF (fitz).
+    Handles more Hebrew font encodings than pdfplumber.
+    """
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    pages = []
+    for page in doc:
+        text = page.get_text("text")
+        if text:
+            pages.append(text)
+    doc.close()
+    return "\n".join(pages).strip()
+
+
+def _extract_pdf_text_pdfplumber(pdf_bytes: bytes) -> str:
+    """
+    Extract text from a PDF using pdfplumber (pdfminer backend).
+    """
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        pages = []
+        for page in pdf.pages:
+            text = page.extract_text(x_tolerance=2, y_tolerance=2)
+            if text:
+                pages.append(text)
+    return "\n".join(pages).strip()
+
+
+def _extract_pdf_text(pdf_bytes: bytes) -> str:
+    """
+    Extract Hebrew text from a PDF, trying multiple engines.
+    PyMuPDF first (faster, handles more font encodings).
+    Falls back to pdfplumber if the result is garbage.
+    Returns empty string if all methods fail.
+    """
+    # Try PyMuPDF first
+    try:
+        text = _extract_pdf_text_pymupdf(pdf_bytes)
+        if text and not _is_garbage(text):
+            return text
+    except Exception:
+        pass
+
+    # Fall back to pdfplumber
+    try:
+        text = _extract_pdf_text_pdfplumber(pdf_bytes)
+        if text and not _is_garbage(text):
+            return text
+    except Exception:
+        pass
+
+    return ""
+
+
+def _sanitize_odata_search(name: str) -> str:
+    """
+    Prepare a bill name for use inside an OData contains() filter.
+    - Strips parenthetical clauses (which break OData parser)
+    - Escapes remaining single quotes as ''
+    - Collapses extra whitespace
+    """
+    # Remove anything inside parentheses (including nested)
+    sanitized = re.sub(r'\(.*?\)', '', name)
+    # Collapse whitespace and strip
+    sanitized = re.sub(r'\s+', ' ', sanitized).strip()
+    # Remove trailing comma/dash left after stripping parens
+    sanitized = sanitized.strip(',-– ').strip()
+    # Escape single quotes for OData
+    sanitized = sanitized.replace("'", "''")
+    return sanitized
+
+
+def _bill_search_terms(name: str) -> list[str]:
+    """
+    Generate a ranked list of OData search terms to try for a bill name.
+    Each term is progressively shorter/more lenient, maximising recall.
+
+    Strategy:
+      1. Full name, parentheses stripped  (most specific)
+      2. Hebrew date suffix also stripped  (removes התשפ"ד–2024 etc.)
+      3. Core subject noun phrase only     (strips leading type prefix too)
+      4. First 4 significant words of the subject  (widest net)
+    """
+    terms: list[str] = []
+
+    # Step 1 – strip parentheses
+    step1 = _sanitize_odata_search(name)
+    if step1:
+        terms.append(step1)
+
+    # Step 2 – also strip Hebrew date suffix
+    step2 = _HEBREW_DATE_RE.sub('', step1).strip().strip(',-– ').strip()
+    if step2 and step2 != step1:
+        terms.append(step2)
+
+    # Step 3 – strip leading type prefix ("הצעת חוק", "חוק" …)
+    step3 = step2
+    for prefix in _BILL_TYPE_PREFIXES:
+        if step3.startswith(prefix):
+            step3 = step3[len(prefix):].strip()
+            break
+    if step3 and step3 != step2:
+        terms.append(step3)
+
+    # Step 4 – first 4 words of the subject (skip very short words like ה/ו/ב)
+    words = [w for w in step3.split() if len(w) > 1]
+    short = ' '.join(words[:4])
+    if short and short != step3:
+        terms.append(short)
+
+    # Escape single-quotes for OData in every term
+    return [t.replace("'", "''") for t in terms if t]
+
+
+def _bill_record_to_dict(bill: dict) -> dict:
+    """Normalise a raw KNS_Bill OData record into our standard shape."""
+    initiators = [
+        {
+            "person_id": bi["KNS_Person"]["Id"],
+            "full_name": f"{bi['KNS_Person'].get('FirstName', '')} {bi['KNS_Person'].get('LastName', '')}".strip(),
+        }
+        for bi in (bill.get("KNS_BillInitiator") or [])
+        if bi.get("KNS_Person")
+    ]
+    return {
+        "bill_id":          bill.get("Id"),
+        "bill_name":        bill.get("Name"),
+        "bill_number":      bill.get("Number"),
+        "knesset_num":      bill.get("KnessetNum"),
+        "type":             bill.get("TypeDesc"),
+        "sub_type":         bill.get("SubTypeDesc"),
+        "status":           (bill.get("KNS_Status") or {}).get("Desc"),
+        "committee_id":     bill.get("CommitteeID"),
+        "publication_date": bill.get("PublicationDate"),
+        "last_updated":     bill.get("LastUpdatedDate"),
+        "initiators":       initiators,
+    }
+
+
+def _search_bills_by_term(
+    search_term: str,
+    knesset_num: int | None,
+    top: int = 3,
+) -> list[dict]:
+    """Run a single OData contains() search and return up to `top` raw bill dicts."""
+    base_url = f"{OFFICIAL_KNESSET_NEW_API}/KNS_Bill"
+    filter_expr = f"contains(Name,'{search_term}')"
+    if knesset_num:
+        filter_expr += f" and KnessetNum eq {knesset_num}"
+    params = {
+        "$filter":  filter_expr,
+        "$expand":  "KNS_Status,KNS_BillInitiator($expand=KNS_Person)",
+        "$top":     top,
+        "$orderby": "LastUpdatedDate desc",
+    }
+    r = requests.get(base_url, params=params, timeout=TIMEOUT)
+    r.raise_for_status()
+    return r.json().get("value", [])
+
 
 def _name_matches(mk: dict, query: str) -> bool:
     """Check if a query string matches any known name or altname of an MK."""
@@ -243,48 +417,24 @@ def get_law_or_bill_by_name(
 ) -> dict | None:
     """
     Search for a bill/law by partial Hebrew name.
-    Returns the single most recently updated match, or None.
+
+    Tries progressively shorter/simpler search terms so that names the model
+    writes (which include amendment suffixes, Hebrew dates, etc.) still match
+    the more concise names stored in the Knesset API.
+
+    Returns the single best match (most recently updated), or None.
     """
-    base_url = f"{OFFICIAL_KNESSET_NEW_API}/KNS_Bill"
-    filter_expr = f"contains(Name,'{name_part}')"
-    if knesset_num:
-        filter_expr += f" and KnessetNum eq {knesset_num}"
+    for term in _bill_search_terms(name_part):
+        bills = _search_bills_by_term(term, knesset_num, top=3)
+        if bills:
+            # Prefer the bill whose stored name best overlaps with the original query
+            def _score(b: dict) -> int:
+                stored = b.get("Name") or ""
+                return sum(1 for ch in name_part if ch in stored)
+            bills.sort(key=_score, reverse=True)
+            return _bill_record_to_dict(bills[0])
 
-    params = {
-        "$filter":  filter_expr,
-        "$expand":  "KNS_Status,KNS_BillInitiator($expand=KNS_Person)",
-        "$top":     1,                        # only the best match
-        "$orderby": "LastUpdatedDate desc",
-    }
-    r = requests.get(base_url, params=params, timeout=TIMEOUT)
-    r.raise_for_status()
-
-    bills = r.json().get("value", [])
-    if not bills:
-        return None
-
-    bill = bills[0]
-    initiators = [
-        {
-            "person_id": bi["KNS_Person"]["Id"],
-            "full_name": f"{bi['KNS_Person'].get('FirstName', '')} {bi['KNS_Person'].get('LastName', '')}".strip(),
-        }
-        for bi in (bill.get("KNS_BillInitiator") or [])
-        if bi.get("KNS_Person")
-    ]
-    return {
-        "bill_id":          bill.get("Id"),
-        "bill_name":        bill.get("Name"),
-        "bill_number":      bill.get("Number"),
-        "knesset_num":      bill.get("KnessetNum"),
-        "type":             bill.get("TypeDesc"),
-        "sub_type":         bill.get("SubTypeDesc"),
-        "status":           (bill.get("KNS_Status") or {}).get("Desc"),
-        "committee_id":     bill.get("CommitteeID"),
-        "publication_date": bill.get("PublicationDate"),
-        "last_updated":     bill.get("LastUpdatedDate"),
-        "initiators":       initiators,
-    }
+    return None
     
 
 def get_bill_documents(bill_id: int) -> list[dict]:
@@ -334,34 +484,27 @@ def get_bill_text(bill_id: int, max_chars: int = 8000) -> dict | None:
         return None
 
     for doc in docs:
-        if doc["format"] not in ("PDF", "PPT"):  # skip non-PDF for now
+        if doc["format"] not in ("PDF",):
             continue
         try:
             response = requests.get(doc["url"], timeout=TIMEOUT)
             response.raise_for_status()
 
-            with pdfplumber.open(io.BytesIO(response.content)) as pdf:
-                pages = []
-                for page in pdf.pages:
-                    text = page.extract_text(x_tolerance=2, y_tolerance=2)
-                    if text:
-                        pages.append(text)
-
-            full_text = "\n".join(pages).strip()
+            full_text = _extract_pdf_text(response.content)
             if not full_text:
                 continue  # try next doc
 
             return {
-                "bill_id": bill_id,
-                "doc_id":  doc["doc_id"],
-                "group":   doc["group"],
-                "url":     doc["url"],
-                "text":    full_text[:max_chars],
+                "bill_id":   bill_id,
+                "doc_id":    doc["doc_id"],
+                "group":     doc["group"],
+                "url":       doc["url"],
+                "text":      full_text[:max_chars],
                 "truncated": len(full_text) > max_chars,
             }
 
         except Exception:
-            continue  # try next doc
+            continue
 
     return None
 
