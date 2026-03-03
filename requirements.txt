@@ -2,3 +2,5 @@ requests
 requests-cache[sqlite]
 pdfplumber
 pymupdf
+python-docx
+beautifulsoup4

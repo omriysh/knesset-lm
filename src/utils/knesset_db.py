@@ -13,18 +13,32 @@ Key public functions:
     get_bill_details_by_name(bill_name)
     get_bill_text_by_name(bill_name, knesset_num=25)
     get_committee_sessions_by_name(name, knesset_num=25)
+    get_session_transcript(session_id)
     get_session_protocol_text(session_id)
 """
 
 from urllib.parse import quote
 from functools import lru_cache
 import io
+import os
+import requests
 import pdfplumber
 import fitz  # pymupdf
+import docx  # python-docx
 import re
+from bs4 import BeautifulSoup
+
+try:
+    import win32com.client as _win32com
+    _WORD_COM_AVAILABLE = True
+except ImportError:
+    _WORD_COM_AVAILABLE = False
 
 from utils.cache import SESSION
 from config import OKNESSET_API, OFFICIAL_KNESSET_NEW_API, API_TIMEOUT
+
+# Committee session type IDs
+SESSION_TYPE_CLASSIFIED = 160   # חסויה — classified/closed session; no public transcript
 
 _DOC_GROUP_PRIORITY = [
     "הצעת חוק לקריאה השנייה והשלישית",
@@ -137,6 +151,66 @@ def _extract_pdf_text(pdf_bytes: bytes) -> str:
         pass
 
     return ""
+
+
+def _extract_docx_text(docx_bytes: bytes) -> str:
+    """
+    Extract text from a Word document (.docx) using python-docx.
+    Joins non-empty paragraphs with newlines.
+    Returns empty string on failure or for .doc (old binary) files.
+    """
+    try:
+        doc = docx.Document(io.BytesIO(docx_bytes))
+        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+        return "\n".join(paragraphs).strip()
+    except Exception:
+        return ""
+
+
+def _extract_doc_text(doc_bytes: bytes) -> str:
+    """
+    Extract text from a binary .doc (OLE) file using Word COM automation.
+    Windows only; requires Microsoft Word to be installed.
+    Returns empty string if win32com is unavailable or extraction fails.
+
+    Note: Word's Protected View blocks files written to %TEMP%, so we write
+    to a subdirectory of the user's home directory instead.
+    """
+    if not _WORD_COM_AVAILABLE:
+        return ""
+
+    # %TEMP% triggers Word Protected View; home dir does not
+    tmp_dir = os.path.join(os.path.expanduser("~"), ".knesset_doc_tmp")
+    os.makedirs(tmp_dir, exist_ok=True)
+    doc_path = os.path.join(tmp_dir, "document.doc")
+
+    word = None
+    com_doc = None
+    try:
+        with open(doc_path, "wb") as f:
+            f.write(doc_bytes)
+        word = _win32com.Dispatch("Word.Application")
+        word.Visible = False
+        com_doc = word.Documents.Open(doc_path, ReadOnly=True)
+        text = com_doc.Content.Text
+        return text.strip()
+    except Exception:
+        return ""
+    finally:
+        if com_doc:
+            try:
+                com_doc.Close(False)
+            except Exception:
+                pass
+        if word:
+            try:
+                word.Quit()
+            except Exception:
+                pass
+        try:
+            os.unlink(doc_path)
+        except Exception:
+            pass
 
 
 def _sanitize_odata_search(name: str) -> str:
@@ -367,27 +441,40 @@ def get_active_committee_members_by_name(name: str, knesset_num: int = 25) -> li
 
 def get_committee_sessions(committee_id: int, knesset_num: int = 25) -> list[dict]:
     """
-    List sessions for a committee from OData KNS_CommitteeSession, newest first.
-    Returns list of {session_id, date, committee_id, knesset_num}.
+    List ALL sessions for a committee from OData KNS_CommitteeSession, newest first.
+    Uses explicit $skip pagination (API caps at 100 per page).
+    Returns list of {session_id, date, committee_id, knesset_num, type_id, status_id, note}.
+    Check type_id against SESSION_TYPE_CLASSIFIED to skip classified sessions.
     """
     url = f"{OFFICIAL_KNESSET_NEW_API}/KNS_CommitteeSession"
-    params = {
-        "$filter":  f"CommitteeID eq {committee_id} and KnessetNum eq {knesset_num}",
-        "$select":  "Id,CommitteeID,KnessetNum,StartDate,Note",
-        "$orderby": "StartDate desc",
-        "$top":     1000,
-    }
-    r = SESSION.get(url, params=params, timeout=API_TIMEOUT)
-    r.raise_for_status()
+    page_size = 100
+    all_sessions = []
+
+    for offset in range(0, 100_000, page_size):
+        r = SESSION.get(url, params={
+            "$filter":  f"CommitteeID eq {committee_id} and KnessetNum eq {knesset_num}",
+            "$select":  "Id,CommitteeID,KnessetNum,StartDate,Note,TypeID,StatusID",
+            "$orderby": "StartDate desc",
+            "$top":     page_size,
+            "$skip":    offset,
+        }, timeout=API_TIMEOUT)
+        r.raise_for_status()
+        page = r.json().get("value", [])
+        all_sessions.extend(page)
+        if len(page) < page_size:
+            break
+
     return [
         {
             "session_id":   s["Id"],
             "date":         (s.get("StartDate") or "")[:10],  # YYYY-MM-DD
             "committee_id": s.get("CommitteeID"),
             "knesset_num":  s.get("KnessetNum"),
+            "type_id":      s.get("TypeID"),
+            "status_id":    s.get("StatusID"),
             "note":         s.get("Note"),
         }
-        for s in r.json().get("value", [])
+        for s in all_sessions
     ]
 
 
@@ -425,9 +512,9 @@ def get_session_documents(session_id: int) -> list[dict]:
 
 def get_session_protocol_text(session_id: int, max_chars: int | None = None) -> dict | None:
     """
-    Download and extract the protocol PDF for a committee session.
-    Prefers documents whose name contains 'פרוטוקול'.
-    Returns {session_id, doc_id, name, url, text} or None if nothing found.
+    Download and extract the protocol document for a committee session.
+    Supports PDF and Word (.doc/.docx) formats. Prefers documents whose name contains 'פרוטוקול'.
+    Returns {session_id, doc_id, name, url, text} or None if nothing extractable is found.
     """
     docs = get_session_documents(session_id)
 
@@ -439,12 +526,18 @@ def get_session_protocol_text(session_id: int, max_chars: int | None = None) -> 
     candidates = protocol_docs or docs
 
     for doc in candidates:
-        if doc["format"] != "PDF":
+        fmt = doc["format"]
+        if fmt.lower() not in ("pdf", "word", "doc", "docx"):
             continue
         try:
             response = SESSION.get(doc["url"], timeout=API_TIMEOUT)
             response.raise_for_status()
-            text = _extract_pdf_text(response.content)
+            if fmt.lower() == "pdf":
+                text = _extract_pdf_text(response.content)
+            elif doc["url"].lower().endswith(".doc"):
+                text = _extract_doc_text(response.content)
+            else:
+                text = _extract_docx_text(response.content)
             if not text:
                 continue
             if max_chars:
@@ -460,6 +553,68 @@ def get_session_protocol_text(session_id: int, max_chars: int | None = None) -> 
             continue
 
     return None
+
+
+def get_session_transcript(session_id: int) -> dict | None:
+    """
+    Download a session transcript, trying oknesset.org first, then OData PDF/Word.
+
+    Returns a dict with either:
+      {"speeches": [...]}                        — structured, from oknesset.org
+      {"full_text": "...", "source_url": "..."}  — raw text, from OData document
+    Returns None if no transcript is available from either source.
+    """
+    speeches = scrape_oknesset_transcript(session_id)
+    if speeches:
+        return {"speeches": speeches}
+
+    result = get_session_protocol_text(session_id)
+    if result and result.get("text"):
+        return {"full_text": result["text"], "source_url": result["url"]}
+
+    return None
+
+
+def scrape_oknesset_transcript(session_id: int) -> list[dict] | None:
+    """
+    Scrape the meeting transcript from oknesset.org.
+    Uses plain requests (not the cache) so pages marked as unavailable aren't cached.
+
+    URL pattern: https://oknesset.org/meetings/{s[0]}/{s[1]}/{session_id}.html
+    where s[0]/s[1] are the first two digits of the session ID (path sharding).
+
+    Returns a list of {speaker, text_he} dicts, or None if:
+    - The page doesn't exist (404)
+    - The page has no speech-container divs (classified / not yet processed)
+    - The page explicitly says "אין לנו את הפרוטוקול" (data-noprotocol="yes")
+    """
+    s = str(session_id)
+    url = f"https://oknesset.org/meetings/{s[0]}/{s[1]}/{session_id}.html"
+    try:
+        r = requests.get(url, timeout=15)
+        if r.status_code == 404:
+            return None
+        r.raise_for_status()
+    except Exception:
+        return None
+
+    soup = BeautifulSoup(r.content, "html.parser")
+
+    # Explicit "no protocol" marker: <ul data-noprotocol="yes">
+    if soup.select_one("ul[data-noprotocol]"):
+        return None
+
+    speeches = []
+    for div in soup.select("div.speech-container"):
+        speaker_el = div.select_one("div.text-speaker")
+        content_el = div.select_one("blockquote.entry-content")
+        if speaker_el and content_el:
+            speaker = speaker_el.get_text().replace("¶", "").strip()
+            text_he = content_el.get_text().replace("¶", "").strip()
+            if speaker or text_he:
+                speeches.append({"speaker": speaker, "text_he": text_he})
+
+    return speeches if speeches else None
 
 
 # ── Public API — Bills ────────────────────────────────────────────────────────
