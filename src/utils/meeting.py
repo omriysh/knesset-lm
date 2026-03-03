@@ -5,9 +5,17 @@ Helpers for loading and preparing meeting protocol data.
 """
 
 import json
+import re
 from pathlib import Path
 
 from config import MAX_CHUNK_CHARS
+
+# Matches "ח"כ" (with various quote chars) followed by 1–4 Hebrew words.
+# Used to extract MK names from the attendance section of raw protocol text.
+_MK_TITLE_RE = re.compile(
+    r'ח["\u05f3\u05f4\u2019\u201d]כ\s+([\u05d0-\u05ea]+(?:\s+[\u05d0-\u05ea]+){0,3})',
+    re.MULTILINE,
+)
 
 
 def load_meeting(filepath: str | Path) -> dict:
@@ -34,6 +42,43 @@ def build_transcript_text(meeting: dict) -> str:
         if speaker or text:
             lines.append(f"{speaker}: {text}")
     return "\n\n".join(lines)
+
+
+def extract_attendance(meeting: dict) -> list[str]:
+    """
+    Extract attendee names from a meeting protocol.
+
+    For structured (speeches) format: returns unique speaker names in order of
+    first appearance. Includes MKs, ministers, officials — whoever spoke.
+
+    For raw-text format: regex-scans the first 5000 characters (the header section
+    of most Knesset protocols) for names prefixed by standard MK title markers
+    (ח"כ / חבר הכנסת / חברת הכנסת). Returns deduplicated names.
+
+    Returns an empty list if no names are found.
+    """
+    if "speeches" in meeting:
+        seen: list[str] = []
+        seen_set: set[str] = set()
+        for speech in meeting["speeches"]:
+            speaker = speech.get("speaker", "").strip()
+            if speaker and speaker not in seen_set:
+                seen.append(speaker)
+                seen_set.add(speaker)
+        return seen
+
+    if "full_text" in meeting:
+        header = meeting["full_text"][:5000]
+        seen = []
+        seen_set = set()
+        for name in _MK_TITLE_RE.findall(header):
+            name = name.strip()
+            if name and name not in seen_set:
+                seen.append(name)
+                seen_set.add(name)
+        return seen
+
+    return []
 
 
 def chunk_transcript(text: str, max_chars: int = MAX_CHUNK_CHARS) -> list[str]:

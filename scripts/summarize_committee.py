@@ -98,6 +98,7 @@ def main() -> None:
         "no_transcript":    0,
         "skipped_summ":     0,
         "summarized":       0,
+        "too_long":         0,
         "failed_summ":      0,
     }
 
@@ -170,7 +171,10 @@ def main() -> None:
             else:
                 print(f"   📝 Summarizing...")
                 summary = summarize_meeting(proto_path)
-                if summary:
+                if summary is None:
+                    # summarize_meeting returns None when the transcript exceeds MAX_SUMMARIZATION_CHUNKS
+                    stats["too_long"] += 1
+                elif summary:
                     save_summary(summary, proto_path, args.knesset)
                     print(f"   ✅ Summary saved: {summ_path.name}")
                     stats["summarized"] += 1
@@ -194,6 +198,8 @@ def main() -> None:
         print(f"   ⚠️  No transcript found: {stats['no_transcript']}")
     print(f"   ⏭️  Already summarized: {stats['skipped_summ']}")
     print(f"   📝 Newly summarized  : {stats['summarized']}")
+    if stats["too_long"]:
+        print(f"   ⏩ Too long (skipped) : {stats['too_long']}")
     if stats["failed_summ"]:
         print(f"   ❌ Summarization failed: {stats['failed_summ']}")
 

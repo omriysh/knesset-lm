@@ -33,6 +33,9 @@ _ESTIMATED_SUMMARY_TOKENS = 2048
 _RESERVED_TOKENS = 2048 + MAX_TOKENS + _ESTIMATED_SUMMARY_TOKENS
 MAX_CHUNK_CHARS  = (CTX_SIZE - _RESERVED_TOKENS) * CHARS_PER_TOK
 
+# Meetings that would require more chunks than this are skipped (likely non-protocol documents)
+MAX_SUMMARIZATION_CHUNKS = 10
+
 # ── Data paths ────────────────────────────────────────────────────────────────
 
 def transcriptions_dir(knesset_num: int = 25) -> Path:

@@ -19,6 +19,7 @@ Key public functions:
 
 from urllib.parse import quote
 from functools import lru_cache
+from difflib import SequenceMatcher
 import io
 import os
 import requests
@@ -373,14 +374,14 @@ def get_mk_profile(name: str, knesset_num: int = 25) -> dict | None:
 
 # ── Public API — Committees ───────────────────────────────────────────────────
 
-def get_committee_by_name(name: str, knesset_num: int = 25) -> list[dict]:
+@lru_cache(maxsize=5)
+def _fetch_all_committees(knesset_num: int) -> list[dict]:
     """
-    Search for Knesset committees by name (Hebrew, partial match).
-    Returns list of {CommitteeID, Name, KnessetNum, IsCurrent}.
+    Fetch all committees for a given Knesset without a name filter.
+    lru_cache provides in-process deduplication on top of the disk cache.
     """
     url = f"{OKNESSET_API}/committees_kns_committee/list"
-    params = {"Name": name, "KnessetNum": knesset_num, "limit": 100}
-    response = SESSION.get(url, params=params, timeout=API_TIMEOUT)
+    response = SESSION.get(url, params={"KnessetNum": knesset_num, "limit": 1000}, timeout=API_TIMEOUT)
     response.raise_for_status()
     return [
         {
@@ -391,6 +392,22 @@ def get_committee_by_name(name: str, knesset_num: int = 25) -> list[dict]:
         }
         for c in response.json()
     ]
+
+
+def get_committee_by_name(name: str, knesset_num: int = 25) -> list[dict]:
+    """
+    Search for Knesset committees by name using local fuzzy matching.
+    Fetches all committees once (cached) and scores each by SequenceMatcher ratio.
+    Returns all results with ratio >= 0.6, sorted by score descending.
+    """
+    all_committees = _fetch_all_committees(knesset_num)
+    scored = [
+        (c, SequenceMatcher(None, name, c["Name"]).ratio())
+        for c in all_committees
+    ]
+    matches = [(c, s) for c, s in scored if s >= 0.6]
+    matches.sort(key=lambda x: x[1], reverse=True)
+    return [c for c, _ in matches]
 
 
 def get_active_committee_members(
@@ -518,12 +535,15 @@ def get_session_protocol_text(session_id: int, max_chars: int | None = None) -> 
     """
     docs = get_session_documents(session_id)
 
-    # Prefer protocol-named documents; fall back to all docs
-    protocol_docs = [
+    # Only consider documents whose name contains a protocol marker.
+    # Background documents (bills, appendices) are excluded — they share a session
+    # but are not the meeting transcript and can be hundreds of pages long.
+    candidates = [
         d for d in docs
         if d["name"] and any(p in d["name"] for p in _PROTOCOL_NAME_SUBSTRINGS)
     ]
-    candidates = protocol_docs or docs
+    if not candidates:
+        return None
 
     for doc in candidates:
         fmt = doc["format"]
