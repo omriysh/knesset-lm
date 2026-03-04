@@ -368,7 +368,7 @@ def get_mk_profile(name: str, knesset_num: int = 25) -> dict | None:
     result = matches[0]
     result["multiple_matches"] = len(matches) > 1
     if len(matches) > 1:
-        result["other_matches"] = [m["full_name"] for m in matches[1:]]
+        result["other_matches"] = [m.get("full_name") for m in matches if m.get("full_name")]
     return result
 
 
