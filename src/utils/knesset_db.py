@@ -330,6 +330,28 @@ def get_mk_by_name(name: str, knesset_num: int = 25) -> list[dict]:
     return matches
 
 
+def get_all_committees(knesset_num: int = 25) -> list[dict]:
+    """
+    Return all committees for a given Knesset number, sorted by name.
+    Each entry: {CommitteeID, Name, KnessetNum, IsCurrent}.
+    """
+    url      = f"{OKNESSET_API}/committees_kns_committee/list"
+    response = requests.get(url, params={"KnessetNum": knesset_num, "limit": 1000}, timeout=TIMEOUT)
+    response.raise_for_status()
+    committees = [
+        {
+            "CommitteeID": c["CommitteeID"],
+            "Name":        c.get("Name", ""),
+            "KnessetNum":  c.get("KnessetNum"),
+            "IsCurrent":   c.get("IsCurrent"),
+        }
+        for c in response.json()
+        if c.get("Name")
+    ]
+    committees.sort(key=lambda c: c["Name"])
+    return committees
+
+
 def get_committee_by_name(name: str, knesset_num: int = 25) -> list[dict]:
     """
     Search for Knesset committees by name (Hebrew, partial match) and Knesset number.
