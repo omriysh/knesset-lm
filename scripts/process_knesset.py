@@ -51,7 +51,7 @@ from utils.knesset_db import (
     SESSION_TYPE_CLASSIFIED,
 )
 from summarization.pipeline import summarize_meeting, save_summary
-from indexing.embedder import KnessetEmbedder
+from indexing.embedder import ProtocolEmbedder
 from indexing.indexer import index_meeting, IndexResult
 
 _WIN_UNSAFE = re.compile(r'[\\/:*?"<>|]')
@@ -345,11 +345,11 @@ def main() -> None:
     chroma_client = chromadb.PersistentClient(path=str(args.db))
     tqdm.write(f"DB: {args.db}\n")
 
-    _embedder: list[Optional[KnessetEmbedder]] = [None]
+    _embedder: list[Optional[ProtocolEmbedder]] = [None]
 
-    def embedder_factory() -> KnessetEmbedder:
+    def embedder_factory() -> ProtocolEmbedder:
         if _embedder[0] is None:
-            _embedder[0] = KnessetEmbedder(
+            _embedder[0] = ProtocolEmbedder(
                 model_path=args.embed_model,
                 use_cuda=args.cuda,
                 quantize=args.quantize,

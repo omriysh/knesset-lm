@@ -206,7 +206,7 @@ def extract_dialogs_coherence(
     ----------
     speeches : list of {speaker, text_he} dicts
     bullets  : list of {section, idx, text} dicts from parse_summary_bullets()
-    embedder : KnessetEmbedder instance
+    embedder : ProtocolEmbedder instance
     precomputed_speech_embs : optional (N, D) array — skips re-embedding speeches
     """
     window              = window              or config.COHERENCE_WINDOW

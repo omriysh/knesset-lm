@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KnessetLM</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header>
+  <h1>KnessetLM</h1>
+  <span>חיפוש בפרוטוקולים של ועדות הכנסת</span>
+  <button id="dev-toggle" dir="ltr" title="מצב מפתח"><span class="dev-track"><span class="dev-thumb"></span></span><span class="dev-label">dev</span></button>
+</header>
+
+<main>
+  <div class="card">
+    <textarea id="query-input"
+      placeholder="הזן שאלה בעברית... (לדוגמה: מה עמדת חברי הכנסת בנושא מיסוי חברות?)"
+      rows="3"></textarea>
+    <div class="row">
+      <span class="hint">Ctrl+Enter לשליחה</span>
+      <button id="submit">חפש</button>
+    </div>
+  </div>
+
+  <div id="status"><span id="status-msg"></span><span id="status-timer"></span></div>
+  <div id="error-box"></div>
+
+  <div class="card" id="answer-box">
+    <div class="label">תשובה</div>
+    <div id="answer-content"></div>
+  </div>
+
+  <div id="stages-box"></div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

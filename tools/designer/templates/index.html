@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Designer</title>
+
+<!-- Cytoscape.js + plugins -->
+<script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-edgehandles@4.0.1/cytoscape-edgehandles.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
+
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- ── Top bar ──────────────────────────────────────────────────────── -->
+<div class="topbar">
+  <h1>&#x1f916; Agent Designer</h1>
+  <div class="sep"></div>
+  <select id="machine-select"><option value="">-- Load machine --</option></select>
+  <button id="btn-new">+ New</button>
+  <input id="machine-name" placeholder="Machine name..." />
+  <button id="btn-save" class="primary">&#x1f4be; Save</button>
+  <button id="btn-export" class="export-btn">&#x2b07; Export JSON</button>
+  <div class="spacer"></div>
+  <button id="btn-delete" class="danger">&#x1f5d1;</button>
+</div>
+
+<!-- ── Main area ───────────────────────────────────────────────────── -->
+<div class="main">
+  <div style="position:relative;flex:1;display:flex">
+    <div id="cy"></div>
+
+    <!-- Floating toolbar -->
+    <div class="toolbar">
+      <button id="add-llm" title="Add LLM Call">
+        &#x1f9e0;<span class="tip">Add LLM Call state</span>
+      </button>
+      <button id="add-tool" title="Add Tool">
+        &#x1f527;<span class="tip">Add Tool state</span>
+      </button>
+      <button id="btn-edge" title="Add Edge">
+        &#x27a1;&#xfe0f;<span class="tip">Add transition (click source then target)</span>
+      </button>
+      <button id="btn-fit" title="Fit view">
+        &#x1f50d;<span class="tip">Fit to view</span>
+      </button>
+      <button id="btn-snap" title="Snap to grid">
+        &#x22ef;<span class="tip">Snap to grid (toggle)</span>
+      </button>
+      <button id="btn-layout" title="Auto layout">
+        &#x2728;<span class="tip">Auto-layout (left→right)</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Side panel (slides in from right when class="visible" is added) -->
+  <div id="panel">
+    <div class="panel-header">
+      <h2 id="panel-title">Node Details</h2>
+      <button class="panel-close" id="panel-close">&times;</button>
+    </div>
+    <div class="panel-body" id="panel-body"></div>
+  </div>
+</div>
+
+<!-- Context menu -->
+<div class="ctx-menu" id="ctx-menu">
+  <div class="item" data-action="edit">&#x270f;&#xfe0f; Edit</div>
+  <div class="item" data-action="add-edge">&#x27a1;&#xfe0f; Add edge from here</div>
+  <div class="sep"></div>
+  <div class="item danger" data-action="delete">&#x1f5d1; Delete</div>
+</div>
+
+<div id="toast"></div>
+
+<!-- Reusable modal (confirm + prompt) -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal-box">
+    <h3 id="modal-title"></h3>
+    <p id="modal-msg" style="display:none"></p>
+    <input id="modal-input" type="text" style="display:none" />
+    <div class="modal-buttons">
+      <button id="modal-cancel">Cancel</button>
+      <button id="modal-ok" class="primary">OK</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/designer.js"></script>
+</body>
+</html>

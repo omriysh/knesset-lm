@@ -41,7 +41,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 import chromadb
 
 import config
-from indexing.embedder import KnessetEmbedder
+from indexing.embedder import ProtocolEmbedder
 from indexing.indexer import index_meeting
 
 
@@ -91,7 +91,7 @@ def main() -> None:
     args.db.mkdir(parents=True, exist_ok=True)
     chroma_client = chromadb.PersistentClient(path=str(args.db))
 
-    embedder = KnessetEmbedder(
+    embedder = ProtocolEmbedder(
         model_path=args.embed_model,
         use_cuda=args.cuda,
         quantize=args.quantize,

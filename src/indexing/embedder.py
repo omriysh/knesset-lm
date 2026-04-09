@@ -22,10 +22,10 @@ quantize : None | "int8" | "int4"
 Recommended presets
 -------------------
 Indexing (llama-server OFF, full GPU free):
-    KnessetEmbedder(use_cuda=True)
+    ProtocolEmbedder(use_cuda=True)
 
 Query time (llama-server ON, GPU shared with a 3060):
-    KnessetEmbedder(use_cuda=True, quantize="int4")
+    ProtocolEmbedder(use_cuda=True, quantize="int4")
 
 Requirements
 ------------
@@ -44,7 +44,7 @@ import torch.nn.functional as F
 import config
 
 
-class KnessetEmbedder:
+class ProtocolEmbedder:
     # Symmetric instruction — bullets and speeches embedded in the same space.
     INSTR_ASSIGN     = "Represent a Knesset committee parliamentary discussion topic."
     # Asymmetric document instructions.

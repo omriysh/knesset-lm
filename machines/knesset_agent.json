@@ -1,0 +1,433 @@
+{
+  "version": 2,
+  "id": "1442b259f96d",
+  "name": "Knesset Agent",
+  "edges": [
+    {
+      "id": "e_9481db87",
+      "label": "",
+      "source": "llm_call_0b6c40bd",
+      "target": "tool_d10490b0",
+      "type": "tool_link"
+    },
+    {
+      "id": "e_5d79e88d",
+      "label": "",
+      "source": "llm_call_0b6c40bd",
+      "target": "tool_7709a1dc",
+      "type": "tool_link"
+    },
+    {
+      "condition": "agent in ['פרוטוקולים', 'שניהם']",
+      "id": "e_9f9e5e11",
+      "label": "החלטה",
+      "source": "llm_call_bac8de18",
+      "target": "llm_call_0b6c40bd",
+      "type": "transition"
+    },
+    {
+      "id": "e_b53e4ad7",
+      "label": "",
+      "source": "begin_52b20e55",
+      "target": "llm_call_bac8de18",
+      "type": "transition"
+    },
+    {
+      "id": "e_71fdb2d9",
+      "label": "ניתוח",
+      "source": "llm_call_0b6c40bd",
+      "target": "llm_call_7b089e46",
+      "type": "transition"
+    },
+    {
+      "id": "e_45b53f95",
+      "label": "ניתוח",
+      "source": "llm_call_1a7232ee",
+      "target": "llm_call_7b089e46",
+      "type": "transition"
+    },
+    {
+      "id": "e_b585b3f3",
+      "label": "החלטה",
+      "max_loops": 1,
+      "source": "llm_call_7b089e46",
+      "target": "llm_call_bac8de18",
+      "type": "transition"
+    },
+    {
+      "id": "e_d282a31f",
+      "label": "החלטה",
+      "source": "llm_call_bac8de18",
+      "target": "llm_call_1a7232ee",
+      "type": "transition"
+    },
+    {
+      "condition": "agent in ['עובדתי', 'שניהם']",
+      "id": "e_4b31c4f3",
+      "label": "החלטה",
+      "source": "llm_call_bac8de18",
+      "target": "llm_call_07cae0ca",
+      "type": "transition"
+    },
+    {
+      "condition": "agent == 'דובר'",
+      "id": "e_router_speaker",
+      "label": "החלטה",
+      "source": "llm_call_bac8de18",
+      "target": "llm_call_speaker_prot",
+      "type": "transition"
+    },
+    {
+      "id": "e_speaker_reviewer",
+      "label": "ניתוח",
+      "source": "llm_call_speaker_prot",
+      "target": "llm_call_7b089e46",
+      "type": "transition"
+    },
+    {
+      "id": "e_speaker_tool",
+      "label": "",
+      "source": "llm_call_speaker_prot",
+      "target": "tool_mk_speeches",
+      "type": "tool_link"
+    },
+    {
+      "id": "e_7a22f8cc",
+      "label": "ניתוח",
+      "source": "llm_call_07cae0ca",
+      "target": "llm_call_7b089e46",
+      "type": "transition"
+    },
+    {
+      "id": "e_fact_mk",
+      "label": "",
+      "source": "llm_call_07cae0ca",
+      "target": "tool_mk_profile",
+      "type": "tool_link"
+    },
+    {
+      "id": "e_fact_comm",
+      "label": "",
+      "source": "llm_call_07cae0ca",
+      "target": "tool_committee_members",
+      "type": "tool_link"
+    },
+    {
+      "id": "e_fact_bill",
+      "label": "",
+      "source": "llm_call_07cae0ca",
+      "target": "tool_bill_details",
+      "type": "tool_link"
+    },
+    {
+      "id": "e_prot_mk",
+      "label": "",
+      "source": "llm_call_0b6c40bd",
+      "target": "tool_mk_profile",
+      "type": "tool_link"
+    },
+    {
+      "id": "e_prot_bill",
+      "label": "",
+      "source": "llm_call_0b6c40bd",
+      "target": "tool_bill_details",
+      "type": "tool_link"
+    }
+  ],
+  "nodes": [
+    {
+      "data": {
+        "description": ""
+      },
+      "id": "begin_52b20e55",
+      "imaginary": false,
+      "label": "התחלה",
+      "position": {"x": 903, "y": 176},
+      "terminal": false,
+      "type": "begin"
+    },
+    {
+      "data": {
+        "input_template": "",
+        "max_tokens": 16384,
+        "model": "",
+        "notes": "נקודת ניתוב מרכזית. מחליטה לאיזה סוכן לשלוח ומנסחת מחדש את השאלה.",
+        "output_format": {
+          "type": "labeled_fields",
+          "fields": [
+            {"label": "סוכן בשימוש",          "var": "agent",               "required": true},
+            {"label": "שאלה (פרוטוקולים)",     "var": "question_for_rag",    "optional": true, "fallback": "question"},
+            {"label": "שאלה (עובדתי)",          "var": "question_for_fact",   "optional": true, "fallback": "question"},
+            {"label": "שאלה (דובר)",            "var": "question_for_speaker","optional": true, "fallback": "question"},
+            {"label": "שאלה",                   "var": "question",            "optional": true},
+            {"label": "הערות",                  "var": "notes_block",         "optional": true, "format": "\nהערות: {value}", "default": ""},
+            {"label": "תשובה",                  "var": "answer",              "optional": true}
+          ],
+          "conditions": [
+            {
+              "when_var": "agent",
+              "when_value": "לא רלוונטי",
+              "set": {"final_answer": "{{answer}}", "follow_up": ""}
+            }
+          ]
+        },
+        "rag": "",
+        "stage": "router",
+        "system_prompt": "אתה עוזר מומחה לניתוח פעולתה של הכנסת הישראלית.\n\nלרשותך שלושה סוכנים:\n- פרוטוקולים: מחפש קטעי דיון רלוונטיים ממאגר פרוטוקולי הכנסת (חיפוש סמנטי). ויש לו גישה לסיכומי ישיבות. מתאים לשאלות כלליות על עמדות, דיונים, מה נאמר בוועדה — כאשר אין ציון מפורש של ח\"כ ספציפי.\n- עובדתי: יש לו גישה למאגר הרשמי של הכנסת. מתאים לשאלות עובדתיות כגון הרכב ועדה, מצב חקיקה, פרטי ח\"כ.\n- דובר: טוען ישירות את כל דבריו של ח\"כ ספציפי מפרוטוקולי ועדה מסוימת. מתאים כאשר השאלה מתמקדת במה שח\"כ מסוים אמר, עמד עליו, או תמך בו — בוועדה מסוימת.\n\nכלל מנחה לבחירת 'דובר': השתמש בסוכן זה כאשר השאלה מזהה ח\"כ ספציפי בשם ומתמקדת בדבריו/עמדותיו בוועדה ספציפית. אם שואלים על עמדת ח\"כ בנושא כלשהו ללא ציון ועדה, העדף 'פרוטוקולים'.\n\nעליך להבין את שאלת המשתמש ולהחליט כיצד להמשיך. ענה באחד מהפורמטים הבאים:\n\nאם השאלה אינה רלוונטית:\nסוכן בשימוש: לא רלוונטי\nתשובה: [הסבר קצר]\n\nאם השאלה רלוונטית לסוכן אחד בלבד:\nסוכן בשימוש: [פרוטוקולים / עובדתי / דובר]\nשאלה: [ניסוח מדויק של השאלה לסוכן — עצמאי ומובן מעצמו, ללא הנחת ידע מוקדם]\nהערות: [הנחיות ספציפיות לסוכן, אם יש]\n\nכאשר בוחר 'דובר', ציין בשדה 'שאלה' את שם הח\"כ ושם הוועדה בצורה ברורה.\n\nאם השאלה דורשת שני סוכנים:\nסוכן בשימוש: שניהם\nשאלה (פרוטוקולים): [ניסוח מדויק לסוכן הפרוטוקולים — מה לחפש בדיוני הוועדה]\nשאלה (עובדתי): [ניסוח מדויק לסוכן העובדתי — מה לבדוק במאגר הרשמי]\nהערות: [הנחיות משותפות לשני הסוכנים, אם יש]\n\nאם הגעת לכאן עם שאלת המשך מסבב קודם, השאלה שתנסח חייבת להיות עצמאית לחלוטין — אל תניח שהסוכן זוכר מה נאמר קודם.",
+        "temperature": 0.7
+      },
+      "id": "llm_call_bac8de18",
+      "imaginary": false,
+      "label": "הבנת השאלה",
+      "position": {"x": 725, "y": 177},
+      "terminal": true,
+      "type": "llm_call"
+    },
+    {
+      "data": {
+        "input_template": "להלן קטעים רלוונטיים ממספר ישיבות ועדה:\n\n{{rag_context}}\n\n---\n\nשאלה: {{question_for_rag}}{{notes_block}}",
+        "max_tokens": 16384,
+        "model": "",
+        "notes": "rag_pipeline + summary tools + get_mk_profile + get_bill_details",
+        "output_format": null,
+        "rag": "3level",
+        "stage": "rag",
+        "system_prompt": "אתה עוזר מומחה לניתוח פרוטוקולים של ועדות הכנסת.\nהקטעים שלהלן נבחרו אוטומטית ממאגר גדול של פרוטוקולים — הם הרלוונטיים ביותר לשאלה, אך מהווים חלק קטן מהתמלולים הקיימים.\n\nכללים:\n- ענה אך ורק על בסיס המידע המוצג. אל תמציא ואל תסיק מסקנות שאינן כתובות מפורשות.\n- אם הקטעים אינם מכילים מידע רלוונטי לשאלה — כתוב בשורה אחת שלא נמצאו קטעים רלוונטיים, וסיים.\n- כאשר נדרש לפרט, ציין מי אמר מה ומתי (תאריך + שם הוועדה).\n- לצורך הרחבה על ישיבה ספציפית — השתמש בכלי סיכומי הישיבות.\n- לצורך העשרה בלבד: אם נדרש מידע על ח\"כ (מפלגה, תפקיד) או על הצעת חוק שנזכרה — השתמש ב-get_mk_profile / get_bill_details.\n- ענה בעברית.",
+        "temperature": 0.7
+      },
+      "id": "llm_call_0b6c40bd",
+      "imaginary": false,
+      "label": "קטעים מפרוטוקולים",
+      "position": {"x": 360, "y": 100},
+      "terminal": false,
+      "type": "llm_call"
+    },
+    {
+      "data": {
+        "description": "קרא את הסיכום המלא של ישיבת ועדה.",
+        "function_name": "get_meeting_summary",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "meeting_id": {"type": "string", "description": "מזהה הישיבה."}
+          },
+          "required": ["meeting_id"]
+        }
+      },
+      "id": "tool_d10490b0",
+      "imaginary": false,
+      "label": "get_meeting_summary",
+      "position": {"x": 280, "y": 20},
+      "terminal": false,
+      "type": "tool"
+    },
+    {
+      "data": {
+        "description": "קרא נושא ספציפי מסיכום ישיבה לפי מספר נושא.",
+        "function_name": "get_meeting_summary_section",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "meeting_id":   {"type": "string",  "description": "מזהה הישיבה."},
+            "section_num":  {"type": "integer", "description": "מספר הנושא (1, 2, 3 ...)."}
+          },
+          "required": ["meeting_id", "section_num"]
+        }
+      },
+      "id": "tool_7709a1dc",
+      "imaginary": false,
+      "label": "get_meeting_summary_section",
+      "position": {"x": 440, "y": 20},
+      "terminal": false,
+      "type": "tool"
+    },
+    {
+      "data": {
+        "input_template": "",
+        "max_tokens": 16384,
+        "model": "",
+        "notes": "placeholder — imaginary node, skipped by engine",
+        "output_format": null,
+        "rag": "",
+        "stage": "rag",
+        "system_prompt": "",
+        "temperature": 0.7
+      },
+      "id": "llm_call_1a7232ee",
+      "imaginary": true,
+      "label": "קטעים מחוקים",
+      "position": {"x": 360, "y": 500},
+      "terminal": false,
+      "type": "llm_call"
+    },
+    {
+      "data": {
+        "input_template": "שאלת המשתמש המקורית: {{original_question}}\n\n{{sub_agent_outputs}}",
+        "max_tokens": 16384,
+        "model": "",
+        "notes": "דיוק התשובה + החזרה לשאלות המשך אם צריך",
+        "output_format": {
+          "type": "labeled_fields",
+          "loop_control": {
+            "done_var": "final_answer",
+            "continue_var": "follow_up"
+          },
+          "fields": [
+            {"label": "שאלת המשך", "var": "follow_up",    "optional": true},
+            {"label": "תשובה",     "var": "final_answer", "optional": true}
+          ],
+          "fallback_content": "final_answer"
+        },
+        "rag": "",
+        "stage": "reviewer",
+        "system_prompt": "אתה עוזר מומחה לניתוח פעולתה של הכנסת הישראלית.\nהמשתמש שאל שאלה, ועוזרים לפניך ניסו לענות עליה. תפקידך הוא לוודא האם הם ענו על השאלה באופן מספק, ולערוך את תשובתם להיות תמציתית וקולעת.\n\nבמידה והתשובה מספקת דיה:\nערוך אותה ותן את גרסתך המשופרת בלבד. שמור על ציטוטים, תאריכים ושמות ועדות שמופיעים בתשובה המקורית, במידה ורלוונטיים לשאלה. אם מצוינים חברי כנסת או פגישות שאינם רלוונטיים, אל תתייחס אליהם בתשובתך. אל תמציא פרטים שאינם כתובים.\n\nבמידה והתשובה אינה מספקת:\nנסח שאלת המשך עצמאית ומדויקת — כזו שאפשר להעביר לסוכן ללא שום הקשר נוסף, כאילו היא שאלה חדשה לגמרי. הדגש את הפרט הספציפי החסר.\nהחזר בפורמט הבא:\nשאלת המשך: [השאלה]",
+        "temperature": 0.7
+      },
+      "id": "llm_call_7b089e46",
+      "imaginary": false,
+      "label": "שאלות המשך",
+      "position": {"x": 0, "y": 180},
+      "terminal": true,
+      "type": "llm_call"
+    },
+    {
+      "data": {
+        "input_template": "{{question_for_fact}}{{notes_block}}",
+        "max_tokens": 16384,
+        "model": "",
+        "notes": "utils/tools.py → get_mk_profile, get_committee_members, get_bill_details, get_bill_text",
+        "output_format": null,
+        "rag": "",
+        "stage": "factual",
+        "system_prompt": "אתה עוזר מומחה לעובדות הכנסת הישראלית.\nלרשותך גישה למאגר המידע הרשמי של הכנסת — השתמש בכלים לאחזור מידע לפני שאתה מנסח תשובה.\n\nתחומי האחריות שלך:\n- פרטים על ח\"כ: מפלגה, תפקידים, חברות בוועדות\n- הרכב ועדות הכנסת ותפקידי חבריהן\n- הצעות חוק: מצב חקיקתי, סוג (ממשלתי/פרטי), יוזמים\n\nכללים:\n- ענה אך ורק על בסיס תוצאות הכלים. אל תסמוך על ידע מוקדם לגבי פוליטיקאים או חקיקה — המידע עשוי להיות מיושן.\n- אם הכלי לא מצא תוצאה, ציין זאת בבירור.\n- אל תחסוך בשימוש בכלים. אם נתקלת בשם של חבר כנסת, בדוק את הפרטים עליו בעזרת שימוש בכלי.\n- ענה בתמציתיות ובעברית.",
+        "temperature": 0.7
+      },
+      "id": "llm_call_07cae0ca",
+      "imaginary": false,
+      "label": "שאלה עובדתית",
+      "position": {"x": 360, "y": 320},
+      "terminal": false,
+      "type": "llm_call"
+    },
+    {
+      "data": {
+        "description": "Look up an Israeli MK by name. Returns party/faction, current positions, and committee memberships.",
+        "function_name": "get_mk_profile",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "name":        {"type": "string",  "description": "Full or partial name of the MK in Hebrew or English."},
+            "knesset_num": {"type": "integer", "description": "Knesset number. Defaults to 25.", "default": 25}
+          },
+          "required": ["name"]
+        }
+      },
+      "id": "tool_mk_profile",
+      "imaginary": false,
+      "label": "get_mk_profile",
+      "position": {"x": 280, "y": 220},
+      "terminal": false,
+      "type": "tool"
+    },
+    {
+      "data": {
+        "description": "Look up the current active members of a Knesset committee by name.",
+        "function_name": "get_committee_members",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "name":        {"type": "string",  "description": "Full or partial committee name in Hebrew."},
+            "knesset_num": {"type": "integer", "description": "Knesset number. Defaults to 25.", "default": 25}
+          },
+          "required": ["name"]
+        }
+      },
+      "id": "tool_committee_members",
+      "imaginary": false,
+      "label": "get_committee_members",
+      "position": {"x": 360, "y": 400},
+      "terminal": false,
+      "type": "tool"
+    },
+    {
+      "data": {
+        "description": "Look up a Knesset bill by Hebrew name. Returns legislative status, type, initiators, and document links.",
+        "function_name": "get_bill_details",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "bill_name": {"type": "string", "description": "Partial or full Hebrew name of the bill."}
+          },
+          "required": ["bill_name"]
+        }
+      },
+      "id": "tool_bill_details",
+      "imaginary": false,
+      "label": "get_bill_details",
+      "position": {"x": 440, "y": 220},
+      "terminal": false,
+      "type": "tool"
+    },
+    {
+      "data": {
+        "input_template": "{{question_for_speaker}}{{notes_block}}",
+        "max_tokens": 16384,
+        "model": "",
+        "notes": "speech.py → get_mk_speeches_in_committee",
+        "output_format": null,
+        "rag": "",
+        "stage": "rag",
+        "system_prompt": "אתה עוזר מומחה לניתוח דברי חברי הכנסת בוועדות.\nיש לך גישה לפרוטוקולים המלאים של ועדות הכנסת — השתמש בכלי get_mk_speeches_in_committee לאחזור דבריו של חבר הכנסת הרלוונטי.\n\nכיצד לפעול:\n1. זהה את שם חבר הכנסת ואת שם הוועדה מתוך השאלה.\n2. קרא ל-get_mk_speeches_in_committee עם השם והוועדה.\n3. ענה על השאלה על בסיס הנאומים שהתקבלו.\n\nכללים:\n- ציין תאריך ומספר ישיבה לכל ציטוט.\n- אם לא נמצאו נאומים, נסה עם שם חלקי אחר או ציין שלא נמצא מידע.\n- ענה בעברית.",
+        "temperature": 0.7
+      },
+      "id": "llm_call_speaker_prot",
+      "imaginary": false,
+      "label": "דברי ח\"כ",
+      "position": {"x": 540, "y": 100},
+      "terminal": false,
+      "type": "llm_call"
+    },
+    {
+      "data": {
+        "description": "טוען את כל דבריו של חבר הכנסת מפרוטוקולי ועדה ספציפית — ישירות מקבצי הפרוטוקולים.",
+        "function_name": "get_mk_speeches_in_committee",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "mk_name":      {"type": "string",  "description": "שם חבר הכנסת בעברית (מלא או חלקי)."},
+            "committee":    {"type": "string",  "description": "שם הוועדה בעברית, ניתן להשתמש בשם חלקי."},
+            "max_meetings": {"type": "integer", "description": "מספר ישיבות אחרונות לסרוק (ברירת מחדל: 20, מקסימום: 50)."},
+            "knesset_num":  {"type": "integer", "description": "מספר הכנסת (ברירת מחדל: 25).", "default": 25}
+          },
+          "required": ["mk_name", "committee"]
+        }
+      },
+      "id": "tool_mk_speeches",
+      "imaginary": false,
+      "label": "get_mk_speeches_in_committee",
+      "position": {"x": 640, "y": 20},
+      "terminal": false,
+      "type": "tool"
+    },
+    {
+      "data": {
+        "description": "Fetch and extract the full text of a bill from its official PDF.",
+        "function_name": "get_bill_text",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "bill_name":   {"type": "string",  "description": "Partial or full Hebrew name of the bill."},
+            "knesset_num": {"type": "integer", "description": "Knesset number. Defaults to 25.", "default": 25}
+          },
+          "required": ["bill_name"]
+        }
+      },
+      "id": "tool_bill_text",
+      "imaginary": false,
+      "label": "get_bill_text",
+      "position": {"x": 360, "y": 580},
+      "terminal": false,
+      "type": "tool"
+    }
+  ]
+}

@@ -1,0 +1,462 @@
+"""
+runner.py
+
+MachineRunner: BFS state-machine executor.
+
+Execution model
+---------------
+Each call to run_stream performs one or more BFS forward passes through the
+machine graph.  A Context accumulates named variables as nodes execute.
+
+Within each pass:
+  1. A BFS queue starts with the first non-imaginary LLM node after "begin".
+  2. A node is dequeued only when all active predecessors (nodes that fired an
+     edge toward it in this pass) have completed — the fan-in gate.
+  3. After a node completes, its output_format is applied via parsers.parse_output
+     and the results are merged into Context.
+  4. Outgoing transition edges are evaluated; truthy ones register the source as
+     a predecessor of the target and enqueue it.
+  5. Back-edges (target already completed) are skipped — looping is handled by
+     the outer loop in run_stream, which re-runs the BFS when the loop_control
+     continue_var is set.
+
+All dependencies are injected at construction time:
+  backend  — LLMBackend implementation
+  retrieve — callable(question, chroma_client, embedder, **kwargs) → (str, dict)
+  tools    — {function_name: callable(args) → str}
+"""
+
+from __future__ import annotations
+
+import json
+import time
+import warnings
+from typing import Callable, Generator, Optional
+
+import config
+from agent.context import Context, evaluate_condition
+from agent.llm.base import DoneEvent, LLMBackend, TokenEvent, ToolCallsEvent
+from agent.machine import StateMachine
+from agent.parsers import get_loop_control, parse_output
+
+
+# ── Tool registry builder ─────────────────────────────────────────────────────
+
+def build_tool_registry(
+    machine: StateMachine,
+    *,
+    summary_executor: Optional[Callable] = None,
+    speech_executor:  Optional[Callable] = None,
+    knesset_dispatch: Optional[Callable] = None,
+) -> dict[str, Callable]:
+    """
+    Walk the machine's tool nodes and build a {function_name: callable} registry.
+
+    Raises ValueError at startup for any unknown function_name rather than
+    failing silently at query time.
+
+    Callables receive (args: dict) and return a str result.
+    For tools that also need meeting_paths, the runner passes it via a wrapper.
+    """
+    known: dict[str, Callable] = {}
+
+    # Summary tools (need meeting_paths injected by the runner)
+    if summary_executor:
+        for name in ("get_meeting_summary", "get_meeting_summary_section"):
+            known[name] = lambda args, n=name, ex=summary_executor: ex(n, args)
+
+    # Speech tool
+    if speech_executor:
+        known["get_mk_speeches_in_committee"] = lambda args: speech_executor(
+            "get_mk_speeches_in_committee", args
+        )
+
+    # Knesset DB tools (dispatch by name)
+    if knesset_dispatch:
+        for name in ("get_mk_profile", "get_committee_members",
+                     "get_bill_details", "get_bill_text"):
+            known[name] = lambda args, n=name: knesset_dispatch(n, args)
+
+    # Validate every tool node in the machine
+    missing = []
+    for node in machine.tool_nodes_all():
+        fn_name = node["data"].get("function_name", "")
+        if fn_name and fn_name not in known:
+            missing.append(fn_name)
+
+    if missing:
+        raise ValueError(
+            f"Machine references unknown tool(s): {missing!r}. "
+            f"Register them in build_tool_registry before starting the server."
+        )
+
+    return known
+
+
+# ── Machine runner ────────────────────────────────────────────────────────────
+
+class MachineRunner:
+    """
+    Executes a StateMachine against a user question via BFS.
+
+    Yields (event_type, data) tuples for SSE streaming:
+      ("status",      str)   — progress message
+      ("node_result", dict)  — completed node output
+      ("token",       str)   — final answer text
+      ("done",        None)  — stream finished
+    """
+
+    def __init__(
+        self,
+        machine:   StateMachine,
+        backend:   LLMBackend,
+        retriever,              # callable matching protocol_rag.query_retrieve signature
+        tool_registry: dict[str, Callable],
+        top_k: int = config.TOP_K_MEETINGS,
+        top_n: int = config.TOP_N_DIALOGS,
+    ) -> None:
+        self.machine       = machine
+        self.backend       = backend
+        self.retriever     = retriever
+        self.tool_registry = tool_registry
+        self.top_k         = top_k
+        self.top_n         = top_n
+
+    # ── Status helpers ────────────────────────────────────────────────────────
+
+    _STATUS_BY_STAGE: dict[str, str] = {
+        "router":   "מנתח שאלה",
+        "rag":      "מחפש בפרוטוקולים",
+        "factual":  "בודק נתונים עובדתיים",
+        "reviewer": "מנסח תשובה",
+    }
+
+    # ── Public entry point ────────────────────────────────────────────────────
+
+    def run_stream(
+        self,
+        question:  str,
+        top_k:     Optional[int] = None,
+        top_n:     Optional[int] = None,
+    ) -> Generator[tuple[str, object], None, None]:
+        """
+        Full agent loop: one or more BFS passes, looping when a continue_var is set.
+
+        max_loops is read from back-edges in the machine JSON.
+        """
+        eff_k = top_k if top_k is not None else self.top_k
+        eff_n = top_n if top_n is not None else self.top_n
+        max_loops = self.machine.max_loops_from_edges(default=3)
+
+        ctx = Context(question)
+
+        for loop_idx in range(max_loops):
+            yield from self._run_bfs_pass(ctx, loop_idx, eff_k, eff_n)
+
+            # Check loop_control from the last node that set it
+            # (We check all context vars named as continue/done vars in the machine)
+            continue_question = self._find_continue_var(ctx)
+            if continue_question:
+                ctx.set("question", continue_question)
+                ctx.reset_for_loop()
+                yield ("status", f"שואל שאלת המשך (סבב {loop_idx + 2}/{max_loops})…")
+                continue
+
+            # Emit final answer
+            final_answer = self._extract_final_answer(ctx)
+            if final_answer:
+                yield ("token", final_answer)
+            yield ("done", None)
+            return
+
+        # Exhausted loops
+        final_answer = self._extract_final_answer(ctx)
+        if final_answer:
+            yield ("token", final_answer)
+        yield ("done", None)
+
+    # ── BFS forward pass ──────────────────────────────────────────────────────
+
+    def _run_bfs_pass(
+        self, ctx: Context, loop_idx: int, top_k: int, top_n: int
+    ) -> Generator:
+        first_id  = self.machine.first_llm_node_id()
+        queue:    list[str] = [first_id]
+        enqueued: set[str]  = {first_id}
+        completed: set[str] = set()
+        fired_to: dict[str, set[str]] = {}
+
+        while queue:
+            node_id = queue.pop(0)
+            node    = self.machine.get_node(node_id)
+
+            # Fan-in gate
+            required = fired_to.get(node_id, set())
+            if not required.issubset(completed):
+                queue.append(node_id)
+                continue
+
+            data          = node.get("data", {})
+            system_prompt = data.get("system_prompt", "")
+            stage         = data.get("stage", "")
+            label         = node.get("label", "")
+
+            # ── RAG retrieval ──────────────────────────────────────────────
+            retrieval_info = None
+            if data.get("rag") == "3level":
+                yield ("status", "מאחזר קטעי פרוטוקולים…")
+                rag_q = (
+                    ctx.get("question_for_rag")
+                    or ctx.get("question")
+                    or ctx.get("original_question", "")
+                )
+                context_str, debug = self.retriever(
+                    question=rag_q, top_k=top_k, top_n=top_n
+                )
+                existing_paths = ctx.get("meeting_paths") or {}
+                ctx.set("meeting_paths", {**existing_paths, **debug.get("meeting_paths", {})})
+                ctx.set("rag_context", context_str)
+                retrieval_info = {
+                    "meetings":      debug.get("meetings", []),
+                    "context_chars": debug.get("context_chars", 0),
+                    "chunks": [
+                        {
+                            "date":      item["meta"].get("date", ""),
+                            "committee": item["meta"].get("committee", ""),
+                            "topic":     item["meta"].get("topic_text", "")[:80],
+                            "p1_sim":    round(float(item["p1_sim"]), 3),
+                            "chars":     item["meta"].get("char_count", 0),
+                        }
+                        for item in debug.get("selected_pass1", [])
+                    ],
+                }
+
+            # ── Build user input ──────────────────────────────────────────
+            template = data.get("input_template", "")
+            if template:
+                user_content = ctx.render_template(template)
+            else:
+                question    = ctx.get("question") or ctx.get("original_question", "")
+                rag_context = ctx.get("rag_context", "")
+                if rag_context and data.get("rag"):
+                    user_content = (
+                        "להלן קטעים רלוונטיים ממספר ישיבות ועדה:\n\n"
+                        f"{rag_context}\n\n---\n\nשאלה: {question}"
+                    )
+                else:
+                    user_content = question
+
+            # ── Execute node ──────────────────────────────────────────────
+            action = self._STATUS_BY_STAGE.get(stage, "מריץ")
+            yield ("status", f"{action}: {label}…")
+            tool_nodes_list = self.machine.tool_nodes(node_id)
+            meeting_paths   = ctx.get("meeting_paths") or {}
+
+            node_result: dict = {}
+            for ev, val in self._run_node(
+                node, user_content, system_prompt, tool_nodes_list, meeting_paths
+            ):
+                if ev == "status":
+                    yield ("status", val)
+                elif ev == "node_done":
+                    node_result = val
+
+            content = node_result.get("content", "")
+
+            # ── Apply output_format ───────────────────────────────────────
+            output_format = data.get("output_format")
+            updates = parse_output(content, output_format, ctx)
+            ctx.update(updates)
+
+            # ── Store output; accumulate sub-agent outputs for reviewer ───
+            ctx.set_node_output(node_id, label, content)
+            if stage not in ("router", "reviewer"):
+                existing = ctx.get("sub_agent_outputs", "")
+                new_part = f"### תשובת הסוכן ({label}):\n{content}"
+                ctx.set("sub_agent_outputs",
+                        (existing + "\n\n" + new_part).lstrip("\n"))
+
+            # ── Emit node_result ──────────────────────────────────────────
+            nr: dict = {
+                "label":        label,
+                "stage":        stage,
+                "content":      content,
+                "loop":         loop_idx,
+                "elapsed_ms":   node_result.get("elapsed_ms", 0),
+                "tools":        node_result.get("tools", []),
+                "tool_results": node_result.get("tool_results", []),
+                "prompt":       node_result.get("prompt", {}),
+            }
+            if retrieval_info:
+                nr["retrieval"] = retrieval_info
+            yield ("node_result", nr)
+
+            completed.add(node_id)
+
+            # ── Fire outgoing transitions ─────────────────────────────────
+            for edge in self.machine.outgoing_transitions(node_id):
+                tgt_id   = edge["target"]
+                tgt_node = self.machine.get_node(tgt_id)
+
+                if (tgt_node.get("imaginary")
+                        or tgt_node.get("type") != "llm_call"
+                        or tgt_id in completed):
+                    continue
+
+                if not evaluate_condition(edge.get("condition", ""), ctx):
+                    continue
+
+                fired_to.setdefault(tgt_id, set()).add(node_id)
+                if tgt_id not in enqueued:
+                    queue.append(tgt_id)
+                    enqueued.add(tgt_id)
+
+    # ── Node executor (agentic tool loop) ─────────────────────────────────────
+
+    def _run_node(
+        self,
+        node:            dict,
+        user_content:    str,
+        system_prompt:   str,
+        tool_nodes_list: list[dict],
+        meeting_paths:   dict,
+        max_rounds:      int = 10,
+    ) -> Generator:
+        """
+        Execute one llm_call node in an agentic tool loop.
+
+        Yields ("status", str), ("node_done", dict).
+        """
+        data         = node.get("data", {})
+        temperature  = float(data.get("temperature", 0.7))
+        max_tokens   = int(data.get("max_tokens", config.MAX_TOKENS))
+        tool_schemas = self.machine.build_tool_schemas(tool_nodes_list)
+
+        messages: list[dict] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_content},
+        ]
+
+        buf: list[str]       = []
+        tools_used: list[str]   = []
+        tool_results: list[dict] = []
+        t0 = time.monotonic()
+
+        for _round in range(max_rounds):
+            content_parts: list[str] = []
+            tool_calls:    list[dict] = []
+
+            for event in self.backend.stream(
+                self.backend.prepare_messages(messages),
+                tools=tool_schemas or None,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            ):
+                if isinstance(event, TokenEvent):
+                    content_parts.append(event.text)
+                elif isinstance(event, ToolCallsEvent):
+                    tool_calls = event.calls
+                # DoneEvent: just continue
+
+            raw_content = "".join(content_parts)
+            tool_calls, content = self.backend.extract_tool_calls(
+                {}, raw_content
+            ) if not tool_calls else (tool_calls, self.backend.extract_visible_content(raw_content))
+
+            if not tool_calls:
+                content = self.backend.extract_visible_content(raw_content)
+                if self.backend.needs_thinking_retry(content, []):
+                    yield ("status", "חושב שוב…")
+                    continue
+                buf.append(content)
+                break
+
+            # Tool calls present
+            messages.append({
+                "role":       "assistant",
+                "content":    self.backend.extract_visible_content(raw_content) or None,
+                "tool_calls": tool_calls,
+            })
+
+            for tc in tool_calls:
+                fn_name = tc["function"]["name"]
+                try:
+                    fn_args = json.loads(tc["function"]["arguments"])
+                except (json.JSONDecodeError, ValueError):
+                    fn_args = {}
+
+                yield ("status", f"קורא: {fn_name}…")
+                if fn_name not in tools_used:
+                    tools_used.append(fn_name)
+
+                # Summary tools need meeting_paths injected
+                if fn_name in ("get_meeting_summary", "get_meeting_summary_section"):
+                    callable_fn = self.tool_registry.get(fn_name)
+                    result = callable_fn(fn_args, meeting_paths) if callable_fn else f"כלי לא נמצא: {fn_name}"
+                else:
+                    callable_fn = self.tool_registry.get(fn_name)
+                    result = callable_fn(fn_args) if callable_fn else f"כלי לא נמצא: {fn_name}"
+
+                tool_results.append({"name": fn_name, "args": fn_args, "result": result})
+                messages.append({
+                    "role":         "tool",
+                    "tool_call_id": tc.get("id", ""),
+                    "content":      result,
+                })
+
+            yield ("status", "ממשיך…")
+
+        elapsed_ms = round((time.monotonic() - t0) * 1000)
+        yield ("node_done", {
+            "content":      "".join(buf),
+            "elapsed_ms":   elapsed_ms,
+            "tools":        tools_used,
+            "tool_results": tool_results,
+            "prompt":       {"system": system_prompt, "user": user_content},
+        })
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _find_continue_var(self, ctx: Context) -> str:
+        """
+        Look at all nodes' loop_control to find an active continue_var.
+        Returns the value of the continue_var if it's non-empty, else "".
+        """
+        from agent.parsers import get_loop_control  # avoid circular at module level
+        for node in self.machine._nodes.values():
+            if node.get("type") != "llm_call" or node.get("imaginary"):
+                continue
+            lc = get_loop_control(node.get("data", {}).get("output_format"))
+            if not lc:
+                continue
+            continue_var = lc.get("continue_var")
+            if continue_var:
+                val = ctx.get(continue_var, "")
+                if val:
+                    return str(val)
+        return ""
+
+    def _extract_final_answer(self, ctx: Context) -> str:
+        """
+        Get the final answer from context or fall back to the last node's content.
+        """
+        # Check all nodes' loop_control done_var
+        for node in self.machine._nodes.values():
+            if node.get("type") != "llm_call" or node.get("imaginary"):
+                continue
+            lc = get_loop_control(node.get("data", {}).get("output_format"))
+            if not lc:
+                continue
+            done_var = lc.get("done_var")
+            if done_var:
+                val = ctx.get(done_var, "")
+                if val:
+                    return str(val)
+
+        # Fallback: last terminal node's content, or last node content
+        for nid, info in reversed(list(ctx._node_outputs.items())):
+            if self.machine.get_node(nid).get("terminal"):
+                return info["content"]
+        if ctx._node_outputs:
+            return list(ctx._node_outputs.values())[-1]["content"]
+        return ""

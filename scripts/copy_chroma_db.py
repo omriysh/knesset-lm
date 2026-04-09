@@ -73,7 +73,10 @@ def _copy_collection(
         return stats
 
     if not force:
-        existing = set(dst_coll.get(ids=all_ids, include=[])["ids"])
+        existing: set[str] = set()
+        for batch_start in range(0, len(all_ids), _BATCH_SIZE):
+            batch = all_ids[batch_start : batch_start + _BATCH_SIZE]
+            existing.update(dst_coll.get(ids=batch, include=[])["ids"])
         ids_to_copy = [i for i in all_ids if i not in existing]
         stats["skipped"] = len(existing)
     else:

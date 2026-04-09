@@ -77,6 +77,12 @@ BULLETS_COLLECTION  = "knesset_bullets"
 PASS1_COLLECTION    = "knesset_dialogs_pass1"
 PASS2_COLLECTION    = "knesset_dialogs_pass2"
 
+# ── RAG retrieval parameters ──────────────────────────────────────────────────
+
+TOP_K_MEETINGS    = 5      # meetings to surface via L1 bullet search
+TOP_N_DIALOGS     = 15     # pass-2 chunks to rank per query
+MAX_CONTEXT_CHARS = 50_000 # ~25k tokens; leaves headroom for LLM output
+
 # ── Data paths ────────────────────────────────────────────────────────────────
 
 def transcriptions_dir(knesset_num: int = 25) -> Path:

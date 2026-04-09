@@ -31,7 +31,7 @@ import chromadb
 import numpy as np
 
 import config
-from indexing.embedder import KnessetEmbedder
+from indexing.embedder import ProtocolEmbedder
 from indexing.extract_dialogs import extract_dialogs_coherence
 from indexing.parse_summary import parse_summary_bullets
 
@@ -74,7 +74,7 @@ def _index_speeches(
     data: dict,
     json_path: Path,
     coll: chromadb.Collection,
-    embedder: KnessetEmbedder,
+    embedder: ProtocolEmbedder,
     force: bool,
 ) -> tuple[int, Optional[np.ndarray]]:
     """
@@ -105,7 +105,7 @@ def _index_speeches(
             return 0, None
 
     texts = [f"{s['speaker']}: {s['text_he']}" for _, s in valid]
-    embs  = embedder.embed(texts, KnessetEmbedder.INSTR_ASSIGN)
+    embs  = embedder.embed(texts, ProtocolEmbedder.INSTR_ASSIGN)
 
     coll.upsert(
         ids        = [f"{meeting_id}_{i}" for i, _ in valid],
@@ -134,7 +134,7 @@ def _index_bullets(
     meeting_id: str,
     date: str,
     coll: chromadb.Collection,
-    embedder: KnessetEmbedder,
+    embedder: ProtocolEmbedder,
     force: bool,
 ) -> tuple[int, list]:
     """
@@ -153,7 +153,7 @@ def _index_bullets(
 
     ids   = [f"{committee}__{meeting_id}__{b['idx']}" for b in bullets]
     texts = [b["text"] for b in bullets]
-    embs  = embedder.embed(texts, KnessetEmbedder.INSTR_BULLET_DOC)
+    embs  = embedder.embed(texts, ProtocolEmbedder.INSTR_BULLET_DOC)
 
     coll.upsert(
         ids        = ids,
@@ -191,7 +191,7 @@ def _index_dialogs(
     date: str,
     pass1_coll: chromadb.Collection,
     pass2_coll: chromadb.Collection,
-    embedder: KnessetEmbedder,
+    embedder: ProtocolEmbedder,
     precomputed_speech_embs: Optional[np.ndarray],
     force: bool,
 ) -> tuple[int, int]:
@@ -227,7 +227,7 @@ def _index_dialogs(
 
     # ── Pass-2 ────────────────────────────────────────────────────────────────
     p2_texts = [d["full_dialog_text"] for d in pass2_dialogs]
-    p2_embs  = embedder.embed(p2_texts, KnessetEmbedder.INSTR_DIALOG_DOC)
+    p2_embs  = embedder.embed(p2_texts, ProtocolEmbedder.INSTR_DIALOG_DOC)
 
     pass2_coll.upsert(
         ids        = [f"{mk}__p2_{k}" for k in range(len(pass2_dialogs))],
@@ -255,7 +255,7 @@ def _index_dialogs(
 
     # ── Pass-1 ────────────────────────────────────────────────────────────────
     p1_texts = [d["full_dialog_text"] for d in pass1_dialogs]
-    p1_embs  = embedder.embed(p1_texts, KnessetEmbedder.INSTR_DIALOG_DOC)
+    p1_embs  = embedder.embed(p1_texts, ProtocolEmbedder.INSTR_DIALOG_DOC)
 
     pass1_coll.upsert(
         ids        = [f"{mk}__p1_{i}" for i in range(len(pass1_dialogs))],
@@ -289,7 +289,7 @@ def index_meeting(
     json_path: Path,
     summary_path: Optional[Path],
     chroma_client: chromadb.ClientAPI,
-    embedder: KnessetEmbedder,
+    embedder: ProtocolEmbedder,
     *,
     force: bool = False,
     speeches_coll_name: str = config.SPEECHES_COLLECTION,
@@ -308,7 +308,7 @@ def index_meeting(
     json_path     : path to the meeting JSON (structured speeches format)
     summary_path  : path to the .txt summary, or None
     chroma_client : open ChromaDB client (PersistentClient or EphemeralClient)
-    embedder      : loaded KnessetEmbedder instance
+    embedder      : loaded ProtocolEmbedder instance
     force         : re-index even if already present
     *_coll_name   : override collection names (defaults from config.py)
     """
