@@ -48,9 +48,21 @@ def _new_machine(name: str = "New Machine") -> dict:
 
 
 def _machine_path(machine_id: str) -> Path:
-    # Sanitise: only alphanumeric + underscore
-    safe = "".join(c for c in machine_id if c.isalnum() or c == "_")
+    # Sanitise: only alphanumeric + underscore + hyphen
+    safe = "".join(c for c in machine_id if c.isalnum() or c in "_-")
     return MACHINES_DIR / f"{safe}.json"
+
+
+def _find_machine_file(machine_id: str) -> Path | None:
+    """Find a machine JSON file by its internal 'id' field (not by filename)."""
+    for p in MACHINES_DIR.glob("*.json"):
+        try:
+            data = json.loads(p.read_text("utf-8"))
+            if data.get("id") == machine_id:
+                return p
+        except Exception:
+            continue
+    return None
 
 
 # ── API routes ───────────────────────────────────────────────────────────────
@@ -87,8 +99,8 @@ def create_machine():
 
 @app.get("/api/machines/<machine_id>")
 def get_machine(machine_id: str):
-    p = _machine_path(machine_id)
-    if not p.exists():
+    p = _find_machine_file(machine_id)
+    if p is None:
         return {"error": "not found"}, 404
     return jsonify(json.loads(p.read_text("utf-8")))
 
@@ -100,16 +112,16 @@ def save_machine(machine_id: str):
     if not body:
         return {"error": "empty body"}, 400
     body["id"] = machine_id
-    _machine_path(machine_id).write_text(
-        json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    # Write to the existing file if found, otherwise fall back to id-as-filename
+    p = _find_machine_file(machine_id) or _machine_path(machine_id)
+    p.write_text(json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
     return jsonify({"ok": True})
 
 
 @app.delete("/api/machines/<machine_id>")
 def delete_machine(machine_id: str):
-    p = _machine_path(machine_id)
-    if p.exists():
+    p = _find_machine_file(machine_id)
+    if p is not None:
         p.unlink()
     return jsonify({"ok": True})
 
