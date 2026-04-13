@@ -1,13 +1,15 @@
-const queryInput = document.getElementById('query-input');
-const submitBtn  = document.getElementById('submit');
-const statusEl   = document.getElementById('status');
-const statusMsg  = document.getElementById('status-msg');
-const timerEl    = document.getElementById('status-timer');
-const errorEl    = document.getElementById('error-box');
-const answerBox  = document.getElementById('answer-box');
-const answerEl   = document.getElementById('answer-content');
-const stagesBox  = document.getElementById('stages-box');
-const devToggle  = document.getElementById('dev-toggle');
+const queryInput      = document.getElementById('query-input');
+const submitBtn       = document.getElementById('submit');
+const statusEl        = document.getElementById('status');
+const statusMsg       = document.getElementById('status-msg');
+const timerEl         = document.getElementById('status-timer');
+const errorEl         = document.getElementById('error-box');
+const answerBox       = document.getElementById('answer-box');
+const answerEl        = document.getElementById('answer-content');
+const stagesBox       = document.getElementById('stages-box');
+const devToggle       = document.getElementById('dev-toggle');
+const thinkingPanel   = document.getElementById('thinking-panel');
+const thinkingStream  = document.getElementById('thinking-stream');
 
 let running        = false;
 let rawAnswer      = '';
@@ -71,6 +73,8 @@ async function startQuery() {
   answerEl.textContent = '';
   stagesBox.style.display = 'none';
   stagesBox.innerHTML = '';
+  thinkingPanel.style.display = 'none';
+  thinkingStream.textContent = '';
   timerEl.style.display = 'none';
   setStatus('מחפש...');
   _startTimer();
@@ -127,7 +131,17 @@ function handleEvent(ev, data) {
     case 'status':
       setStatus(data.msg || '');
       break;
+    case 'thinking_token':
+      if (thinkingPanel.style.display === 'none') {
+        thinkingPanel.style.display = 'block';
+      }
+      thinkingStream.textContent += data.text || '';
+      thinkingStream.scrollTop = thinkingStream.scrollHeight;
+      break;
     case 'node_result':
+      // Hide live thinking panel — full thinking now in stage card
+      thinkingPanel.style.display = 'none';
+      thinkingStream.textContent = '';
       stageDataBuf.push(data);
       if (devMode) addStageCard(data);
       break;
@@ -140,8 +154,11 @@ function handleEvent(ev, data) {
       answerEl.innerHTML = esc(rawAnswer) + '<span class="cursor"></span>';
       break;
     case 'done':
+      thinkingPanel.style.display = 'none';
+      thinkingStream.textContent = '';
       break;
     case 'error':
+      thinkingPanel.style.display = 'none';
       showError(data.error || 'שגיאה לא ידועה');
       break;
   }
@@ -186,6 +203,9 @@ function addStageCard(data) {
   const content     = data.content      || '';
   const loop        = data.loop         || 0;
   const elapsedMs   = data.elapsed_ms   != null ? data.elapsed_ms : null;
+  const llmMs       = data.llm_ms       || 0;
+  const toolMs      = data.tool_ms      || 0;
+  const thinking    = data.thinking     || '';
   const tools       = data.tools        || [];
   const retrieval   = data.retrieval    || null;
   const prompt      = data.prompt       || null;
@@ -196,10 +216,20 @@ function addStageCard(data) {
   const card = document.createElement('div');
   card.className = 'stage-card';
 
-  const tagText  = _STAGE_TAGS[stage] || stage;
-  const timeHtml = elapsedMs != null
-    ? `<span class="stage-time">${(elapsedMs / 1000).toFixed(1)}s</span>`
-    : '';
+  const tagText = _STAGE_TAGS[stage] || stage;
+
+  // Time breakdown: show LLM+tool split if both are available
+  let timeHtml = '';
+  if (elapsedMs != null) {
+    const totalStr = (elapsedMs / 1000).toFixed(1) + 's';
+    if (llmMs > 0 || toolMs > 0) {
+      const llmStr  = (llmMs  / 1000).toFixed(1) + 's';
+      const toolStr = (toolMs / 1000).toFixed(1) + 's';
+      timeHtml = `<span class="stage-time" title="LLM: ${llmStr} | כלים: ${toolStr} | סה״כ: ${totalStr}">${totalStr}</span>`;
+    } else {
+      timeHtml = `<span class="stage-time">${totalStr}</span>`;
+    }
+  }
 
   const uniqueTools = [...new Set(tools)];
   const toolsHtml = uniqueTools.length > 0
@@ -211,11 +241,12 @@ function addStageCard(data) {
     : '';
 
   const promptHtml      = prompt ? renderPromptHtml(prompt, devMode) : '';
+  const thinkingHtml    = thinking ? renderThinkingHtml(thinking, llmMs) : '';
   const toolResultsHtml = toolResults.map(tr => renderToolResultHtml(tr, devMode)).join('');
-  const retrievalHtml   = (stage === 'rag' && retrieval) ? renderRetrievalHtml(retrieval) : '';
+  const retrievalHtml   = retrieval ? renderRetrievalHtml(retrieval) : '';
 
-  const bodyClass = devMode ? 'stage-body visible' : 'stage-body';
-  const headerClass = devMode ? 'stage-header open' : 'stage-header';
+  const bodyClass   = devMode ? 'stage-body visible' : 'stage-body';
+  const headerClass = devMode ? 'stage-header open'  : 'stage-header';
 
   card.innerHTML =
     `<div class="${headerClass}" onclick="toggleStageCard(this)">` +
@@ -225,7 +256,7 @@ function addStageCard(data) {
       `<span class="stage-tag">${esc(tagText)}</span>` +
       `<span class="stage-meta">${timeHtml}${toolsHtml}${loopHtml}</span>` +
     `</div>` +
-    `<div class="${bodyClass}">${promptHtml}${toolResultsHtml}${retrievalHtml}${marked.parse(content)}</div>`;
+    `<div class="${bodyClass}">${promptHtml}${thinkingHtml}${toolResultsHtml}${retrievalHtml}${marked.parse(content)}</div>`;
 
   stagesBox.appendChild(card);
 }
@@ -251,15 +282,31 @@ function renderPromptHtml(p, expanded) {
   );
 }
 
+function renderThinkingHtml(thinking, llmMs) {
+  const timeStr = llmMs > 0 ? ` (${(llmMs / 1000).toFixed(1)}s)` : '';
+  return (
+    `<details class="sub-details">` +
+    `<summary class="sub-summary thinking-summary">מחשבות${esc(timeStr)}</summary>` +
+    `<div class="sub-details-body">` +
+    `<pre class="prompt-text thinking-text">${esc(thinking)}</pre>` +
+    `</div>` +
+    `</details>`
+  );
+}
+
 function renderToolResultHtml(tr, expanded) {
-  const name    = tr.name   || '';
-  const args    = tr.args   || {};
-  const result  = tr.result || '';
-  const argsStr = JSON.stringify(args, null, 2);
-  const open    = expanded ? ' open' : '';
+  const name       = tr.name       || '';
+  const args       = tr.args       || {};
+  const result     = tr.result     || '';
+  const elapsedMs  = tr.elapsed_ms != null ? tr.elapsed_ms : null;
+  const argsStr    = JSON.stringify(args, null, 2);
+  const open       = expanded ? ' open' : '';
+  const timeStr    = elapsedMs != null
+    ? ` <span class="tool-time">${(elapsedMs / 1000).toFixed(1)}s</span>`
+    : '';
   return (
     `<details class="sub-details"${open}>` +
-    `<summary class="sub-summary"><span class="tool-summary-label">${esc(name)}</span></summary>` +
+    `<summary class="sub-summary"><span class="tool-summary-label">${esc(name)}</span>${timeStr}</summary>` +
     `<div class="sub-details-body">` +
     `<div class="prompt-block">` +
     `<div class="prompt-role">ארגומנטים</div>` +
@@ -280,8 +327,10 @@ function renderRetrievalHtml(r) {
   const chars    = r.context_chars || 0;
   const tokEst   = Math.round(chars / 2);
 
+  const ragMs    = r.rag_ms || 0;
+  const ragTimeStr = ragMs > 0 ? ` · ${(ragMs / 1000).toFixed(1)}s` : '';
   const summaryLabel =
-    `פרטי אחזור — ${meetings.length} ישיבות · ${chunks.length} קטעים · ~${tokEst.toLocaleString()} טוקנים`;
+    `פרטי אחזור — ${meetings.length} ישיבות · ${chunks.length} קטעים · ~${tokEst.toLocaleString()} טוקנים${ragTimeStr}`;
 
   let body = '<div class="stats-row">';
   body += 'ישיבות: <strong>' + meetings.length + '</strong>';

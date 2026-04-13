@@ -35,7 +35,7 @@ from typing import Callable, Generator, Optional
 
 import config
 from agent.context import Context, evaluate_condition
-from agent.llm.base import DoneEvent, LLMBackend, TokenEvent, ToolCallsEvent
+from agent.llm.base import DoneEvent, LLMBackend, ThinkingEvent, TokenEvent, ToolCallsEvent
 from agent.machine import StateMachine
 from agent.parsers import get_loop_control, parse_output
 
@@ -215,15 +215,18 @@ class MachineRunner:
                     or ctx.get("question")
                     or ctx.get("original_question", "")
                 )
+                t_rag = time.monotonic()
                 context_str, debug = self.retriever(
                     question=rag_q, top_k=top_k, top_n=top_n
                 )
+                rag_ms = round((time.monotonic() - t_rag) * 1000)
                 existing_paths = ctx.get("meeting_paths") or {}
                 ctx.set("meeting_paths", {**existing_paths, **debug.get("meeting_paths", {})})
                 ctx.set("rag_context", context_str)
                 retrieval_info = {
                     "meetings":      debug.get("meetings", []),
                     "context_chars": debug.get("context_chars", 0),
+                    "rag_ms":        rag_ms,
                     "chunks": [
                         {
                             "date":      item["meta"].get("date", ""),
@@ -263,6 +266,8 @@ class MachineRunner:
             ):
                 if ev == "status":
                     yield ("status", val)
+                elif ev == "thinking_token":
+                    yield ("thinking_token", val)
                 elif ev == "node_done":
                     node_result = val
 
@@ -288,6 +293,9 @@ class MachineRunner:
                 "content":      content,
                 "loop":         loop_idx,
                 "elapsed_ms":   node_result.get("elapsed_ms", 0),
+                "llm_ms":       node_result.get("llm_ms", 0),
+                "tool_ms":      node_result.get("tool_ms", 0),
+                "thinking":     node_result.get("thinking", ""),
                 "tools":        node_result.get("tools", []),
                 "tool_results": node_result.get("tool_results", []),
                 "prompt":       node_result.get("prompt", {}),
@@ -342,28 +350,52 @@ class MachineRunner:
             {"role": "user",   "content": user_content},
         ]
 
-        buf: list[str]       = []
-        tools_used: list[str]   = []
+        buf: list[str]           = []
+        tools_used: list[str]    = []
         tool_results: list[dict] = []
+        thinking_blocks: list[str] = []
         t0 = time.monotonic()
+        llm_ms_total  = 0
+        tool_ms_total = 0
 
         for _round in range(max_rounds):
-            content_parts: list[str] = []
-            tool_calls:    list[dict] = []
+            content_parts: list[str]  = []
+            thinking_parts: list[str] = []
+            tool_calls:     list[dict] = []
 
+            t_llm = time.monotonic()
             for event in self.backend.stream(
-                self.backend.prepare_messages(messages),
+                self.backend.prepare_messages(messages, suppress_thinking=False),
                 tools=tool_schemas or None,
                 temperature=temperature,
                 max_tokens=max_tokens,
             ):
                 if isinstance(event, TokenEvent):
                     content_parts.append(event.text)
+                elif isinstance(event, ThinkingEvent):
+                    thinking_parts.append(event.text)
+                    yield ("thinking_token", event.text)
                 elif isinstance(event, ToolCallsEvent):
                     tool_calls = event.calls
                 # DoneEvent: just continue
+            llm_ms_total += round((time.monotonic() - t_llm) * 1000)
 
             raw_content = "".join(content_parts)
+
+            # Primary: reasoning_content field (ThinkingEvent). Fallback: <think> XML in content.
+            if thinking_parts:
+                thinking_blocks.append("".join(thinking_parts))
+            else:
+                thinking = self.backend.extract_thinking(raw_content)
+                if thinking:
+                    thinking_blocks.append(thinking)
+
+            print(
+                f"[runner] round={_round} raw_len={len(raw_content)} "
+                f"thinking_parts={len(thinking_parts)} has_think_xml={'<think>' in raw_content}",
+                flush=True,
+            )
+
             tool_calls, content = self.backend.extract_tool_calls(
                 {}, raw_content
             ) if not tool_calls else (tool_calls, self.backend.extract_visible_content(raw_content))
@@ -397,12 +429,21 @@ class MachineRunner:
                 # Summary tools need meeting_paths injected
                 if fn_name in ("get_meeting_summary", "get_meeting_summary_section"):
                     callable_fn = self.tool_registry.get(fn_name)
+                    t_tool = time.monotonic()
                     result = callable_fn(fn_args, meeting_paths) if callable_fn else f"כלי לא נמצא: {fn_name}"
                 else:
                     callable_fn = self.tool_registry.get(fn_name)
+                    t_tool = time.monotonic()
                     result = callable_fn(fn_args) if callable_fn else f"כלי לא נמצא: {fn_name}"
 
-                tool_results.append({"name": fn_name, "args": fn_args, "result": result})
+                tool_elapsed_ms = round((time.monotonic() - t_tool) * 1000)
+                tool_ms_total  += tool_elapsed_ms
+                tool_results.append({
+                    "name":       fn_name,
+                    "args":       fn_args,
+                    "result":     result,
+                    "elapsed_ms": tool_elapsed_ms,
+                })
                 messages.append({
                     "role":         "tool",
                     "tool_call_id": tc.get("id", ""),
@@ -412,9 +453,17 @@ class MachineRunner:
             yield ("status", "ממשיך…")
 
         elapsed_ms = round((time.monotonic() - t0) * 1000)
+        print(
+            f"[runner] node_done elapsed={elapsed_ms}ms llm={llm_ms_total}ms "
+            f"tool={tool_ms_total}ms thinking_blocks={len(thinking_blocks)}",
+            flush=True,
+        )
         yield ("node_done", {
             "content":      "".join(buf),
+            "thinking":     "\n---\n".join(thinking_blocks),
             "elapsed_ms":   elapsed_ms,
+            "llm_ms":       llm_ms_total,
+            "tool_ms":      tool_ms_total,
             "tools":        tools_used,
             "tool_results": tool_results,
             "prompt":       {"system": system_prompt, "user": user_content},

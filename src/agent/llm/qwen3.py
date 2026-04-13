@@ -13,13 +13,16 @@ All Qwen3-specific behaviour is isolated here:
 from __future__ import annotations
 
 import json
+import os
 import re
+from datetime import datetime
+from pathlib import Path
 from typing import Generator
 
 import requests
 
 import config
-from agent.llm.base import DoneEvent, LLMEvent, TokenEvent, ToolCallsEvent
+from agent.llm.base import DoneEvent, LLMEvent, ThinkingEvent, TokenEvent, ToolCallsEvent
 
 
 _XML_TOOL_RE = re.compile(
@@ -91,6 +94,11 @@ class Qwen3LlamaBackend:
         """True when model produced only a <think> block and no tool calls."""
         return not content.strip() and not tool_calls
 
+    def extract_thinking(self, raw_content: str) -> str:
+        """Return concatenated contents of all <think>…</think> blocks."""
+        blocks = _THINK_RE.findall(raw_content)
+        return "\n---\n".join(b.strip() for b in blocks if b.strip())
+
     def stream(
         self,
         messages: list[dict],
@@ -105,13 +113,15 @@ class Qwen3LlamaBackend:
         calls were accumulated, then DoneEvent.
         """
         body: dict = {
-            "messages":    self.prepare_messages(messages),
+            "messages":    messages,
             "max_tokens":  max_tokens,
             "temperature": temperature,
             "stream":      True,
         }
         if tools:
             body["tools"] = tools
+
+        import time as _time
 
         resp = requests.post(
             f"{self._url}/v1/chat/completions",
@@ -121,38 +131,78 @@ class Qwen3LlamaBackend:
         )
         resp.raise_for_status()
 
+        # ── Optional raw dump ─────────────────────────────────────────────────
+        _dump_fh = None
+        if os.environ.get("KNESSET_LLM_DUMP"):
+            _dump_dir = Path.home() / ".knesset_debug"
+            _dump_dir.mkdir(exist_ok=True)
+            _dump_path = _dump_dir / f"llm_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.txt"
+            _dump_fh = _dump_path.open("w", encoding="utf-8")
+            # Write request body first so we can correlate input↔output
+            _dump_fh.write("=== REQUEST ===\n")
+            _dump_fh.write(json.dumps(body, ensure_ascii=False, indent=2))
+            _dump_fh.write("\n\n=== RESPONSE (raw SSE) ===\n")
+            print(f"[qwen3] dumping to {_dump_path}", flush=True)
+
         tc_acc: dict[int, dict] = {}
+        _t0            = _time.monotonic()
+        _ttft: float   = 0.0
+        _token_count   = 0
 
-        for raw in resp.iter_lines():
-            if not raw:
-                continue
-            line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-            if not line.startswith("data: "):
-                continue
-            payload = line[6:]
-            if payload == "[DONE]":
-                break
-            try:
-                chunk  = json.loads(payload)
-                choice = chunk["choices"][0]
-                delta  = choice.get("delta", {})
+        try:
+            for raw in resp.iter_lines():
+                if not raw:
+                    continue
+                line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+                if _dump_fh:
+                    _dump_fh.write(line + "\n")
+                if not line.startswith("data: "):
+                    continue
+                payload = line[6:]
+                if payload == "[DONE]":
+                    break
+                try:
+                    chunk  = json.loads(payload)
+                    choice = chunk["choices"][0]
+                    delta  = choice.get("delta", {})
 
-                text = delta.get("content") or ""
-                if text:
-                    yield TokenEvent(text)
+                    thinking_text = delta.get("reasoning_content") or ""
+                    if thinking_text:
+                        if not _ttft:
+                            _ttft = _time.monotonic() - _t0
+                        yield ThinkingEvent(thinking_text)
 
-                for tcd in delta.get("tool_calls") or []:
-                    idx = tcd.get("index", 0)
-                    if idx not in tc_acc:
-                        tc_acc[idx] = {"id": "", "name": "", "arguments": ""}
-                    tc = tc_acc[idx]
-                    if tcd.get("id"):
-                        tc["id"] = tcd["id"]
-                    fn = tcd.get("function", {})
-                    tc["name"]      += fn.get("name",      "")
-                    tc["arguments"] += fn.get("arguments", "")
-            except (json.JSONDecodeError, KeyError):
-                continue
+                    text = delta.get("content") or ""
+                    if text:
+                        if not _ttft:
+                            _ttft = _time.monotonic() - _t0
+                        _token_count += 1
+                        yield TokenEvent(text)
+
+                    for tcd in delta.get("tool_calls") or []:
+                        idx = tcd.get("index", 0)
+                        if idx not in tc_acc:
+                            tc_acc[idx] = {"id": "", "name": "", "arguments": ""}
+                        tc = tc_acc[idx]
+                        if tcd.get("id"):
+                            tc["id"] = tcd["id"]
+                        fn = tcd.get("function", {})
+                        tc["name"]      += fn.get("name",      "")
+                        tc["arguments"] += fn.get("arguments", "")
+                except (json.JSONDecodeError, KeyError):
+                    continue
+        finally:
+            if _dump_fh:
+                _dump_fh.close()
+
+        _total = _time.monotonic() - _t0
+        _gen   = _total - _ttft
+        _tps   = _token_count / _gen if _gen > 0 else 0
+        print(
+            f"[qwen3] ttft={_ttft:.2f}s tokens={_token_count} "
+            f"gen={_gen:.2f}s tps={_tps:.1f}",
+            flush=True,
+        )
 
         if tc_acc:
             yield ToolCallsEvent([

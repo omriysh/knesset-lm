@@ -262,15 +262,17 @@ async def query(req: QueryRequest, request: Request):
                     break
                 ev_type, ev_data = item
                 if ev_type == "token":
-                    yield _sse("token",       {"text": ev_data})
+                    yield _sse("token",          {"text": ev_data})
                 elif ev_type == "status":
-                    yield _sse("status",      {"msg": ev_data})
+                    yield _sse("status",         {"msg": ev_data})
+                elif ev_type == "thinking_token":
+                    yield _sse("thinking_token", {"text": ev_data})
                 elif ev_type == "node_result":
-                    yield _sse("node_result", ev_data)
+                    yield _sse("node_result",    ev_data)
                 elif ev_type == "done":
-                    yield _sse("done",        {})
+                    yield _sse("done",           {})
                 elif ev_type == "error":
-                    yield _sse("error",       {"error": ev_data})
+                    yield _sse("error",          {"error": ev_data})
         except Exception as exc:
             yield _sse("error", {"error": str(exc) + "\n" + traceback.format_exc()})
 

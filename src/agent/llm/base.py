@@ -21,6 +21,11 @@ class TokenEvent:
 
 
 @dataclass
+class ThinkingEvent:
+    text: str   # one chunk of reasoning/thinking content
+
+
+@dataclass
 class ToolCallsEvent:
     calls: list[dict]   # complete, accumulated after the stream ends
 
@@ -30,7 +35,7 @@ class DoneEvent:
     pass
 
 
-LLMEvent = TokenEvent | ToolCallsEvent | DoneEvent
+LLMEvent = TokenEvent | ThinkingEvent | ToolCallsEvent | DoneEvent
 
 
 # ── Backend protocol ──────────────────────────────────────────────────────────
@@ -102,5 +107,13 @@ class LLMBackend(Protocol):
         True if the model produced no usable output (thinking-only response).
         For Qwen3: content is blank after stripping <think>…</think> and no tool calls.
         For other models: typically always False.
+        """
+        ...
+
+    def extract_thinking(self, raw_content: str) -> str:
+        """
+        Extract the thinking/reasoning text from raw model output (before stripping).
+        For Qwen3: returns concatenated <think>…</think> block contents.
+        For other models: returns "".
         """
         ...
