@@ -20,6 +20,7 @@ Usage:
     from utils.knesset_db import get_mk_profile, get_all_mks, get_all_parties
 """
 
+import os
 import requests
 from urllib.parse import quote
 from functools import lru_cache
@@ -27,10 +28,22 @@ import io
 import pdfplumber
 import fitz  # pymupdf
 import re
+import docx          # python-docx
+from bs4 import BeautifulSoup
+
+try:
+    import win32com.client as _win32com
+    _WORD_COM_AVAILABLE = True
+except ImportError:
+    _WORD_COM_AVAILABLE = False
 
 OKNESSET_API = "https://backend.oknesset.org"
 OFFICIAL_KNESSET_NEW_API = "https://knesset.gov.il/OdataV4/ParliamentInfo"
 TIMEOUT = 30
+
+SESSION_TYPE_CLASSIFIED  = 160  # חסויה — classified session; no public transcript
+_PROTOCOL_NAME_SUBSTRINGS = ("פרוטוקול", "protocol")
+
 _DOC_GROUP_PRIORITY = [
     "הצעת חוק לקריאה השנייה והשלישית",
     "הצעת חוק לקריאה הראשונה",
@@ -330,6 +343,28 @@ def get_mk_by_name(name: str, knesset_num: int = 25) -> list[dict]:
     return matches
 
 
+def get_all_committees(knesset_num: int = 25) -> list[dict]:
+    """
+    Return all committees for a given Knesset number, sorted by name.
+    Each entry: {CommitteeID, Name, KnessetNum, IsCurrent}.
+    """
+    url      = f"{OKNESSET_API}/committees_kns_committee/list"
+    response = requests.get(url, params={"KnessetNum": knesset_num, "limit": 1000}, timeout=TIMEOUT)
+    response.raise_for_status()
+    committees = [
+        {
+            "CommitteeID": c["CommitteeID"],
+            "Name":        c.get("Name", ""),
+            "KnessetNum":  c.get("KnessetNum"),
+            "IsCurrent":   c.get("IsCurrent"),
+        }
+        for c in response.json()
+        if c.get("Name")
+    ]
+    committees.sort(key=lambda c: c["Name"])
+    return committees
+
+
 def get_committee_by_name(name: str, knesset_num: int = 25) -> list[dict]:
     """
     Search for Knesset committees by name (Hebrew, partial match) and Knesset number.
@@ -407,7 +442,7 @@ def get_mk_profile(name: str, knesset_num: int = 25) -> dict | None:
     result = matches[0]
     result["multiple_matches"] = len(matches) > 1
     if len(matches) > 1:
-        result["other_matches"] = [m["full_name"] for m in matches[1:]]
+        result["other_matches"] = [m["full_name"] for m in matches[1:] if "full_name" in m]
     return result
 
 
@@ -573,3 +608,214 @@ def get_active_committee_members_by_name(name: str, knesset_num: int = 25) -> li
         return []
     committee = committees[0]  # take the best match
     return get_active_committee_members(committee["CommitteeID"], knesset_num)
+
+
+# ── Committee sessions ────────────────────────────────────────────────────────
+
+def get_committee_sessions(committee_id: int, knesset_num: int = 25) -> list[dict]:
+    """
+    List ALL sessions for a committee from OData KNS_CommitteeSession, newest first.
+    Uses explicit $skip pagination (API caps at 100 per page).
+    Returns list of {session_id, date, committee_id, knesset_num, type_id, status_id, note}.
+    Check type_id against SESSION_TYPE_CLASSIFIED to skip classified sessions.
+    """
+    url       = f"{OFFICIAL_KNESSET_NEW_API}/KNS_CommitteeSession"
+    page_size = 100
+    all_sessions: list[dict] = []
+
+    for offset in range(0, 100_000, page_size):
+        r = requests.get(url, params={
+            "$filter":  f"CommitteeID eq {committee_id} and KnessetNum eq {knesset_num}",
+            "$select":  "Id,CommitteeID,KnessetNum,StartDate,Note,TypeID,StatusID",
+            "$orderby": "StartDate desc",
+            "$top":     page_size,
+            "$skip":    offset,
+        }, timeout=TIMEOUT)
+        r.raise_for_status()
+        page = r.json().get("value", [])
+        all_sessions.extend(page)
+        if len(page) < page_size:
+            break
+
+    return [
+        {
+            "session_id":   s["Id"],
+            "date":         (s.get("StartDate") or "")[:10],  # YYYY-MM-DD
+            "committee_id": s.get("CommitteeID"),
+            "knesset_num":  s.get("KnessetNum"),
+            "type_id":      s.get("TypeID"),
+            "status_id":    s.get("StatusID"),
+            "note":         s.get("Note"),
+        }
+        for s in all_sessions
+    ]
+
+
+def get_committee_sessions_by_name(name: str, knesset_num: int = 25) -> list[dict]:
+    """Resolve committee by name, then return its sessions."""
+    committees = get_committee_by_name(name, knesset_num)
+    if not committees:
+        return []
+    return get_committee_sessions(committees[0]["CommitteeID"], knesset_num)
+
+
+# ── Session documents & transcripts ──────────────────────────────────────────
+
+def _extract_docx_text(docx_bytes: bytes) -> str:
+    """Extract text from a .docx file using python-docx."""
+    try:
+        doc = docx.Document(io.BytesIO(docx_bytes))
+        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+        return "\n".join(paragraphs).strip()
+    except Exception:
+        return ""
+
+
+def _extract_doc_text(doc_bytes: bytes) -> str:
+    """
+    Extract text from a binary .doc (OLE) file using Word COM automation.
+    Windows only; requires Microsoft Word installed.
+    Note: writes to ~/.knesset_doc_tmp/ — NOT %TEMP%, which triggers Protected View.
+    """
+    if not _WORD_COM_AVAILABLE:
+        return ""
+    tmp_dir  = os.path.join(os.path.expanduser("~"), ".knesset_doc_tmp")
+    os.makedirs(tmp_dir, exist_ok=True)
+    doc_path = os.path.join(tmp_dir, "document.doc")
+    word = None
+    com_doc = None
+    try:
+        with open(doc_path, "wb") as f:
+            f.write(doc_bytes)
+        word    = _win32com.Dispatch("Word.Application")
+        word.Visible = False
+        com_doc = word.Documents.Open(doc_path, ReadOnly=True)
+        text    = com_doc.Content.Text
+        return text.strip()
+    except Exception:
+        return ""
+    finally:
+        if com_doc:
+            try: com_doc.Close(False)
+            except Exception: pass
+        if word:
+            try: word.Quit()
+            except Exception: pass
+        try: os.unlink(doc_path)
+        except Exception: pass
+
+
+def get_session_documents(session_id: int) -> list[dict]:
+    """Return document metadata for a session from KNS_DocumentCommitteeSession."""
+    r = requests.get(
+        f"{OFFICIAL_KNESSET_NEW_API}/KNS_DocumentCommitteeSession",
+        params={"$filter": f"CommitteeSessionID eq {session_id}", "$top": 20},
+        timeout=TIMEOUT,
+    )
+    r.raise_for_status()
+    return [
+        {
+            "doc_id":     doc["Id"],
+            "session_id": session_id,
+            "name":       doc.get("DocumentName"),
+            "format":     doc.get("ApplicationDesc"),
+            "url":        _fix_file_path(doc["FilePath"]),
+        }
+        for doc in r.json().get("value", [])
+        if doc.get("FilePath")
+    ]
+
+
+def get_session_protocol_text(session_id: int, max_chars: int | None = None) -> dict | None:
+    """
+    Download and extract the protocol document for a session.
+    Only considers documents whose name contains 'פרוטוקול' or 'protocol' —
+    background documents (bills, appendices) are excluded.
+    Returns {session_id, doc_id, name, url, text} or None.
+    """
+    docs = get_session_documents(session_id)
+    candidates = [
+        d for d in docs
+        if d["name"] and any(p in d["name"] for p in _PROTOCOL_NAME_SUBSTRINGS)
+    ]
+    if not candidates:
+        return None
+
+    for doc in candidates:
+        fmt = (doc["format"] or "").lower()
+        if fmt not in ("pdf", "word", "doc", "docx"):
+            continue
+        try:
+            response = requests.get(doc["url"], timeout=TIMEOUT)
+            response.raise_for_status()
+            if fmt == "pdf":
+                text = _extract_pdf_text(response.content)
+            elif doc["url"].lower().endswith(".doc"):
+                text = _extract_doc_text(response.content)
+            else:
+                text = _extract_docx_text(response.content)
+            if not text:
+                continue
+            if max_chars:
+                text = text[:max_chars]
+            return {"session_id": session_id, "doc_id": doc["doc_id"],
+                    "name": doc["name"], "url": doc["url"], "text": text}
+        except Exception:
+            continue
+    return None
+
+
+def get_session_transcript(session_id: int) -> dict | None:
+    """
+    Download a session transcript, trying oknesset.org first, then OData PDF/Word.
+
+    Returns:
+      {"speeches": [...]}                        — structured, from oknesset.org
+      {"full_text": "...", "source_url": "..."}  — raw text, from OData document
+      None                                       — no transcript available
+    """
+    speeches = scrape_oknesset_transcript(session_id)
+    if speeches:
+        return {"speeches": speeches}
+
+    result = get_session_protocol_text(session_id)
+    if result and result.get("text"):
+        return {"full_text": result["text"], "source_url": result["url"]}
+
+    return None
+
+
+def scrape_oknesset_transcript(session_id: int) -> list[dict] | None:
+    """
+    Scrape the speech-by-speech transcript from oknesset.org.
+    URL: https://oknesset.org/meetings/{s[0]}/{s[1]}/{session_id}.html
+
+    Returns list of {speaker, text_he}, or None if unavailable / no protocol marker.
+    """
+    s   = str(session_id)
+    url = f"https://oknesset.org/meetings/{s[0]}/{s[1]}/{session_id}.html"
+    try:
+        r = requests.get(url, timeout=15)
+        if r.status_code == 404:
+            return None
+        r.raise_for_status()
+    except Exception:
+        return None
+
+    soup = BeautifulSoup(r.content, "html.parser")
+
+    # Explicit "no protocol" marker
+    if soup.select_one("ul[data-noprotocol]"):
+        return None
+
+    speeches = []
+    for div in soup.select("div.speech-container"):
+        speaker_el = div.select_one("div.text-speaker")
+        content_el = div.select_one("blockquote.entry-content")
+        if speaker_el and content_el:
+            speaker = speaker_el.get_text().replace("¶", "").strip()
+            text_he = content_el.get_text().replace("¶", "").strip()
+            if speaker or text_he:
+                speeches.append({"speaker": speaker, "text_he": text_he})
+
+    return speeches if speeches else None
