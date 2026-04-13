@@ -8,15 +8,17 @@ const answerBox       = document.getElementById('answer-box');
 const answerEl        = document.getElementById('answer-content');
 const stagesBox       = document.getElementById('stages-box');
 const devToggle       = document.getElementById('dev-toggle');
-const thinkingPanel   = document.getElementById('thinking-panel');
-const thinkingStream  = document.getElementById('thinking-stream');
 
-let running        = false;
-let rawAnswer      = '';
-let _timerInterval = null;
-let _timerStart    = 0;
-let devMode        = false;
-let stageDataBuf   = [];   // buffer of node_result payloads for the current query
+let running           = false;
+let rawAnswer         = '';
+let _timerInterval    = null;
+let _timerStart       = 0;
+let devMode           = true;    // dev mode on by default
+let stageDataBuf      = [];      // buffer of node_result payloads for the current query
+let liveThinkingCard  = null;    // stage card currently streaming thinking tokens
+
+// Initialise toggle to match default devMode
+devToggle.classList.toggle('active', devMode);
 
 devToggle.addEventListener('click', () => {
   devMode = !devMode;
@@ -24,11 +26,13 @@ devToggle.addEventListener('click', () => {
   if (devMode) {
     // Render any cards that arrived before dev mode was turned on
     stagesBox.innerHTML = '';
+    liveThinkingCard = null;
     for (const d of stageDataBuf) addStageCard(d);
     if (stageDataBuf.length) stagesBox.style.display = 'block';
   } else {
     stagesBox.innerHTML = '';
     stagesBox.style.display = 'none';
+    liveThinkingCard = null;
   }
 });
 
@@ -73,8 +77,7 @@ async function startQuery() {
   answerEl.textContent = '';
   stagesBox.style.display = 'none';
   stagesBox.innerHTML = '';
-  thinkingPanel.style.display = 'none';
-  thinkingStream.textContent = '';
+  liveThinkingCard = null;
   timerEl.style.display = 'none';
   setStatus('מחפש...');
   _startTimer();
@@ -131,17 +134,15 @@ function handleEvent(ev, data) {
     case 'status':
       setStatus(data.msg || '');
       break;
+    case 'node_start':
+      if (devMode) createLiveCard(data);
+      break;
     case 'thinking_token':
-      if (thinkingPanel.style.display === 'none') {
-        thinkingPanel.style.display = 'block';
-      }
-      thinkingStream.textContent += data.text || '';
-      thinkingStream.scrollTop = thinkingStream.scrollHeight;
+      if (devMode) appendLiveThinking(data.text || '');
       break;
     case 'node_result':
-      // Hide live thinking panel — full thinking now in stage card
-      thinkingPanel.style.display = 'none';
-      thinkingStream.textContent = '';
+      // Replace live card with completed stage card
+      removeLiveThinkingCard();
       stageDataBuf.push(data);
       if (devMode) addStageCard(data);
       break;
@@ -154,13 +155,71 @@ function handleEvent(ev, data) {
       answerEl.innerHTML = esc(rawAnswer) + '<span class="cursor"></span>';
       break;
     case 'done':
-      thinkingPanel.style.display = 'none';
-      thinkingStream.textContent = '';
+      removeLiveThinkingCard();
       break;
     case 'error':
-      thinkingPanel.style.display = 'none';
+      removeLiveThinkingCard();
       showError(data.error || 'שגיאה לא ידועה');
       break;
+  }
+}
+
+// ── Live thinking card ────────────────────────────────────────────────────────
+
+function createLiveCard(nodeStart) {
+  removeLiveThinkingCard();   // safety: clear any stale card
+
+  const label = nodeStart.label || 'שלב';
+  const stage = nodeStart.stage || 'unknown';
+  const loop  = nodeStart.loop  || 0;
+  const p     = nodeStart.prompt || {};
+
+  const tagText  = _STAGE_TAGS[stage] || stage;
+  const loopHtml = loop > 0
+    ? `<span class="stage-loop-badge">סבב ${loop + 1}</span>`
+    : '';
+
+  liveThinkingCard = document.createElement('div');
+  liveThinkingCard.className = 'stage-card';
+
+  const liveRetrieval    = nodeStart.retrieval || null;
+  const liveRetrievalHtml = liveRetrieval ? renderRetrievalHtml(liveRetrieval) : '';
+
+  liveThinkingCard.innerHTML =
+    `<div class="stage-header open" onclick="toggleStageCard(this)">` +
+      `<span class="stage-arrow">&#9658;</span>` +
+      `<span class="stage-dot ${esc(stage)}"></span>` +
+      `<span class="stage-name">${esc(label)}</span>` +
+      `<span class="stage-tag">${esc(tagText)}</span>` +
+      `<span class="stage-meta"><span class="live-thinking-dot"></span>${loopHtml}</span>` +
+    `</div>` +
+    `<div class="stage-body visible">` +
+      renderPromptHtml(p, false) +
+      liveRetrievalHtml +
+      `<details class="sub-details open">` +
+        `<summary class="sub-summary thinking-summary">תהליך עבודה…</summary>` +
+        `<div class="sub-details-body">` +
+          `<pre class="prompt-text thinking-text"></pre>` +
+        `</div>` +
+      `</details>` +
+    `</div>`;
+
+  stagesBox.style.display = 'block';
+  stagesBox.appendChild(liveThinkingCard);
+}
+
+function appendLiveThinking(text) {
+  if (!liveThinkingCard) return;
+  const pre = liveThinkingCard.querySelector('.thinking-text');
+  if (!pre) return;
+  pre.textContent += text;
+  pre.scrollTop = pre.scrollHeight;
+}
+
+function removeLiveThinkingCard() {
+  if (liveThinkingCard) {
+    liveThinkingCard.remove();
+    liveThinkingCard = null;
   }
 }
 
@@ -240,9 +299,9 @@ function addStageCard(data) {
     ? `<span class="stage-loop-badge">סבב ${loop + 1}</span>`
     : '';
 
-  const promptHtml      = prompt ? renderPromptHtml(prompt, devMode) : '';
+  const promptHtml      = prompt ? renderPromptHtml(prompt, false) : '';
   const thinkingHtml    = thinking ? renderThinkingHtml(thinking, llmMs) : '';
-  const toolResultsHtml = toolResults.map(tr => renderToolResultHtml(tr, devMode)).join('');
+  const toolResultsHtml = toolResults.map(tr => renderToolResultHtml(tr, false)).join('');
   const retrievalHtml   = retrieval ? renderRetrievalHtml(retrieval) : '';
 
   const bodyClass   = devMode ? 'stage-body visible' : 'stage-body';

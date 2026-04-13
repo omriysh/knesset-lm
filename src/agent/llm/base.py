@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Generator, Protocol, runtime_checkable
+from config import MAX_TOKENS
 
 
 # ── Streaming event types ─────────────────────────────────────────────────────
@@ -56,8 +57,8 @@ class LLMBackend(Protocol):
         self,
         messages: list[dict],
         tools: list[dict] | None = None,
-        temperature: float = 0.7,
-        max_tokens: int = 16384,
+        temperature: float | None = None,  # None → use backend's TEMPERATURE class constant
+        max_tokens: int = MAX_TOKENS,    # override in implementations with config.MAX_TOKENS
     ) -> Generator[LLMEvent, None, None]:
         """
         Stream one completion.

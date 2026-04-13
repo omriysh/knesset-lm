@@ -26,7 +26,7 @@ CACHE_TTL = 7 * 24 * 3600   # 1 week (seconds)
 LLAMA_SERVER        = "http://127.0.0.1:8080"
 CTX_SIZE            = 40000
 MAX_TOKENS          = 16384
-MAX_THINKING_TOKENS = 10000
+MAX_THINKING_TOKENS = 6000
 CHARS_PER_TOK       = 2      # rough estimate for Hebrew
 
 # Chunk sizing: reserve space for system prompt, partial summary, and response

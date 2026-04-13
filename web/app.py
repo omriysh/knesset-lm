@@ -47,7 +47,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 import config
-from agent.llm.qwen3 import Qwen3LlamaBackend
+from agent.llm.qwen3 import Qwen3LlamaBackend  # swap for GemmaLlamaBackend if using Gemma
 from agent.machine import StateMachine
 from agent.runner import MachineRunner, build_tool_registry
 from indexing.embedder import ProtocolEmbedder
@@ -265,6 +265,8 @@ async def query(req: QueryRequest, request: Request):
                     yield _sse("token",          {"text": ev_data})
                 elif ev_type == "status":
                     yield _sse("status",         {"msg": ev_data})
+                elif ev_type == "node_start":
+                    yield _sse("node_start",     ev_data)
                 elif ev_type == "thinking_token":
                     yield _sse("thinking_token", {"text": ev_data})
                 elif ev_type == "node_result":

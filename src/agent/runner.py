@@ -260,6 +260,16 @@ class MachineRunner:
             tool_nodes_list = self.machine.tool_nodes(node_id)
             meeting_paths   = ctx.get("meeting_paths") or {}
 
+            node_start_ev: dict = {
+                "label":  label,
+                "stage":  stage,
+                "loop":   loop_idx,
+                "prompt": {"system": system_prompt, "user": user_content},
+            }
+            if retrieval_info:
+                node_start_ev["retrieval"] = retrieval_info
+            yield ("node_start", node_start_ev)
+
             node_result: dict = {}
             for ev, val in self._run_node(
                 node, user_content, system_prompt, tool_nodes_list, meeting_paths
@@ -287,12 +297,13 @@ class MachineRunner:
                         (existing + "\n\n" + new_part).lstrip("\n"))
 
             # ── Emit node_result ──────────────────────────────────────────
+            rag_ms = retrieval_info.get("rag_ms", 0) if retrieval_info else 0
             nr: dict = {
                 "label":        label,
                 "stage":        stage,
                 "content":      content,
                 "loop":         loop_idx,
-                "elapsed_ms":   node_result.get("elapsed_ms", 0),
+                "elapsed_ms":   node_result.get("elapsed_ms", 0) + rag_ms,
                 "llm_ms":       node_result.get("llm_ms", 0),
                 "tool_ms":      node_result.get("tool_ms", 0),
                 "thinking":     node_result.get("thinking", ""),
@@ -341,8 +352,8 @@ class MachineRunner:
         Yields ("status", str), ("node_done", dict).
         """
         data         = node.get("data", {})
-        temperature  = float(data.get("temperature", 0.7))
-        max_tokens   = int(data.get("max_tokens", config.MAX_TOKENS))
+        temperature  = float(data.get("temperature", self.backend.TEMPERATURE))
+        max_tokens   = int(data.get("max_tokens",   config.MAX_TOKENS))
         tool_schemas = self.machine.build_tool_schemas(tool_nodes_list)
 
         messages: list[dict] = [
