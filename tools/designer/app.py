@@ -31,9 +31,10 @@ def _new_machine(name: str = "New Machine") -> dict:
     """Return a blank v2 state-machine with only the Begin node."""
     begin_id = "begin_" + uuid.uuid4().hex[:8]
     return {
-        "id":      uuid.uuid4().hex[:12],
-        "name":    name,
-        "version": 2,
+        "id":           uuid.uuid4().hex[:12],
+        "name":         name,
+        "version":      2,
+        "global_rules": "",
         "nodes": [
             {
                 "id":       begin_id,

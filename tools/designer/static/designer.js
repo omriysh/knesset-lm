@@ -765,6 +765,38 @@ document.getElementById('panel-close').addEventListener('click', closePanel);
 
 
 // ═══════════════════════════════════════════════════════════════════════════
+// GLOBAL RULES PANEL
+// ═══════════════════════════════════════════════════════════════════════════
+document.getElementById('btn-rules').addEventListener('click', () => {
+  if (!machine) { toast('Load a machine first'); return; }
+  openRulesPanel();
+});
+
+function openRulesPanel() {
+  panelTitle.textContent = 'Global Rules';
+  panelBody.innerHTML = `
+    <div class="field">
+      <div class="hint" style="margin-bottom:8px">
+        These rules are prepended to every node's system prompt at runtime.
+        Use them for agent-wide instructions, language requirements, formatting rules, etc.
+      </div>
+      <textarea id="pf-global-rules" dir="rtl" rows="18" style="min-height:280px;font-size:.82rem"
+        placeholder="הנחיות כלליות לכל הסוכן...">${esc(machine.global_rules || '')}</textarea>
+    </div>
+    <button class="primary" style="width:100%;margin-top:8px" onclick="applyRulesPanel()">Apply</button>
+  `;
+  openPanel();
+}
+
+function applyRulesPanel() {
+  if (!machine) return;
+  machine.global_rules = document.getElementById('pf-global-rules')?.value || '';
+  markDirty();
+  toast('Global rules updated');
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
 // SAVE / LOAD / NEW / DELETE / EXPORT
 // ═══════════════════════════════════════════════════════════════════════════
 async function loadMachineList() {

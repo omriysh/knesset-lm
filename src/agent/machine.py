@@ -72,8 +72,9 @@ class StateMachine:
                 f"File: {path}"
             )
 
-        self.name    = data.get("name", "machine")
-        self.version = version
+        self.name         = data.get("name", "machine")
+        self.version      = version
+        self.global_rules = data.get("global_rules", "")
         self._nodes: dict[str, dict] = {n["id"]: n for n in data["nodes"]}
         self._edges: list[dict]      = data["edges"]
 

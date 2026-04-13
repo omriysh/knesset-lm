@@ -196,8 +196,13 @@ class MachineRunner:
                 queue.append(node_id)
                 continue
 
-            data          = node.get("data", {})
-            system_prompt = data.get("system_prompt", "")
+            data         = node.get("data", {})
+            node_prompt  = data.get("system_prompt", "")
+            global_rules = self.machine.global_rules.strip()
+            system_prompt = (
+                global_rules + "\n\n" + node_prompt if global_rules and node_prompt
+                else global_rules or node_prompt
+            )
             stage         = data.get("stage", "")
             label         = node.get("label", "")
 

@@ -37,6 +37,9 @@ from config import transcriptions_dir, summaries_dir
 _WIN_UNSAFE = re.compile(r'[\\/:*?"<>|]')
 _CANCELLED_STATUS_IDS = {193}
 
+MEETING_SUMMARY_RETRIES = 10
+MEETING_SUMMARY_RETRY_DELAY = 600  # seconds
+
 
 def _safe_dirname(name: str) -> str:
     return re.sub(r"[\s_]+", "_", _WIN_UNSAFE.sub("_", name)).strip("_")
@@ -143,7 +146,15 @@ def _process_committee(
                 sbar.set_description("  Summarizing")
                 # summarize_meeting() prints its own progress to stdout;
                 # tqdm will redraw the bars after each line automatically.
-                summary = summarize_meeting(proto_path)
+                for i in range(MEETING_SUMMARY_RETRIES):
+                    try:
+                        summary = summarize_meeting(proto_path)
+                        break
+                    except Exception as e:
+                        stats["failed_summ"] += 1
+                        tqdm.write(f"  [ERROR] summarization exception (attempt {i+1}/{MEETING_SUMMARY_RETRIES}): {proto_path.name}\n    {e}")
+                        tqdm.write(f"sleeping for {MEETING_SUMMARY_RETRY_DELAY} seconds before retrying …")
+                        time.sleep(MEETING_SUMMARY_RETRY_DELAY)
                 if summary is None:
                     stats["too_long"] += 1
                     tqdm.write(f"  [skip-long] {proto_path.name}")
