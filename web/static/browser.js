@@ -38,7 +38,18 @@ let _origQ     = '';     // original question (for summarize button)
 /* ── Main entry point ───────────────────────────────────────────── */
 function openProtocolBrowser(sessionId, meetingId, meetings, opts = {}) {
   _sid      = sessionId;
-  _meetings = meetings || [];
+  _meetings = (meetings || []).map(m => {
+    const clean = s => String(s || '').replace(/_/g, ' ').trim();
+    let title;
+    if (m.committee && m.date) {
+      title = `${clean(m.committee)} — ${clean(m.date)}`;
+    } else if (m.title && m.title !== m.meeting_id) {
+      title = clean(m.title);
+    } else {
+      title = clean(m.committee || m.date || m.meeting_id);
+    }
+    return { ...m, title };
+  });
   _activeId = meetingId;
   _origQ    = opts.originalQuestion || '';
 
@@ -51,6 +62,10 @@ function openProtocolBrowser(sessionId, meetingId, meetings, opts = {}) {
 
   const chatColumn = document.getElementById('chat-column');
   chatColumn.appendChild(_panel);
+
+  const qLabel = _panel.querySelector('#browser-question-label');
+  if (qLabel) qLabel.textContent = _origQ || 'עיון בפרוטוקולים';
+
   _renderSidebar();
   _loadMeeting(meetingId);
 
@@ -76,7 +91,7 @@ function _shellHtml(postCompletion) {
   return `
 <div class="browser-panel">
   <div class="browser-header">
-    <span class="browser-breadcrumb">כנסת ישראל / פרוטוקולים / <span id="browser-meeting-title">…</span></span>
+    <span class="browser-breadcrumb" id="browser-question-label"></span>
     <div class="browser-header-actions">
       ${summarizeBtn}
       <button class="browser-close-btn" onclick="closeProtocolBrowser()" title="סגור">✕</button>
@@ -110,9 +125,9 @@ function _renderSidebar() {
     const badgeCls = pct >= 85 ? 'rel-green' : pct >= 70 ? 'rel-blue' : 'rel-grey';
     html += `<div class="sidebar-meeting ${active ? 'active' : ''}"
                   onclick="browserSwitchMeeting('${_esc(m.meeting_id)}')">
-      <div class="sidebar-meeting-title">${_esc(m.title || m.meeting_id)}</div>
+      <div class="sidebar-meeting-title">${_esc((m.date || '').replace(/_/g, ' ') || m.meeting_id)}</div>
       <div class="sidebar-meeting-meta">
-        <span class="sidebar-date">${_esc(m.date || '')}</span>
+        <span class="sidebar-committee">${_esc((m.committee || '').replace(/_/g, ' '))}</span>
         <span class="rel-badge ${badgeCls}">${pct}%</span>
       </div>
     </div>`;
@@ -128,10 +143,7 @@ async function _loadMeeting(meetingId) {
   _activeTopicFilter = null;
   _summary = null;
 
-  // Update breadcrumb
   const m = _meetings.find(x => x.meeting_id === meetingId);
-  const titleEl = _panel.querySelector('#browser-meeting-title');
-  if (titleEl) titleEl.textContent = m ? (m.title || meetingId) : meetingId;
 
   // Update sidebar active state
   _renderSidebar();
@@ -184,14 +196,15 @@ function _summaryHtml(data) {
          ${_esc(t.heading)}
        </div>
        <ul class="summary-bullets">
-         ${t.bullets.map(b => `<li>${_esc(b)}</li>`).join('')}
+         ${t.bullets.map(b => `<li>${marked.parseInline(b)}</li>`).join('')}
        </ul>
      </div>`
   ).join('');
 
   return `
-<details class="summary-panel" open>
+<details class="summary-panel">
   <summary class="summary-toggle">
+    <span class="summary-toggle-arrow">▼</span>
     <span>סיכום AI</span>
     <span class="summary-pills-row">${pills}</span>
   </summary>
@@ -269,8 +282,8 @@ async function browserLoadMore() {
     const data  = await res.json();
     if (data.meetings) {
       const existingIds = new Set(_meetings.map(m => m.meeting_id));
-      const newOnes = (data.meetings).filter(m => !existingIds.has(m.meeting_id));
-      _meetings = [..._meetings, ...newOnes];
+      const newOnes = data.meetings.filter(m => !existingIds.has(m.meeting_id));
+      _meetings = [..._meetings, ...newOnes];   // _meetingLabel normalises at render time
       _renderSidebar();
     }
   } catch (err) {
@@ -374,6 +387,18 @@ async function _streamWorkspaceAsk(question, meetingId) {
 }
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
+function _meetingLabel(m) {
+  const clean = s => String(s || '').replace(/_/g, ' ').trim();
+  const comm  = clean(m.committee);
+  const date  = clean(m.date);
+  if (comm && date) return `${comm} — ${date}`;
+  if (comm)         return comm;
+  if (date)         return date;
+  const t = clean(m.title);
+  const id = String(m.meeting_id || '');
+  return (t && t !== id) ? t : `ישיבה ${id}`;
+}
+
 function _initials(name) {
   if (!name) return '?';
   return name.trim().split(/\s+/).map(w => w[0]).slice(0, 2).join('');

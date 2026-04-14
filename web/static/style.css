@@ -508,7 +508,7 @@ details[open] > .sub-summary::before { transform: rotate(90deg); }
 }
 
 .option-btn:hover { border-color: #266829; background: #f1f1ee; }
-.option-btn.selected { border-color: #266829; background: #b2faa9; }
+.option-btn.selected { border-color: #b2faa9; background: #b2faa9; }
 .option-btn.selected .option-label { font-weight: 700; }
 
 .option-label { font-size: 0.88rem; color: #2e2f2d; direction: rtl; }
@@ -699,6 +699,7 @@ details[open] > .sub-summary::before { transform: rotate(90deg); }
   flex: 1;
   overflow-y: auto;
   padding: 16px;
+  padding-top: 0;
   min-width: 0;
 }
 
@@ -749,6 +750,16 @@ details[open] > .sub-summary::before { transform: rotate(90deg); }
   color: #8a8a87;
 }
 
+.sidebar-committee {
+  font-size: 0.7rem;
+  color: #8a8a87;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+}
+
 .rel-badge {
   font-size: 0.68rem;
   font-weight: 700;
@@ -780,7 +791,6 @@ details[open] > .sub-summary::before { transform: rotate(90deg); }
   border: 1px solid #e2e3df;
   border-radius: 12px;
   margin-bottom: 14px;
-  overflow: hidden;
 }
 
 .summary-toggle {
@@ -832,6 +842,8 @@ details[open] > .sub-summary::before { transform: rotate(90deg); }
 
 .summary-body {
   padding: 10px 14px 14px;
+  max-height: 38vh;
+  overflow-y: auto;
 }
 
 .summary-section {
@@ -988,3 +1000,199 @@ details[open] > .sub-summary::before { transform: rotate(90deg); }
   direction: rtl;
 }
 .browser-error { color: #b02500; }
+
+/* ══════════════════════════════════════════════════════════════════
+   COSMETIC IMPROVEMENTS
+══════════════════════════════════════════════════════════════════ */
+
+/* ── Chat column centering ───────────────────────────────────── */
+#chat-column {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+}
+#chat-column > * {
+  width: 100%;
+  max-width: 860px;
+}
+/* Let browser panel use full width */
+#chat-column > .browser-wrapper {
+  max-width: 100%;
+}
+
+/* ── Input bar: start centered, drop to bottom ──────────────── */
+#input-bar {
+  transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+body.show-welcome #input-bar {
+  transform: translateY(-22vh);
+}
+
+/* ── Stages card: collapsed by default ──────────────────────── */
+.ai-stages-card.collapsed .stage-card { display: none; }
+.ai-stages-header {
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.ai-stages-toggle-arrow {
+  font-size: 0.55rem;
+  color: #adadab;
+  transition: transform 0.15s;
+  flex-shrink: 0;
+}
+.ai-stages-card:not(.collapsed) .ai-stages-toggle-arrow {
+  transform: rotate(90deg);
+}
+
+/* ── Status text: clickable when stages exist ───────────────── */
+.msg-status.clickable { cursor: pointer; text-decoration: underline dotted #adadab; }
+.msg-status.clickable:hover { color: #266829; }
+
+/* ── Spinner for buttons ────────────────────────────────────── */
+.btn-spinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: btn-spin 0.7s linear infinite;
+  vertical-align: middle;
+  margin-left: 5px;
+}
+@keyframes btn-spin { to { transform: rotate(360deg); } }
+
+/* ── Summary panel — sticky + flush + opaque + scrollable ───── */
+.summary-panel {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: #fff;
+  box-shadow: 0 3px 12px rgba(0,0,0,0.10);
+  /* Flush with transcript col edges (compensate 16px side padding) */
+  margin-left: -16px;
+  margin-right: -16px;
+  margin-top: 0;
+  border-top: none;
+  border-left: none;
+  border-right: none;
+  border-radius: 0;
+  border-bottom: 1px solid #e2e3df;
+}
+/* Arrow indicator */
+.summary-toggle-arrow {
+  font-size: 0.6rem;
+  flex-shrink: 0;
+  transition: transform 0.2s;
+  margin-inline-end: 4px;
+}
+details.summary-panel:not([open]) .summary-toggle-arrow {
+  transform: rotate(-90deg);
+}
+/* Bullets can contain inline markdown — make them prose */
+.summary-bullets li * { font-size: inherit; }
+
+/* ── Font-size bump (~+1 step everywhere) ────────────────────── */
+body { font-size: 16px; }
+.prose-content { font-size: 1rem; }
+.msg-user-bubble { font-size: 1rem; }
+.option-label { font-size: 0.93rem; }
+.option-desc  { font-size: 0.8rem; }
+.chunk-text { font-size: 0.85rem; }
+.chunk-speaker { font-size: 0.85rem; }
+.summary-bullets li { font-size: 0.85rem; }
+.summary-heading { font-size: 0.88rem; }
+.sidebar-meeting-title { font-size: 0.82rem; }
+.browser-chat-bar textarea { font-size: 0.9rem; }
+.browser-chat-submit { font-size: 0.9rem; }
+
+/* ── Settings panel ─────────────────────────────────────────── */
+#settings-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.35);
+  z-index: 200;
+  align-items: center;
+  justify-content: center;
+}
+#settings-overlay.open { display: flex; }
+
+#settings-panel {
+  background: #fff;
+  border-radius: 18px;
+  padding: 28px 32px;
+  min-width: 320px;
+  max-width: 420px;
+  width: 90vw;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+  direction: rtl;
+}
+#settings-panel h2 {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #2e2f2d;
+  margin-bottom: 20px;
+}
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-bottom: 1px solid #f0efec;
+}
+.settings-row:last-of-type { border-bottom: none; }
+.settings-label {
+  font-size: 0.9rem;
+  color: #2e2f2d;
+}
+.settings-desc {
+  font-size: 0.75rem;
+  color: #8a8a87;
+  margin-top: 2px;
+}
+/* Toggle switch */
+.toggle-switch {
+  position: relative;
+  width: 42px;
+  height: 24px;
+  flex-shrink: 0;
+}
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-track {
+  position: absolute;
+  inset: 0;
+  background: #ddddda;
+  border-radius: 24px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.toggle-track::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  right: 3px;  /* RTL: starts on right */
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  transition: right 0.2s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+.toggle-switch input:checked + .toggle-track { background: #266829; }
+.toggle-switch input:checked + .toggle-track::after { right: calc(100% - 21px); }
+#settings-close {
+  margin-top: 20px;
+  width: 100%;
+  padding: 10px;
+  background: #f7f6f3;
+  border: 1px solid #e2e3df;
+  border-radius: 10px;
+  font-size: 0.88rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+#settings-close:hover { background: #e8e8e5; }

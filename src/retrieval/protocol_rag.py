@@ -189,18 +189,28 @@ def query_retrieve(
 
     context = "\n---\n".join(parts)
 
-    # Build meeting_id → summary_path from L1 for summary tool calls
+    # Build meeting_id → summary_path and basic meta from L1
+    # L1 metadata always has committee+date even for meetings with no pass-1 chunks selected.
     meeting_paths: dict[str, str] = {}
+    l1_meeting_meta: dict[str, dict] = {}
     for meta in l1_results["metadatas"][0]:
         mid = meta.get("meeting_id")
-        sp  = meta.get("summary_path")
-        if mid and sp and mid not in meeting_paths:
+        if not mid:
+            continue
+        sp = meta.get("summary_path")
+        if sp and mid not in meeting_paths:
             meeting_paths[mid] = sp
+        if mid not in l1_meeting_meta:
+            l1_meeting_meta[mid] = {
+                "committee": meta.get("committee", ""),
+                "date":      meta.get("date", ""),
+            }
 
     debug: dict[str, Any] = {
-        "meetings":      meeting_ids,
-        "selected_pass1": pass1_candidates,
-        "context_chars": used,
-        "meeting_paths": meeting_paths,
+        "meetings":         meeting_ids,
+        "selected_pass1":   pass1_candidates,
+        "context_chars":    used,
+        "meeting_paths":    meeting_paths,
+        "l1_meeting_meta":  l1_meeting_meta,
     }
     return context, debug

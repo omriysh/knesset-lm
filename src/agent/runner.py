@@ -516,6 +516,7 @@ class MachineRunner:
             ctx.set("rag_context", context_str)
 
             meeting_ids = debug.get("meetings", [])
+            l1_meta     = debug.get("l1_meeting_meta", {})
             meta_by_mid: dict[str, dict] = {}
             for item in debug.get("selected_pass1", []):
                 mid = item["meta"].get("meeting_id", "")
@@ -524,7 +525,8 @@ class MachineRunner:
 
             meetings_out = []
             for rank, mid in enumerate(meeting_ids):
-                meta  = meta_by_mid.get(mid, {})
+                # Prefer pass-1 meta (richer), fall back to L1 meta (always present)
+                meta  = meta_by_mid.get(mid) or l1_meta.get(mid) or {}
                 date  = meta.get("date", "")
                 comm  = meta.get("committee", "")
                 title = f"{comm} — {date}" if comm and date else mid

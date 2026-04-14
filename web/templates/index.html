@@ -82,7 +82,7 @@
   </script>
   <link rel="stylesheet" href="/static/style.css">
 </head>
-<body class="bg-surface overflow-hidden h-screen flex flex-col">
+<body class="bg-surface overflow-hidden h-screen flex flex-col show-welcome">
 
   <!-- Fixed header -->
   <header class="flex-shrink-0 border-b border-surface-variant/20">
@@ -92,7 +92,7 @@
         <div class="text-xs text-on-surface-variant mt-0.5 opacity-70" style="font-family:'Assistant',sans-serif">קונסיירז' דיגיטלי</div>
       </div>
       <div class="flex items-center gap-3">
-        <button class="p-2 text-on-surface-variant hover:bg-surface-container rounded-full transition-colors" title="הגדרות">
+        <button class="p-2 text-on-surface-variant hover:bg-surface-container rounded-full transition-colors" title="הגדרות" onclick="openSettings()">
           <span class="material-symbols-outlined">settings</span>
         </button>
         <button class="p-2 text-on-surface-variant hover:bg-surface-container rounded-full transition-colors" title="עזרה">
@@ -131,12 +131,31 @@
         id="submit-btn"
         class="flex-shrink-0 w-11 h-11 bg-primary text-on-primary rounded-xl flex items-center justify-center hover:bg-primary-dim transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
         title="שלח (Ctrl+Enter)"
+        style="transform: rotate(180deg);"
       >
         <span class="material-symbols-outlined text-xl" style="font-variation-settings:'FILL' 1">send</span>
       </button>
     </div>
     <div class="max-w-5xl mx-auto mt-1.5 px-1">
       <span class="text-xs text-on-surface-variant/50">Ctrl+Enter לשליחה</span>
+    </div>
+  </div>
+
+  <!-- Settings overlay -->
+  <div id="settings-overlay" onclick="if(event.target===this)closeSettings()">
+    <div id="settings-panel">
+      <h2>הגדרות</h2>
+      <div class="settings-row">
+        <div>
+          <div class="settings-label">תמיד הצג שלבי עיבוד</div>
+          <div class="settings-desc">הצג את קופסת שלבי העיבוד אוטומטית (ברירת מחדל: כבוי)</div>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="toggle-stages-always" onchange="onStagesAlwaysToggle(this)">
+          <span class="toggle-track"></span>
+        </label>
+      </div>
+      <button id="settings-close" onclick="closeSettings()">סגור</button>
     </div>
   </div>
 

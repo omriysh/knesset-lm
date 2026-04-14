@@ -18,6 +18,21 @@ const submitBtn   = document.getElementById('submit-btn');
 
 marked.use({ breaks: true, gfm: true });
 
+/* ── Settings ───────────────────────────────────────────────── */
+function _stagesAlways() {
+  return localStorage.getItem('showStagesAlways') === 'true';
+}
+function openSettings() {
+  document.getElementById('settings-overlay').classList.add('open');
+  document.getElementById('toggle-stages-always').checked = _stagesAlways();
+}
+function closeSettings() {
+  document.getElementById('settings-overlay').classList.remove('open');
+}
+function onStagesAlwaysToggle(el) {
+  localStorage.setItem('showStagesAlways', el.checked ? 'true' : 'false');
+}
+
 /* ── State ─────────────────────────────────────────────────────── */
 let running       = false;
 let sessionId     = null;   // current or last session id
@@ -52,15 +67,17 @@ async function startQuery() {
   queryInput.value = '';
   queryInput.style.height = 'auto';
 
-  // Hide welcome state on first query
+  // Hide welcome state on first query; drop input bar to bottom
   if (welcomeEl) welcomeEl.style.display = 'none';
+  document.body.classList.remove('show-welcome');
 
   // Render user bubble
   appendUserBubble(question);
 
-  // Placeholder elements for this run
-  const stagesEl   = appendStagesCard();    // AI stages gradient card
-  const statusEl   = appendStatus('');      // status line
+  // Status above stages; stages collapsed until clicked
+  const statusEl   = appendStatus('');      // appears first (above)
+  const stagesEl   = appendStagesCard();    // appears below, collapsed
+  _wireStatusToggle(statusEl, stagesEl);
   let   agentEl    = null;                  // agent response card (created on first token)
   let   rawAnswer  = '';
   let   curEvent   = '';
@@ -158,6 +175,11 @@ function handleEvent(ev, data, refs) {
 
     case 'done': {
       finaliseLiveCard(refs.stagesEl);
+      // Reveal stages wrap (collapsed) even if user never clicked — allows post-hoc inspection
+      if (!_stagesAlways()) {
+        const wrap = refs.stagesEl?.parentElement;
+        if (wrap && wrap.style.display === 'none') wrap.style.display = 'block';
+      }
       // "Explore sources" button — opens protocol browser post-completion
       const exploreWrap = document.createElement('div');
       exploreWrap.className = 'explore-sources-row';
@@ -166,7 +188,7 @@ function handleEvent(ev, data, refs) {
       exploreBtn.textContent = 'חקור מקורות';
       exploreBtn.addEventListener('click', async () => {
         exploreBtn.disabled = true;
-        exploreBtn.textContent = 'טוען…';
+        exploreBtn.innerHTML = '<span class="btn-spinner"></span> טוען…';
         try {
           const q   = encodeURIComponent(_lastQuestion);
           const res = await fetch(`/api/research/${sessionId}/rag?query=${q}&top_k=20`);
@@ -176,11 +198,11 @@ function handleEvent(ev, data, refs) {
             originalQuestion: _lastQuestion,
             postCompletion: true,
           });
-          exploreBtn.textContent = 'חקור מקורות';
+          exploreBtn.innerHTML = 'חקור מקורות';
           exploreBtn.disabled = false;
         } catch {
           exploreBtn.disabled = false;
-          exploreBtn.textContent = 'שגיאה — נסה שוב';
+          exploreBtn.innerHTML = 'שגיאה — נסה שוב';
         }
       });
       exploreWrap.appendChild(exploreBtn);
@@ -217,8 +239,9 @@ async function submitResponse(outputVar, value) {
   running = true;
   submitBtn.disabled = true;
 
-  const stagesEl  = appendStagesCard();
   const statusEl  = appendStatus('ממשיך...');
+  const stagesEl  = appendStagesCard();
+  _wireStatusToggle(statusEl, stagesEl);
   let   agentEl   = null;
   let   rawAnswer = '';
   let   curEvent  = '';
@@ -287,15 +310,36 @@ function appendUserBubble(text) {
 }
 
 function appendStagesCard() {
+  const alwaysOpen = _stagesAlways();
   const wrap = document.createElement('div');
   wrap.className = 'msg-agent';
+  if (!alwaysOpen) wrap.style.display = 'none';
   wrap.innerHTML =
     `<div class="ai-stages-card">` +
-    `<div class="ai-stages-header">שלבי עיבוד</div>` +
+    `<div class="ai-stages-header">` +
+      `<span>שלבי עיבוד</span>` +
+      `<span class="ai-stages-toggle-arrow">▶</span>` +
+    `</div>` +
     `</div>`;
   chatColumn.appendChild(wrap);
-  scrollToBottom();
-  return wrap.querySelector('.ai-stages-card');
+  // Don't scrollToBottom — hidden card shouldn't affect scroll
+  const card = wrap.querySelector('.ai-stages-card');
+  card.querySelector('.ai-stages-header').addEventListener('click', () => {
+    card.classList.toggle('collapsed');
+  });
+  return card;
+}
+
+function _wireStatusToggle(statusEl, stagesEl) {
+  if (_stagesAlways()) return;
+  const wrap = stagesEl.parentElement;
+  statusEl.classList.add('clickable');
+  statusEl.title = 'לחץ לצפייה בשלבי עיבוד';
+  statusEl.addEventListener('click', () => {
+    const hidden = wrap.style.display === 'none';
+    wrap.style.display = hidden ? 'block' : 'none';
+    if (hidden) scrollToBottom();
+  });
 }
 
 function appendStatus(msg) {
