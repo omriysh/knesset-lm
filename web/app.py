@@ -34,6 +34,7 @@ import sys
 import threading
 import traceback
 import uuid
+import ftfy
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -43,7 +44,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import chromadb
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -206,6 +207,12 @@ class ResearchRespondRequest(BaseModel):
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
+
+
+@app.get("/api/help", response_class=PlainTextResponse)
+async def help_content():
+    path = Path(__file__).parent / "templates" / "user-help.md"
+    return path.read_text(encoding="utf-8")
 
 
 @app.get("/api/health")
@@ -976,7 +983,7 @@ async def research_meeting_transcript(session_id: str, meeting_id: str, request:
             chunks.append({
                 "chunk_id":    str(idx),
                 "speaker":     speaker,
-                "text":        text,
+                "text":        ftfy.fix_text(text),
                 "topic_index": None,
                 "sim_score":   None,
             })
@@ -1018,6 +1025,39 @@ async def research_meeting_transcript(session_id: str, meeting_id: str, request:
         "committee":  committee,
         "chunks":     chunks,
     }
+
+
+@app.get("/api/research/{session_id}/meeting/{meeting_id}/participants")
+async def research_meeting_participants(session_id: str, meeting_id: str, request: Request):
+    """Return the list of speakers / attendees for a meeting."""
+    from web.session import load_session
+
+    sessions_dir = request.app.state.sessions_dir
+    session = load_session(session_id, sessions_dir)
+    if session is None:
+        return JSONResponse({"error": "Session not found"}, status_code=404)
+
+    workspace = session.workspace_data or {}
+    meeting_paths: dict[str, str] = workspace.get("meeting_paths", {})
+    path_str = meeting_paths.get(meeting_id)
+    if not path_str:
+        return JSONResponse({"participants": []})
+
+    transcript_path = Path(
+        path_str
+        .replace("summaries", "raw_transcriptions", 1)
+        .replace(".txt", ".json")
+    )
+    if not transcript_path.exists():
+        return JSONResponse({"participants": []})
+
+    import json as _json
+    meeting = _json.loads(transcript_path.read_text(encoding="utf-8"))
+
+    from utils.meeting import extract_attendance
+    participants = extract_attendance(meeting)
+
+    return {"meeting_id": meeting_id, "participants": participants}
 
 
 @app.post("/api/research/{session_id}/workspace/select")

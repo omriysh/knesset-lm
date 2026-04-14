@@ -9,11 +9,12 @@
  *
  * Renders inline in the chat column.  Two-column layout (RTL):
  *   left: transcript + AI summary + panel chat
- *   right (sidebar): meeting list, load-more button
+ *   right (sidebar): meeting list, sort/filter controls
  *
  * API surface used:
  *   GET  /api/research/{id}/meeting/{mid}/summary
  *   GET  /api/research/{id}/meeting/{mid}/transcript
+ *   GET  /api/research/{id}/meeting/{mid}/participants
  *   GET  /api/research/{id}/rag?query=...&top_k=40      (load more)
  *   POST /api/research/{id}/workspace/select             (pin chunk)
  *   POST /api/research/{id}/workspace/ask               (panel chat + summarize)
@@ -35,6 +36,14 @@ let _summary   = null;   // last fetched summary {topics:[]}
 let _activeTopicFilter = null;  // null = show all; number = show that topic index
 let _origQ     = '';     // original question (for summarize button)
 
+/* ── Sidebar sort / filter / group state ────────────────────────── */
+let _sortMode        = 'relevance'; // 'relevance' | 'date_asc' | 'date_desc'
+let _groupByComm     = false;
+let _collapsedGroups = new Set();   // committee names that are collapsed
+let _filterPart      = '';          // participant name filter string
+let _partCache       = {};          // meeting_id → string[] (lowercase speaker names)
+let _partLoadedCount = 0;           // how many participant fetches completed
+
 /* ── Main entry point ───────────────────────────────────────────── */
 function openProtocolBrowser(sessionId, meetingId, meetings, opts = {}) {
   _sid      = sessionId;
@@ -50,8 +59,14 @@ function openProtocolBrowser(sessionId, meetingId, meetings, opts = {}) {
     }
     return { ...m, title };
   });
-  _activeId = meetingId;
-  _origQ    = opts.originalQuestion || '';
+  _activeId        = meetingId;
+  _origQ           = opts.originalQuestion || '';
+  _sortMode        = 'relevance';
+  _groupByComm     = false;
+  _collapsedGroups = new Set();
+  _filterPart      = '';
+  _partCache       = {};
+  _partLoadedCount = 0;
 
   // Replace any existing panel
   if (_panel) _panel.remove();
@@ -68,6 +83,7 @@ function openProtocolBrowser(sessionId, meetingId, meetings, opts = {}) {
 
   _renderSidebar();
   _loadMeeting(meetingId);
+  _loadAllParticipants();
 
   // Panel chat submit
   _panel.querySelector('#browser-chat-submit').addEventListener('click', _browserAsk);
@@ -91,6 +107,8 @@ function _shellHtml(postCompletion) {
   return `
 <div class="browser-panel">
   <div class="browser-header">
+    <button class="sidebar-collapse-btn" id="sidebar-collapse-btn"
+            onclick="browserToggleSidebar()" title="הצג/הסתר סרגל">▶ הסתר ישיבות</button>
     <span class="browser-breadcrumb" id="browser-question-label"></span>
     <div class="browser-header-actions">
       ${summarizeBtn}
@@ -101,7 +119,29 @@ function _shellHtml(postCompletion) {
     <div class="browser-transcript-col" id="browser-transcript-col">
       <div class="browser-loading">טוען…</div>
     </div>
-    <div class="browser-sidebar" id="browser-sidebar"></div>
+    <div class="browser-sidebar" id="browser-sidebar">
+      <div class="sidebar-inner">
+        <div class="sidebar-controls">
+          <div class="sidebar-sort-row">
+            <label class="sort-label">מיין:</label>
+            <select id="sort-select" class="sort-select" onchange="browserSetSort(this.value)">
+              <option value="relevance">רלוונטיות</option>
+              <option value="date_desc">תאריך ↓</option>
+              <option value="date_asc">תאריך ↑</option>
+            </select>
+            <button id="sort-grp" class="sort-btn" onclick="browserToggleGroup()">קבץ לפי ועדה</button>
+          </div>
+          <div class="sidebar-filter-row">
+            <input id="sidebar-part-input" class="sidebar-part-input"
+                   placeholder="טוען משתתפים…"
+                   oninput="browserFilterParticipant(this.value)"
+                   disabled />
+          </div>
+        </div>
+        <div class="sidebar-list" id="sidebar-list"></div>
+        <button class="sidebar-load-more" onclick="browserLoadMore()">טען עוד ישיבות</button>
+      </div>
+    </div>
   </div>
   <div class="browser-chat-bar">
     <textarea id="browser-chat-input" placeholder="שאל שאלה על הישיבה הזו… (Ctrl+Enter)" rows="1"></textarea>
@@ -116,25 +156,164 @@ function closeProtocolBrowser() {
 
 /* ── Sidebar ─────────────────────────────────────────────────────── */
 function _renderSidebar() {
-  const sb = _panel.querySelector('#browser-sidebar');
-  if (!sb) return;
-  let html = '<div class="sidebar-list">';
-  for (const m of _meetings) {
-    const active  = m.meeting_id === _activeId;
-    const pct     = Math.round(m.score * 100);
-    const badgeCls = pct >= 85 ? 'rel-green' : pct >= 70 ? 'rel-blue' : 'rel-grey';
-    html += `<div class="sidebar-meeting ${active ? 'active' : ''}"
-                  onclick="browserSwitchMeeting('${_esc(m.meeting_id)}')">
-      <div class="sidebar-meeting-title">${_esc((m.date || '').replace(/_/g, ' ') || m.meeting_id)}</div>
-      <div class="sidebar-meeting-meta">
-        <span class="sidebar-committee">${_esc((m.committee || '').replace(/_/g, ' '))}</span>
-        <span class="rel-badge ${badgeCls}">${pct}%</span>
-      </div>
-    </div>`;
+  const list = _panel.querySelector('#sidebar-list');
+  if (!list) return;
+
+  // Apply participant filter
+  let meetings = [..._meetings];
+  const q = _filterPart.toLowerCase().trim();
+  if (q) {
+    meetings = meetings.filter(m => {
+      const parts = _partCache[m.meeting_id];
+      if (parts === undefined) return true; // not yet loaded — keep visible
+      return parts.some(p => p.includes(q));
+    });
   }
-  html += '</div>';
-  html += `<button class="sidebar-load-more" onclick="browserLoadMore()">טען עוד ישיבות</button>`;
-  sb.innerHTML = html;
+
+  // Apply sort
+  if (_sortMode === 'date_asc') {
+    meetings.sort((a, b) => _parseDateMs(a.date) - _parseDateMs(b.date));
+  } else if (_sortMode === 'date_desc') {
+    meetings.sort((a, b) => _parseDateMs(b.date) - _parseDateMs(a.date));
+  }
+  // 'relevance': keep original RAG order
+
+  list.innerHTML = _groupByComm ? _groupedHtml(meetings) : _flatHtml(meetings);
+
+  // Sync sort controls
+  const sel = _panel.querySelector('#sort-select');
+  if (sel) sel.value = _sortMode;
+  const grpBtn = _panel.querySelector('#sort-grp');
+  if (grpBtn) grpBtn.classList.toggle('sort-active', _groupByComm);
+}
+
+/* ── Flat meeting list HTML ─────────────────────────────────────── */
+function _flatHtml(meetings) {
+  if (!meetings.length) return '<div class="sidebar-empty">אין תוצאות</div>';
+  return meetings.map(m => _meetingCardHtml(m, false)).join('');
+}
+
+/* ── Grouped (by committee) HTML ────────────────────────────────── */
+function _groupedHtml(meetings) {
+  if (!meetings.length) return '<div class="sidebar-empty">אין תוצאות</div>';
+
+  // Build groups
+  const groups = {};
+  for (const m of meetings) {
+    const key = (m.committee || '').replace(/_/g, ' ').trim() || 'אחר';
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(m);
+  }
+
+  // Sort groups: by best score (relevance) or alphabetically (date sort)
+  const comms = Object.keys(groups).sort((a, b) => {
+    if (_sortMode === 'relevance') {
+      const best = g => Math.max(...groups[g].map(m => m.score || 0));
+      return best(b) - best(a);
+    }
+    return a.localeCompare(b, 'he');
+  });
+
+  return comms.map(comm => {
+    const collapsed = _collapsedGroups.has(comm);
+    const cards     = collapsed ? '' : groups[comm].map(m => _meetingCardHtml(m, true)).join('');
+    return `<div class="sidebar-group">
+      <div class="sidebar-group-header" onclick="browserToggleCommGroup('${_esc(comm)}')">
+        <span class="group-arrow">${collapsed ? '▶' : '▼'}</span>
+        <span class="group-name">${_esc(comm)}</span>
+        <span class="group-count">${groups[comm].length}</span>
+      </div>
+      ${cards}
+    </div>`;
+  }).join('');
+}
+
+/* ── Single meeting card HTML ───────────────────────────────────── */
+function _meetingCardHtml(m, inGroup) {
+  const active    = m.meeting_id === _activeId;
+  const pct       = Math.round((m.score || 0) * 100);
+  const badgeCls  = pct >= 85 ? 'rel-green' : pct >= 70 ? 'rel-blue' : 'rel-grey';
+  const dateStr   = (m.date || m.meeting_id).replace(/_/g, '/');
+  const commHtml  = inGroup ? '' :
+    `<span class="sidebar-committee">${_esc((m.committee || '').replace(/_/g, ' '))}</span>`;
+  return `<div class="sidebar-meeting ${active ? 'active' : ''} ${inGroup ? 'in-group' : ''}"
+               onclick="browserSwitchMeeting('${_esc(m.meeting_id)}')">
+    <div class="sidebar-meeting-title">${_esc(dateStr)}</div>
+    <div class="sidebar-meeting-meta">
+      ${commHtml}
+      <span class="rel-badge ${badgeCls}">${pct}%</span>
+    </div>
+  </div>`;
+}
+
+/* ── Date → ms for sorting (DD_MM_YYYY or DD/MM/YYYY) ──────────── */
+function _parseDateMs(dateStr) {
+  if (!dateStr) return 0;
+  const p = String(dateStr).replace(/_/g, '/').split('/');
+  if (p.length < 3) return 0;
+  return new Date(+p[2], +p[1] - 1, +p[0]).getTime() || 0;
+}
+
+/* ── Sort / group / filter handlers ────────────────────────────── */
+function browserSetSort(mode) {
+  _sortMode = mode;
+  _renderSidebar();
+}
+
+function browserToggleGroup() {
+  _groupByComm = !_groupByComm;
+  _collapsedGroups.clear();
+  _renderSidebar();
+}
+
+function browserToggleCommGroup(comm) {
+  if (_collapsedGroups.has(comm)) _collapsedGroups.delete(comm);
+  else _collapsedGroups.add(comm);
+  _renderSidebar();
+}
+
+function browserFilterParticipant(value) {
+  _filterPart = value;
+  _renderSidebar();
+}
+
+function browserToggleSidebar() {
+  const sb  = _panel?.querySelector('#browser-sidebar');
+  const btn = _panel?.querySelector('#sidebar-collapse-btn');
+  if (!sb) return;
+  const collapsed = sb.classList.toggle('sidebar-collapsed');
+  if (btn) btn.textContent = collapsed ? '◀ הצג ישיבות' : '▶ הסתר ישיבות';
+}
+
+/* ── Participant loading ─────────────────────────────────────────── */
+async function _loadAllParticipants() {
+  const toLoad = [..._meetings];
+  _partLoadedCount = 0;
+  await Promise.all(toLoad.map(m => _loadParticipantsFor(m.meeting_id, toLoad.length)));
+}
+
+async function _loadParticipantsFor(meetingId, total) {
+  if (_partCache[meetingId] !== undefined) { // already cached
+    _onParticipantLoaded(total);
+    return;
+  }
+  try {
+    const res  = await fetch(`/api/research/${_sid}/meeting/${encodeURIComponent(meetingId)}/participants`);
+    const data = await res.json();
+    _partCache[meetingId] = (data.participants || []).map(p => p.toLowerCase());
+  } catch {
+    _partCache[meetingId] = [];
+  }
+  _onParticipantLoaded(total);
+}
+
+function _onParticipantLoaded(total) {
+  _partLoadedCount++;
+  if (_partLoadedCount >= total) {
+    const inp = _panel?.querySelector('#sidebar-part-input');
+    if (inp) { inp.disabled = false; inp.placeholder = 'סנן לפי משתתף…'; }
+    if (_filterPart) _renderSidebar(); // re-render now all data is available
+  }
 }
 
 /* ── Load meeting (summary + transcript) ─────────────────────────── */
@@ -285,10 +464,17 @@ async function browserLoadMore() {
       const newOnes = data.meetings.filter(m => !existingIds.has(m.meeting_id));
       _meetings = [..._meetings, ...newOnes];   // _meetingLabel normalises at render time
       _renderSidebar();
+      if (newOnes.length) _loadNewParticipants(newOnes);
     }
   } catch (err) {
     if (btn) btn.textContent = 'שגיאה — נסה שוב';
   }
+}
+
+/* called after browserLoadMore adds new meetings to _meetings */
+async function _loadNewParticipants(newMeetings) {
+  await Promise.all(newMeetings.map(m => _loadParticipantsFor(m.meeting_id, newMeetings.length)));
+  if (_filterPart) _renderSidebar();
 }
 
 /* ── Pin chunk ───────────────────────────────────────────────────── */

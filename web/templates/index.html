@@ -89,13 +89,13 @@
     <div class="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
       <div class="flex flex-col">
         <div class="text-2xl font-bold text-[#2E7D32]" style="font-family:'Be Vietnam Pro',sans-serif">כנס להם</div>
-        <div class="text-xs text-on-surface-variant mt-0.5 opacity-70" style="font-family:'Assistant',sans-serif">קונסיירז' דיגיטלי</div>
+        <div class="text-xs text-on-surface-variant mt-0.5 opacity-70" style="font-family:'Assistant',sans-serif">כלי מחקר על פעולות הכנסת</div>
       </div>
       <div class="flex items-center gap-3">
         <button class="p-2 text-on-surface-variant hover:bg-surface-container rounded-full transition-colors" title="הגדרות" onclick="openSettings()">
           <span class="material-symbols-outlined">settings</span>
         </button>
-        <button class="p-2 text-on-surface-variant hover:bg-surface-container rounded-full transition-colors" title="עזרה">
+        <button class="p-2 text-on-surface-variant hover:bg-surface-container rounded-full transition-colors" title="עזרה" onclick="openHelp()">
           <span class="material-symbols-outlined">help</span>
         </button>
       </div>
@@ -138,6 +138,14 @@
     </div>
     <div class="max-w-5xl mx-auto mt-1.5 px-1">
       <span class="text-xs text-on-surface-variant/50">Ctrl+Enter לשליחה</span>
+    </div>
+  </div>
+
+  <!-- Help overlay -->
+  <div id="help-overlay" onclick="if(event.target===this)closeHelp()">
+    <div id="help-panel">
+      <div id="help-content" class="prose-content">טוען…</div>
+      <button id="help-close" onclick="closeHelp()">סגור</button>
     </div>
   </div>
 

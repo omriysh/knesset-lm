@@ -29,6 +29,22 @@ function openSettings() {
 function closeSettings() {
   document.getElementById('settings-overlay').classList.remove('open');
 }
+
+let _helpLoaded = false;
+async function openHelp() {
+  document.getElementById('help-overlay').classList.add('open');
+  if (_helpLoaded) return;
+  try {
+    const md = await fetch('/api/help').then(r => r.text());
+    document.getElementById('help-content').innerHTML = marked.parse(md);
+    _helpLoaded = true;
+  } catch {
+    document.getElementById('help-content').textContent = 'שגיאה בטעינת העזרה.';
+  }
+}
+function closeHelp() {
+  document.getElementById('help-overlay').classList.remove('open');
+}
 function onStagesAlwaysToggle(el) {
   localStorage.setItem('showStagesAlways', el.checked ? 'true' : 'false');
 }
@@ -185,7 +201,7 @@ function handleEvent(ev, data, refs) {
       exploreWrap.className = 'explore-sources-row';
       const exploreBtn = document.createElement('button');
       exploreBtn.className = 'explore-sources-btn';
-      exploreBtn.textContent = 'חקור מקורות';
+      exploreBtn.textContent = 'חקור בפרוטוקולים';
       exploreBtn.addEventListener('click', async () => {
         exploreBtn.disabled = true;
         exploreBtn.innerHTML = '<span class="btn-spinner"></span> טוען…';
@@ -198,7 +214,7 @@ function handleEvent(ev, data, refs) {
             originalQuestion: _lastQuestion,
             postCompletion: true,
           });
-          exploreBtn.innerHTML = 'חקור מקורות';
+          exploreBtn.innerHTML = 'חקור בפרוטוקולים';
           exploreBtn.disabled = false;
         } catch {
           exploreBtn.disabled = false;
