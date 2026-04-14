@@ -981,15 +981,33 @@ async def research_meeting_transcript(session_id: str, meeting_id: str, request:
                 "sim_score":   None,
             })
     else:
+        from utils.meeting import parse_full_text_speeches
         full_text = meeting.get("full_text", "")
-        chunk_size = 500
-        for idx, start in enumerate(range(0, len(full_text), chunk_size)):
-            piece = full_text[start:start + chunk_size].strip()
-            if piece:
+        parsed = parse_full_text_speeches(full_text)
+
+        if parsed:
+            # Speaker-turn parse succeeded — use structured speeches
+            for idx, speech in enumerate(parsed):
+                speaker = speech.get("speaker", "").strip()
+                text    = speech.get("text_he", "").strip()
+                if text:
+                    chunks.append({
+                        "chunk_id":    str(idx),
+                        "speaker":     speaker,
+                        "text":        text,
+                        "topic_index": None,
+                        "sim_score":   None,
+                    })
+        else:
+            # Fallback: paragraph-based split (no speaker info available)
+            paragraphs = [p.strip() for p in full_text.split("\n\n") if p.strip()]
+            if not paragraphs:
+                paragraphs = [p.strip() for p in full_text.split("\n") if p.strip()]
+            for idx, para in enumerate(paragraphs):
                 chunks.append({
                     "chunk_id":    str(idx),
                     "speaker":     "",
-                    "text":        piece,
+                    "text":        para,
                     "topic_index": None,
                     "sim_score":   None,
                 })

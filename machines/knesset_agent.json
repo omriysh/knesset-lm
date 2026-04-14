@@ -18,7 +18,7 @@
       "condition": "agent == 'שניהם'",
       "id": "e_9f9e5e11",
       "label": "החלטה",
-      "source": "user_input_confirm_agent",
+      "source": "llm_call_bac8de18",
       "target": "llm_call_0b6c40bd",
       "type": "transition"
     },
@@ -26,7 +26,7 @@
       "condition": "agent == 'פרוטוקולים'",
       "id": "e_confirm_mode",
       "label": "בחר מצב",
-      "source": "user_input_confirm_agent",
+      "source": "llm_call_bac8de18",
       "target": "user_input_mode_select",
       "type": "transition"
     },
@@ -54,14 +54,6 @@
       "type": "transition"
     },
     {
-      "condition": "agent != 'לא רלוונטי'",
-      "id": "e_router_confirm",
-      "label": "אשר",
-      "source": "llm_call_bac8de18",
-      "target": "user_input_confirm_agent",
-      "type": "transition"
-    },
-    {
       "id": "e_71fdb2d9",
       "label": "ניתוח",
       "source": "llm_call_0b6c40bd",
@@ -79,7 +71,7 @@
       "condition": "agent in ['עובדתי', 'שניהם']",
       "id": "e_4b31c4f3",
       "label": "החלטה",
-      "source": "user_input_confirm_agent",
+      "source": "llm_call_bac8de18",
       "target": "llm_call_07cae0ca",
       "type": "transition"
     },
@@ -87,7 +79,7 @@
       "condition": "agent == 'דובר'",
       "id": "e_router_speaker",
       "label": "החלטה",
-      "source": "user_input_confirm_agent",
+      "source": "llm_call_bac8de18",
       "target": "llm_call_speaker_prot",
       "type": "transition"
     },
@@ -265,59 +257,48 @@
     },
     {
       "data": {
-        "ui": "option_select",
-        "prompt_he": "כיצד תרצה להמשיך?",
-        "output_var": "research_mode",
-        "preselect_var": "",
         "multi_select": false,
         "options": [
-          {"value": "summarize", "label": "סכם עבורי", "description": "ניתוח אוטומטי של קטעים מומלצים מהפרוטוקולים"},
-          {"value": "deep_dive", "label": "צלול לפרוטוקולים", "description": "עיון עצמי, חיפוש חופשי ושאלות ממוקדות על הישיבות"}
-        ]
+          {
+            "description": "ניתוח אוטומטי של קטעים מומלצים מהפרוטוקולים",
+            "label": "סכם עבורי",
+            "value": "summarize"
+          },
+          {
+            "description": "עיון עצמי, חיפוש חופשי ושאלות ממוקדות על הישיבות",
+            "label": "צלול לפרוטוקולים",
+            "value": "deep_dive"
+          }
+        ],
+        "output_var": "research_mode",
+        "preselect_var": "",
+        "prompt_he": "כיצד תרצה להמשיך?",
+        "ui": "option_select"
       },
       "id": "user_input_mode_select",
       "imaginary": false,
       "label": "בחר מצב מחקר",
-      "position": {"x": 903, "y": 380},
+      "position": {
+        "x": 903,
+        "y": 380
+      },
       "terminal": false,
       "type": "user_input"
     },
     {
       "data": {
-        "ui": "deep_dive",
+        "output_var": "selected_meetings",
         "prompt_he": "צוללים לפרוטוקולים…",
-        "output_var": "selected_meetings"
+        "ui": "deep_dive"
       },
       "id": "user_input_deep_dive",
       "imaginary": false,
       "label": "צלול לפרוטוקולים",
-      "position": {"x": 720, "y": 380},
-      "terminal": true,
-      "type": "user_input"
-    },
-    {
-      "data": {
-        "ui": "option_select",
-        "prompt_he": "הסוכן המומלץ: {{agent}}. אשר או שנה את כיוון החיפוש:",
-        "output_var": "agent",
-        "preselect_var": "agent",
-        "multi_select": false,
-        "options": [
-          {"value": "פרוטוקולים", "label": "פרוטוקולים", "description": "חיפוש סמנטי בפרוטוקולי ועדות הכנסת"},
-          {"value": "עובדתי",     "label": "עובדתי",     "description": "מאגר רשמי — הרכב ועדות, חקיקה, פרטי ח\"כ"},
-          {"value": "דובר",       "label": "דובר",       "description": "דברי ח\"כ ספציפי בוועדה מסוימת"},
-          {"value": "שניהם",      "label": "שניהם",      "description": "שני הסוכנים — פרוטוקולים ועובדתי"},
-          {"value": "לא רלוונטי","label": "לא רלוונטי","description": "השאלה מחוץ לתחום הכנסת"}
-        ]
-      },
-      "id": "user_input_confirm_agent",
-      "imaginary": false,
-      "label": "אשר כיוון חיפוש",
       "position": {
-        "x": 903,
-        "y": 280
+        "x": 720,
+        "y": 380
       },
-      "terminal": false,
+      "terminal": true,
       "type": "user_input"
     },
     {
@@ -429,7 +410,7 @@
         },
         "rag": "",
         "stage": "reviewer",
-        "system_prompt": "אתה עוזר מומחה לניתוח פעולתה של הכנסת הישראלית.\nהמשתמש שאל שאלה, ועוזרים לפניך ניסו לענות עליה. תפקידך הוא לוודא האם הם ענו על השאלה באופן מספק, ולערוך את תשובתם להיות תמציתית וקולעת.\n\nערוך אותה ותן את גרסתך המשופרת. שמור על ציטוטים, תאריכים ושמות ועדות שמופיעים בתשובה המקורית, במידה ורלוונטיים לשאלה. אם מצוינים חברי כנסת או פגישות שאינם רלוונטיים, אל תתייחס אליהם בתשובתך. אל תמציא פרטים שאינם כתובים.",
+        "system_prompt": "אתה עוזר מומחה לניתוח פעולתה של הכנסת הישראלית.\nהמשתמש שאל שאלה, ועוזרים לפניך ניסו לענות עליה. תפקידך הוא לוודא האם הם ענו על השאלה באופן מספק, ולערוך את תשובתם להיות תמציתית וקולעת.\n\nערוך אותה ותן את גרסתך המשופרת. שמור על ציטוטים, תאריכים ושמות ועדות שמופיעים בתשובה המקורית, במידה ורלוונטיים לשאלה. אם מצוינים חברי כנסת או פגישות שאינם רלוונטיים, אל תתייחס אליהם בתשובתך. אל תמציא פרטים שאינם כתובים.\n\nאל תוסיף פרטים שלא נכללים בתשובות שענו לפניך.",
         "temperature": 0.7
       },
       "id": "llm_call_7b089e46",
