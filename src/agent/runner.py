@@ -310,6 +310,22 @@ class MachineRunner:
                 existing_paths = ctx.get("meeting_paths") or {}
                 ctx.set("meeting_paths", {**existing_paths, **debug.get("meeting_paths", {})})
                 ctx.set("rag_context", context_str)
+
+                # Build per-meeting RAG chunk index for the heatmap (pass-1 only).
+                _rag_by_mtg: dict = ctx.get("rag_chunks_by_meeting") or {}
+                for _item in debug.get("selected_pass1", []):
+                    _meta = _item["meta"]
+                    _mid  = _meta.get("meeting_id", "")
+                    if not _mid:
+                        continue
+                    _rag_by_mtg.setdefault(_mid, []).append({
+                        "start": _meta.get("start_speech_idx", 0),
+                        "end":   _meta.get("end_speech_idx",   0),
+                        "sim":   round(float(_item["p1_sim"]), 4),
+                        "tvec":  _item.get("topic_scores_vec", []),
+                    })
+                ctx.set("rag_chunks_by_meeting", _rag_by_mtg)
+
                 retrieval_info = {
                     "meetings":      debug.get("meetings", []),
                     "context_chars": debug.get("context_chars", 0),
@@ -514,6 +530,21 @@ class MachineRunner:
             existing_paths = ctx.get("meeting_paths") or {}
             ctx.set("meeting_paths", {**existing_paths, **debug.get("meeting_paths", {})})
             ctx.set("rag_context", context_str)
+
+            # Build per-meeting RAG chunk index for the heatmap (pass-1 only).
+            _rag_by_mtg: dict = ctx.get("rag_chunks_by_meeting") or {}
+            for _item in debug.get("selected_pass1", []):
+                _meta = _item["meta"]
+                _mid  = _meta.get("meeting_id", "")
+                if not _mid:
+                    continue
+                _rag_by_mtg.setdefault(_mid, []).append({
+                    "start": _meta.get("start_speech_idx", 0),
+                    "end":   _meta.get("end_speech_idx",   0),
+                    "sim":   round(float(_item["p1_sim"]), 4),
+                    "tvec":  _item.get("topic_scores_vec", []),
+                })
+            ctx.set("rag_chunks_by_meeting", _rag_by_mtg)
 
             meeting_ids = debug.get("meetings", [])
             l1_meta     = debug.get("l1_meeting_meta", {})

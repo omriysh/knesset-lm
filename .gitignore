@@ -6,3 +6,6 @@ __pycache__/
 
 # Session files
 sessions/
+
+# Query log
+web/query_log.jsonl

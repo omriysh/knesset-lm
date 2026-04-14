@@ -72,6 +72,9 @@ body {
   margin: 6px 0;
 }
 
+.prose-content ul { list-style: disc; }
+.prose-content ol { list-style: decimal; }
+
 .prose-content li {
   margin-bottom: 4px;
 }
@@ -694,13 +697,96 @@ details[open] > .sub-summary::before { transform: rotate(90deg); }
   min-height: 0;
 }
 
+/* ── Transcript wrap: heatmap strip + scrollable col ────────── */
+.browser-transcript-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* ── Heatmap strip (left edge, alongside scrollbar) ─────────── */
+/*
+ * Fixed-height, does NOT scroll.
+ * .hm-bands: flex column of proportional-height colored slices.
+ * .hm-viewport: semi-transparent overlay tracking scroll position.
+ */
+.heatmap-strip {
+  flex-shrink: 0;
+  width: 10px;
+  position: relative;
+  background: #f0f0ed;
+  border-left: 1px solid #e2e3df;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.hm-bands {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.hm-band {
+  flex-shrink: 0;
+  width: 100%;
+  min-height: 2px;
+  transition: background 0.22s ease;
+}
+.hm-band:hover { filter: brightness(0.72); }
+
+/* hm-band color is set inline via _heatColor() — continuous HSL gradient */
+
+/* loading wave — sweeping highlight that travels top→bottom */
+@keyframes hm-sweep {
+  0%   { top: -40%; }
+  100% { top: 140%; }
+}
+.heatmap-strip.loading::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0;
+  height: 35%;
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    rgba(255, 255, 255, 0.45) 50%,
+    transparent 100%
+  );
+  animation: hm-sweep 1.4s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* viewport indicator */
+.hm-viewport {
+  position: absolute;
+  left: 0; right: 0;
+  background: rgba(0, 0, 0, 0.16);
+  border-top: 1px solid rgba(0,0,0,0.26);
+  border-bottom: 1px solid rgba(0,0,0,0.26);
+  pointer-events: none;
+  border-radius: 1px;
+}
+
 /* ── Transcript column (left / flex-1) ──────────────────────── */
 .browser-transcript-col {
   flex: 1;
   overflow-y: auto;
+  direction: ltr;        /* pushes native scrollbar to right */
+  min-width: 0;
+  /* hide native scrollbar — viewport shown on heatmap strip */
+  scrollbar-width: none;
+}
+.browser-transcript-col::-webkit-scrollbar { display: none; }
+
+/* RTL content wrapper inside the ltr scroll container */
+.transcript-inner {
+  direction: rtl;
   padding: 16px;
   padding-top: 0;
-  min-width: 0;
 }
 
 /* ── Sidebar (right / fixed width, collapsible) ─────────────── */
@@ -1019,16 +1105,50 @@ details[open] > .sub-summary::before { transform: rotate(90deg); }
 }
 
 .summary-bullets {
+  list-style: none;
   margin: 0;
-  padding-right: 18px;
+  padding: 0;
   direction: rtl;
 }
-.summary-bullets li {
+
+/* Each bullet is a clickable button for heatmap reranking */
+.summary-bullet-btn {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 6px;
+  background: transparent;
+  border: 1.5px solid transparent;
+  border-radius: 5px;
+  cursor: pointer;
+  text-align: right;
   font-size: 0.8rem;
   color: #3e3f3d;
   line-height: 1.5;
-  margin-bottom: 3px;
+  transition: background 0.12s, border-color 0.12s;
+  direction: rtl;
 }
+.summary-bullet-btn:hover {
+  background: #f0f8f0;
+}
+.summary-bullet-btn.active {
+  background: #e8f5e9;
+  border-color: #a5d6a7;
+  color: #1b4620;
+  font-weight: 600;
+}
+
+.bullet-indicator {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #aaa;
+  flex-shrink: 0;
+  margin-top: 7px;
+  transition: background 0.12s;
+}
+.summary-bullet-btn.active .bullet-indicator { background: #2e7d32; }
 
 /* ── Transcript ─────────────────────────────────────────────── */
 .transcript-body {
@@ -1230,7 +1350,7 @@ body.show-welcome #input-bar {
   z-index: 10;
   background: #fff;
   box-shadow: 0 3px 12px rgba(0,0,0,0.10);
-  /* Flush with transcript col edges (compensate 16px side padding) */
+  /* Flush with .transcript-inner edges (compensate 16px side padding) */
   margin-left: -16px;
   margin-right: -16px;
   margin-top: 0;
@@ -1251,7 +1371,7 @@ details.summary-panel:not([open]) .summary-toggle-arrow {
   transform: rotate(-90deg);
 }
 /* Bullets can contain inline markdown — make them prose */
-.summary-bullets li * { font-size: inherit; }
+.summary-bullet-btn * { font-size: inherit; }
 
 /* ── Font-size bump (~+1 step everywhere) ────────────────────── */
 body { font-size: 16px; }
@@ -1261,7 +1381,7 @@ body { font-size: 16px; }
 .option-desc  { font-size: 0.8rem; }
 .chunk-text { font-size: 0.85rem; }
 .chunk-speaker { font-size: 0.85rem; }
-.summary-bullets li { font-size: 0.85rem; }
+.summary-bullet-btn { font-size: 0.85rem; }
 .summary-heading { font-size: 0.88rem; }
 .sidebar-meeting-title { font-size: 0.82rem; }
 .browser-chat-bar textarea { font-size: 0.9rem; }

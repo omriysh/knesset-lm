@@ -35,6 +35,7 @@ import threading
 import traceback
 import uuid
 import ftfy
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -163,6 +164,8 @@ async def lifespan(app: FastAPI):
     app.state.retriever     = _retriever
     app.state.tool_registry = tool_registry
     app.state.chroma        = chroma
+    app.state.embedder      = embedder
+    app.state.embed_lock    = embed_lock
     app.state.settings      = settings
     app.state.sessions_dir  = settings.SESSIONS_DIR
 
@@ -200,6 +203,19 @@ class ResearchStartRequest(BaseModel):
 class ResearchRespondRequest(BaseModel):
     output_var: str
     value: Any
+
+
+# ── Query log ─────────────────────────────────────────────────────────────────
+_QUERY_LOG = Path(__file__).parent / "query_log.jsonl"
+
+def _log_query(question: str, ip: str) -> None:
+    entry = json.dumps({
+        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "ip": ip,
+        "q":  question,
+    }, ensure_ascii=False)
+    with open(_QUERY_LOG, "a", encoding="utf-8") as f:
+        f.write(entry + "\n")
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -243,6 +259,8 @@ async def query(req: QueryRequest, request: Request):
     question = req.question.strip()
     if not question:
         return {"error": "שאלה ריקה"}, 400
+
+    _log_query(question, request.client.host if request.client else "unknown")
 
     settings      = request.app.state.settings
     machine       = request.app.state.machine
@@ -410,12 +428,15 @@ async def research_start(req: ResearchStartRequest, request: Request):
                     checkpoint   = ev_data.get("checkpoint", {})
                     pending_ui   = checkpoint.get("pending_ui_event", {})
 
-                    # Extract meeting_paths from ctx_snapshot so workspace endpoints work
+                    # Extract meeting_paths + heatmap scores from ctx_snapshot
                     ctx_snap = checkpoint.get("ctx_snapshot", {})
-                    meeting_paths_snap = ctx_snap.get("vars", {}).get("meeting_paths") or {}
+                    ctx_vars = ctx_snap.get("vars", {})
+                    meeting_paths_snap   = ctx_vars.get("meeting_paths") or {}
+                    rag_chunks_by_mtg    = ctx_vars.get("rag_chunks_by_meeting") or {}
                     workspace_snap: dict = {}
                     if meeting_paths_snap:
-                        workspace_snap["meeting_paths"] = meeting_paths_snap
+                        workspace_snap["meeting_paths"]       = meeting_paths_snap
+                        workspace_snap["rag_chunks_by_meeting"] = rag_chunks_by_mtg
                         workspace_snap.setdefault("selected_chunks", [])
 
                     session = ResearchSession(
@@ -629,12 +650,18 @@ async def research_respond(
                 elif ev_type == "user_input_required":
                     new_checkpoint = ev_data.get("checkpoint", {})
 
-                    # Extract meeting_paths from ctx_snapshot so workspace endpoints work
-                    ctx_snap2 = new_checkpoint.get("ctx_snapshot", {})
-                    meeting_paths_snap2 = ctx_snap2.get("vars", {}).get("meeting_paths") or {}
+                    # Extract meeting_paths + heatmap scores from ctx_snapshot
+                    ctx_snap2   = new_checkpoint.get("ctx_snapshot", {})
+                    ctx_vars2   = ctx_snap2.get("vars", {})
+                    mp2         = ctx_vars2.get("meeting_paths") or {}
+                    rcbm2       = ctx_vars2.get("rag_chunks_by_meeting") or {}
                     prev_workspace = session.workspace_data or {}
-                    if meeting_paths_snap2:
-                        merged_workspace: dict = {**prev_workspace, "meeting_paths": {**prev_workspace.get("meeting_paths", {}), **meeting_paths_snap2}}
+                    if mp2:
+                        merged_workspace: dict = {
+                            **prev_workspace,
+                            "meeting_paths":        {**prev_workspace.get("meeting_paths", {}), **mp2},
+                            "rag_chunks_by_meeting": {**prev_workspace.get("rag_chunks_by_meeting", {}), **rcbm2},
+                        }
                         merged_workspace.setdefault("selected_chunks", [])
                     else:
                         merged_workspace = prev_workspace or None
@@ -830,6 +857,21 @@ async def research_rag(session_id: str, query: str, request: Request, top_k: int
     # Preserve selected_chunks if already set
     workspace.setdefault("selected_chunks", [])
 
+    # Build per-meeting RAG chunk index (speech ranges + scores) for the heatmap (pass-1 only).
+    rag_by_meeting: dict[str, list[dict]] = {}
+    for item in debug["selected_pass1"]:
+        meta = item["meta"]
+        mid  = meta.get("meeting_id", "")
+        if not mid:
+            continue
+        rag_by_meeting.setdefault(mid, []).append({
+            "start": meta.get("start_speech_idx", 0),
+            "end":   meta.get("end_speech_idx",   0),
+            "sim":   round(float(item["p1_sim"]), 4),
+            "tvec":  item.get("topic_scores_vec", []),
+        })
+    workspace["rag_chunks_by_meeting"] = rag_by_meeting
+
     from dataclasses import replace as _dc_replace
     updated = _dc_replace(
         session,
@@ -871,10 +913,13 @@ async def research_meeting_summary(session_id: str, meeting_id: str, request: Re
 
     bullets = parse_summary_bullets(summary_path)
 
-    # Group bullets by section; derive heading from filename fallback
-    sections_map: dict[int, list[str]] = {}
+    # Group bullets by section; preserve global bullet_idx for heatmap reranking
+    sections_map: dict[int, list[dict]] = {}
     for b in bullets:
-        sections_map.setdefault(b["section"], []).append(b["text"])
+        sections_map.setdefault(b["section"], []).append({
+            "text":       b["text"],
+            "bullet_idx": b["idx"],
+        })
 
     # Re-read raw headings for proper labels
     raw_text = summary_path.read_text(encoding="utf-8")
@@ -981,11 +1026,9 @@ async def research_meeting_transcript(session_id: str, meeting_id: str, request:
             if not text and not speaker:
                 continue
             chunks.append({
-                "chunk_id":    str(idx),
-                "speaker":     speaker,
-                "text":        ftfy.fix_text(text),
-                "topic_index": None,
-                "sim_score":   None,
+                "chunk_id": str(idx),
+                "speaker":  speaker,
+                "text":     ftfy.fix_text(text),
             })
     else:
         from utils.meeting import parse_full_text_speeches
@@ -993,30 +1036,24 @@ async def research_meeting_transcript(session_id: str, meeting_id: str, request:
         parsed = parse_full_text_speeches(full_text)
 
         if parsed:
-            # Speaker-turn parse succeeded — use structured speeches
             for idx, speech in enumerate(parsed):
                 speaker = speech.get("speaker", "").strip()
                 text    = speech.get("text_he", "").strip()
                 if text:
                     chunks.append({
-                        "chunk_id":    str(idx),
-                        "speaker":     speaker,
-                        "text":        text,
-                        "topic_index": None,
-                        "sim_score":   None,
+                        "chunk_id": str(idx),
+                        "speaker":  speaker,
+                        "text":     text,
                     })
         else:
-            # Fallback: paragraph-based split (no speaker info available)
             paragraphs = [p.strip() for p in full_text.split("\n\n") if p.strip()]
             if not paragraphs:
                 paragraphs = [p.strip() for p in full_text.split("\n") if p.strip()]
             for idx, para in enumerate(paragraphs):
                 chunks.append({
-                    "chunk_id":    str(idx),
-                    "speaker":     "",
-                    "text":        para,
-                    "topic_index": None,
-                    "sim_score":   None,
+                    "chunk_id": str(idx),
+                    "speaker":  "",
+                    "text":     para,
                 })
 
     return {
@@ -1025,6 +1062,90 @@ async def research_meeting_transcript(session_id: str, meeting_id: str, request:
         "committee":  committee,
         "chunks":     chunks,
     }
+
+
+@app.get("/api/research/{session_id}/meeting/{meeting_id}/pass2_chunks")
+async def research_meeting_pass2_chunks(session_id: str, meeting_id: str, request: Request):
+    """Return pass-2 chunk metadata for a meeting (no scoring — fast)."""
+    import config as _cfg
+    chroma = request.app.state.chroma
+    try:
+        coll = chroma.get_collection(_cfg.PASS2_COLLECTION)
+        rows = coll.get(
+            where={"meeting_id": {"$eq": meeting_id}},
+            include=["metadatas"],
+        )
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+    chunks = [
+        {
+            "chunk_id": cid,
+            "start":    meta.get("start_speech_idx", 0),
+            "end":      meta.get("end_speech_idx",   0),
+            "chars":    meta.get("char_count",        0),
+        }
+        for cid, meta in zip(rows["ids"], rows["metadatas"])
+    ]
+    return {"count": len(chunks), "chunks": chunks}
+
+
+class ScorePass2Request(BaseModel):
+    query: str
+
+
+@app.post("/api/research/{session_id}/meeting/{meeting_id}/score_pass2")
+async def research_meeting_score_pass2(
+    session_id: str, meeting_id: str, req: ScorePass2Request, request: Request
+):
+    """Embed query and cosine-score all pass-2 chunks for a meeting."""
+    import json as _json
+    import numpy as _np
+    import config as _cfg
+    from indexing.embedder import ProtocolEmbedder
+
+    chroma     = request.app.state.chroma
+    embedder   = request.app.state.embedder
+    embed_lock = request.app.state.embed_lock
+
+    # Fetch all pass-2 chunks (with stored embeddings) for this meeting
+    try:
+        coll = chroma.get_collection(_cfg.PASS2_COLLECTION)
+        rows = coll.get(
+            where={"meeting_id": {"$eq": meeting_id}},
+            include=["embeddings", "metadatas"],
+        )
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+    if not rows["ids"]:
+        return {"chunks": []}  # meeting not indexed in pass2 — grey heatmap is correct
+
+    # Embed query (thread-safe)
+    loop = asyncio.get_event_loop()
+    def _embed():
+        with embed_lock:
+            return embedder.embed([req.query], ProtocolEmbedder.INSTR_QUERY)
+
+    q_emb = await loop.run_in_executor(None, _embed)
+    q_vec = q_emb[0]
+    q_norm = q_vec / (_np.linalg.norm(q_vec) + 1e-9)
+
+    # Cosine similarity per chunk
+    chunks_out = []
+    for emb, meta in zip(rows["embeddings"], rows["metadatas"]):
+        e = _np.array(emb, dtype=_np.float32)
+        e_norm = e / (_np.linalg.norm(e) + 1e-9)
+        score = float(_np.dot(q_norm, e_norm))
+        tvec  = _json.loads(meta.get("topic_scores_vec", "[]"))
+        chunks_out.append({
+            "start": meta.get("start_speech_idx", 0),
+            "end":   meta.get("end_speech_idx",   0),
+            "score": round(score, 4),
+            "tvec":  tvec,
+        })
+
+    return {"chunks": chunks_out}
 
 
 @app.get("/api/research/{session_id}/meeting/{meeting_id}/participants")

@@ -415,7 +415,6 @@ function addLiveStageCard(stagesEl, nodeStart) {
   const stage    = nodeStart.stage || 'unknown';
   const loop     = nodeStart.loop  || 0;
   const loopHtml = loop > 0 ? `<span class="stage-loop-badge">סבב ${loop + 1}</span>` : '';
-  const tagText  = _STAGE_TAGS[stage] || stage;
 
   const card = document.createElement('div');
   card.className = 'stage-card live-stage-card';
@@ -424,7 +423,6 @@ function addLiveStageCard(stagesEl, nodeStart) {
       `<span class="stage-arrow">▶</span>` +
       `<span class="stage-dot ${esc(stage)}"></span>` +
       `<span class="stage-name">${esc(label)}</span>` +
-      `<span class="stage-tag">${esc(tagText)}</span>` +
       `<span class="stage-meta"><span class="live-thinking-dot"></span>${loopHtml}</span>` +
     `</div>` +
     `<div class="stage-body visible">` +
@@ -467,7 +465,6 @@ function addCompletedStageCard(stagesEl, data) {
   const prompt      = data.prompt       || null;
   const toolResults = data.tool_results || [];
 
-  const tagText  = _STAGE_TAGS[stage] || stage;
   const loopHtml = loop > 0 ? `<span class="stage-loop-badge">סבב ${loop + 1}</span>` : '';
 
   let timeHtml = '';
@@ -499,7 +496,6 @@ function addCompletedStageCard(stagesEl, data) {
       `<span class="stage-arrow">▶</span>` +
       `<span class="stage-dot ${esc(stage)}"></span>` +
       `<span class="stage-name">${esc(label)}</span>` +
-      `<span class="stage-tag">${esc(tagText)}</span>` +
       `<span class="stage-meta">${timeHtml}${toolsHtml}${loopHtml}</span>` +
     `</div>` +
     `<div class="stage-body">` +
@@ -644,13 +640,6 @@ function renderTextInput(data, outputVar) {
 /* ═══════════════════════════════════════════════════════════════════
    STAGE CARD DETAIL RENDERERS
 ═══════════════════════════════════════════════════════════════════ */
-
-const _STAGE_TAGS = {
-  router:   'ניתוב',
-  rag:      'פרוטוקולים',
-  factual:  'עובדתי',
-  reviewer: 'עריכה',
-};
 
 function toggleStageCard(header) {
   header.classList.toggle('open');

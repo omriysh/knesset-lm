@@ -148,20 +148,22 @@ def query_retrieve(
             )
             if rows["ids"][0]:
                 pass1_candidates.append({
-                    "meta":     rows["metadatas"][0][0],
-                    "doc":      rows["documents"][0][0],
-                    "p1_sim":   1.0 - rows["distances"][0][0],
-                    "p2_score": p2["score"],
-                    "pass2_id": pass2_id,
+                    "meta":             rows["metadatas"][0][0],
+                    "doc":              rows["documents"][0][0],
+                    "p1_sim":           1.0 - rows["distances"][0][0],
+                    "p2_score":         p2["score"],
+                    "pass2_id":         pass2_id,
+                    "topic_scores_vec": json.loads(p2["meta"].get("topic_scores_vec", "[]")),
                 })
         except Exception:
             # Fallback: use pass-2 text directly
             pass1_candidates.append({
-                "meta":     p2["meta"],
-                "doc":      p2["doc"],
-                "p1_sim":   p2["score"],
-                "p2_score": p2["score"],
-                "pass2_id": pass2_id,
+                "meta":            p2["meta"],
+                "doc":             p2["doc"],
+                "p1_sim":          p2["score"],
+                "p2_score":        p2["score"],
+                "pass2_id":        pass2_id,
+                "topic_scores_vec": json.loads(p2["meta"].get("topic_scores_vec", "[]")),
             })
 
     pass1_candidates.sort(key=lambda x: x["p1_sim"], reverse=True)
@@ -209,6 +211,7 @@ def query_retrieve(
     debug: dict[str, Any] = {
         "meetings":         meeting_ids,
         "selected_pass1":   pass1_candidates,
+        "all_pass2":        pass2_candidates,   # all meetings, pre-top-N cut
         "context_chars":    used,
         "meeting_paths":    meeting_paths,
         "l1_meeting_meta":  l1_meeting_meta,

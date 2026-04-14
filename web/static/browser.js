@@ -36,6 +36,10 @@ let _summary   = null;   // last fetched summary {topics:[]}
 let _activeTopicFilter = null;  // null = show all; number = show that topic index
 let _origQ     = '';     // original question (for summarize button)
 
+/* ── Heatmap state ──────────────────────────────────────────────── */
+let _hmChunks        = [];   // [{chunk_id, chars, simScore, topicScores}]
+let _activeBulletIdx = null; // null = query mode; number = specific bullet
+
 /* ── Sidebar sort / filter / group state ────────────────────────── */
 let _sortMode        = 'relevance'; // 'relevance' | 'date_asc' | 'date_desc'
 let _groupByComm     = false;
@@ -59,14 +63,16 @@ function openProtocolBrowser(sessionId, meetingId, meetings, opts = {}) {
     }
     return { ...m, title };
   });
-  _activeId        = meetingId;
-  _origQ           = opts.originalQuestion || '';
-  _sortMode        = 'relevance';
-  _groupByComm     = false;
-  _collapsedGroups = new Set();
-  _filterPart      = '';
-  _partCache       = {};
-  _partLoadedCount = 0;
+  _activeId          = meetingId;
+  _origQ             = opts.originalQuestion || '';
+  _sortMode          = 'relevance';
+  _groupByComm       = false;
+  _collapsedGroups   = new Set();
+  _filterPart        = '';
+  _partCache         = {};
+  _partLoadedCount   = 0;
+  _hmChunks          = [];
+  _activeBulletIdx   = null;
 
   // Replace any existing panel
   if (_panel) _panel.remove();
@@ -116,8 +122,14 @@ function _shellHtml(postCompletion) {
     </div>
   </div>
   <div class="browser-body">
-    <div class="browser-transcript-col" id="browser-transcript-col">
-      <div class="browser-loading">טוען…</div>
+    <div class="browser-transcript-wrap">
+      <div class="heatmap-strip" id="heatmap-strip">
+        <div class="hm-bands" id="hm-bands"></div>
+        <div class="hm-viewport" id="hm-viewport"></div>
+      </div>
+      <div class="browser-transcript-col" id="browser-transcript-col">
+        <div class="browser-loading">טוען…</div>
+      </div>
     </div>
     <div class="browser-sidebar" id="browser-sidebar">
       <div class="sidebar-inner">
@@ -318,9 +330,11 @@ function _onParticipantLoaded(total) {
 
 /* ── Load meeting (summary + transcript) ─────────────────────────── */
 async function _loadMeeting(meetingId) {
-  _activeId = meetingId;
+  _activeId          = meetingId;
   _activeTopicFilter = null;
-  _summary = null;
+  _activeBulletIdx   = null;
+  _hmChunks          = [];
+  _summary           = null;
 
   const m = _meetings.find(x => x.meeting_id === meetingId);
 
@@ -340,18 +354,31 @@ async function _loadMeeting(meetingId) {
     if (transcriptData.error) throw new Error(transcriptData.error);
 
     _summary = summaryData;
-    col.innerHTML = _summaryHtml(summaryData) + _transcriptHtml(transcriptData);
+    col.innerHTML =
+      `<div class="transcript-inner">` +
+        _summaryHtml(summaryData) +
+        _transcriptHtml(transcriptData) +
+      `</div>`;
 
-    // Wire topic pill clicks
-    col.querySelectorAll('.topic-pill').forEach(pill => {
-      pill.addEventListener('click', () => {
-        const idx = parseInt(pill.dataset.topicIdx, 10);
-        _filterByTopic(idx);
+    // Wire summary bullet clicks for heatmap reranking
+    col.querySelectorAll('.summary-bullet-btn[data-bullet-idx]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const idx = parseInt(btn.dataset.bulletIdx, 10);
+        _filterByBullet(idx);
       });
     });
 
+    // Init heatmap with grey bands (no scores yet)
+    _initHeatmap(transcriptData.chunks || []);
+
+    // Scroll listener → update viewport indicator
+    col.addEventListener('scroll', _updateHeatmapViewport, { passive: true });
+
+    // Async: score pass-2 chunks and fill heatmap colors
+    _scoreAndRenderHeatmap(meetingId);
+
   } catch (err) {
-    col.innerHTML = `<div class="browser-error">שגיאה בטעינה: ${_esc(err.message)}</div>`;
+    col.innerHTML = `<div class="browser-loading"><div class="browser-error">שגיאה בטעינה: ${_esc(err.message)}</div></div>`;
   }
 }
 
@@ -360,32 +387,32 @@ function _summaryHtml(data) {
   const topics = data.topics || [];
   if (!topics.length) return '';
 
-  const pills = topics.map((t, i) =>
-    `<button class="topic-pill" data-topic-idx="${i}"
-             style="border-color:${topicColor(i)};color:${topicColor(i)};--topic-color:${topicColor(i)}">
-       <span class="pill-dot" style="background:${topicColor(i)}"></span>
-       ${_esc(t.heading)}
-     </button>`
-  ).join('');
-
-  const sections = topics.map((t, i) =>
-    `<div class="summary-section">
-       <div class="summary-heading" style="color:${topicColor(i)}">
-         <span class="pill-dot" style="background:${topicColor(i)}"></span>
+  const sections = topics.map((t, i) => {
+    const bullets = (t.bullets || []).map(b => {
+      // b is {text, bullet_idx} (new API) or a plain string (legacy)
+      const text      = typeof b === 'string' ? b : b.text;
+      const bulletIdx = typeof b === 'string' ? null : b.bullet_idx;
+      const idxAttr   = bulletIdx != null ? `data-bullet-idx="${bulletIdx}"` : '';
+      return `<li>
+        <button class="summary-bullet-btn" ${idxAttr}>
+          <span class="bullet-indicator"></span>
+          <span>${marked.parseInline(text)}</span>
+        </button>
+      </li>`;
+    }).join('');
+    return `<div class="summary-section">
+       <div class="summary-heading">
          ${_esc(t.heading)}
        </div>
-       <ul class="summary-bullets">
-         ${t.bullets.map(b => `<li>${marked.parseInline(b)}</li>`).join('')}
-       </ul>
-     </div>`
-  ).join('');
+       <ul class="summary-bullets">${bullets}</ul>
+     </div>`;
+  }).join('');
 
   return `
 <details class="summary-panel">
   <summary class="summary-toggle">
     <span class="summary-toggle-arrow">▼</span>
     <span>סיכום AI</span>
-    <span class="summary-pills-row">${pills}</span>
   </summary>
   <div class="summary-body">${sections}</div>
 </details>`;
@@ -415,34 +442,156 @@ function _transcriptHtml(data) {
 </div>`;
   }).join('');
 
-  return `<div class="transcript-body" id="transcript-body">${rows}</div>`;
+  return `<div class="transcript-body" id="transcript-body" data-meeting-id="${_esc(data.meeting_id)}">${rows}</div>`;
 }
 
-/* ── Topic filter ────────────────────────────────────────────────── */
-function _filterByTopic(topicIdx) {
-  const col = _panel.querySelector('#browser-transcript-col');
-  if (!col) return;
+/* ── Heatmap: init, render, viewport indicator ───────────────────── */
 
-  // Toggle off if same topic clicked again
-  if (_activeTopicFilter === topicIdx) {
-    _activeTopicFilter = null;
-    col.querySelectorAll('.chunk-card').forEach(c => c.classList.remove('dimmed'));
-    col.querySelectorAll('.topic-pill').forEach(p => p.classList.remove('active-pill'));
+function _initHeatmap(chunks) {
+  _activeBulletIdx = null;
+  _hmChunks = chunks.map(c => ({
+    chunk_id:    c.chunk_id,
+    chars:       (c.text || '').length || 1,
+    simScore:    null,
+    topicScores: [],
+  }));
+  _renderHeatmap(_hmChunks.map(c => c.simScore));
+  // Show wave animation while scores load
+  _panel?.querySelector('#heatmap-strip')?.classList.add('loading');
+  requestAnimationFrame(_updateHeatmapViewport);
+}
+
+/* Score all pass-2 chunks for meetingId against the current question, then update heatmap */
+async function _scoreAndRenderHeatmap(meetingId) {
+  const query = _origQ;
+  if (!query) {
+    _panel?.querySelector('#heatmap-strip')?.classList.remove('loading');
     return;
   }
-  _activeTopicFilter = topicIdx;
 
-  col.querySelectorAll('.topic-pill').forEach(p => {
-    p.classList.toggle('active-pill', parseInt(p.dataset.topicIdx, 10) === topicIdx);
-  });
-  col.querySelectorAll('.chunk-card').forEach(c => {
-    const cIdx = c.dataset.topicIdx === '' ? null : parseInt(c.dataset.topicIdx, 10);
-    c.classList.toggle('dimmed', cIdx !== topicIdx);
+  try {
+    const res = await fetch(
+      `/api/research/${_sid}/meeting/${encodeURIComponent(meetingId)}/score_pass2`,
+      {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ query }),
+      }
+    );
+    const data = await res.json();
+    if (meetingId !== _activeId) return;
+
+    if (!data.error && data.chunks?.length) {
+      for (let i = 0; i < _hmChunks.length; i++) {
+        const speechIdx = parseInt(_hmChunks[i].chunk_id, 10);
+        for (const rc of data.chunks) {
+          if (rc.start <= speechIdx && speechIdx <= rc.end) {
+            _hmChunks[i].simScore    = rc.score;
+            _hmChunks[i].topicScores = rc.tvec || [];
+            break;
+          }
+        }
+      }
+      _renderHeatmap(_hmChunks.map(c => c.simScore));
+    }
+  } catch (_) { /* scoring is best-effort */ } finally {
+    _panel?.querySelector('#heatmap-strip')?.classList.remove('loading');
+  }
+}
+
+/* scores: array of float|null, same order as _hmChunks */
+function _renderHeatmap(scores) {
+  const bandsEl = _panel?.querySelector('#hm-bands');
+  if (!bandsEl) return;
+
+  const total = _hmChunks.reduce((s, c) => s + c.chars, 0) || 1;
+
+  bandsEl.innerHTML = _hmChunks.map((c, i) => {
+    const flex = c.chars / total;
+    return `<div class="hm-band" style="flex:${flex}; background:${_heatColor(scores[i])}"
+                 onclick="browserScrollToChunk('${_esc(c.chunk_id)}')"
+                 title="${_heatLabel(scores[i])}"></div>`;
+  }).join('');
+}
+
+/* Continuous green gradient: null→grey, 0→pale green, 1→dark forest green */
+function _heatColor(s) {
+  if (s == null) return '#e2e3df';
+  const t = Math.max(0, Math.min(1, s));
+  // hsl(125, 39%, lerp(92→15)%)  — light at low scores, dark at high
+  const l = Math.round(92 - t * 77);
+  return `hsl(125,39%,${l}%)`;
+}
+
+function _heatLabel(s) {
+  return s == null ? '—' : Math.round(s * 100) + '%';
+}
+
+function _updateHeatmapViewport() {
+  const col   = _panel?.querySelector('#browser-transcript-col');
+  const strip = _panel?.querySelector('#heatmap-strip');
+  const vp    = _panel?.querySelector('#hm-viewport');
+  if (!col || !strip || !vp) return;
+
+  const sh = col.scrollHeight;
+  const ch = strip.clientHeight;
+  if (!sh || !ch) return;
+
+  const ratio = ch / sh;
+  const vpH   = Math.max(16, col.clientHeight * ratio);
+  vp.style.height = vpH + 'px';
+  vp.style.top    = (col.scrollTop * ratio) + 'px';
+}
+
+/* ── Bullet filter → heatmap rerank ─────────────────────────────── */
+function _filterByBullet(bulletIdx) {
+  const col = _panel?.querySelector('#browser-transcript-col');
+  if (!col) return;
+
+  // Toggle off if same bullet clicked
+  if (_activeBulletIdx === bulletIdx) {
+    _activeBulletIdx  = null;
+    _activeTopicFilter = null;
+    _renderHeatmap(_hmChunks.map(c => c.simScore));
+    col.querySelectorAll('.chunk-card').forEach(c => c.classList.remove('dimmed'));
+    col.querySelectorAll('.summary-bullet-btn').forEach(b => b.classList.remove('active'));
+    return;
+  }
+
+  _activeBulletIdx  = bulletIdx;
+  _activeTopicFilter = bulletIdx;
+
+  // Raw tvec scores are L1-normalised (tiny, ~1/N each).
+  // Normalise by max so heatmap + dimming use relative ranking.
+  const rawScores = _hmChunks.map(c => c.topicScores[bulletIdx] ?? null);
+  const maxS = Math.max(...rawScores.filter(s => s != null), 0);
+  const normScores = maxS > 0
+    ? rawScores.map(s => s != null ? s / maxS : null)
+    : rawScores;
+
+  _renderHeatmap(normScores);
+
+  // Dim chunks in lower half of relevance for this bullet
+  col.querySelectorAll('.chunk-card').forEach((card, i) => {
+    const s = normScores[i] ?? 0;
+    card.classList.toggle('dimmed', s < 0.35);
   });
 
-  // Scroll to first matching chunk
-  const first = col.querySelector(`.chunk-card:not(.dimmed)`);
+  // Mark active bullet
+  col.querySelectorAll('.summary-bullet-btn').forEach(b => {
+    b.classList.toggle('active', parseInt(b.dataset.bulletIdx, 10) === bulletIdx);
+  });
+
+  // Scroll to first relevant chunk
+  const first = col.querySelector('.chunk-card:not(.dimmed)');
   if (first) first.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/* ── Scroll transcript to chunk ──────────────────────────────────── */
+function browserScrollToChunk(chunkId) {
+  const col  = _panel?.querySelector('#browser-transcript-col');
+  const card = col?.querySelector(`.chunk-card[data-chunk-id="${chunkId}"]`);
+  if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 /* ── Sidebar switch meeting ──────────────────────────────────────── */
