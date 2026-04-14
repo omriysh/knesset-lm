@@ -1,44 +1,34 @@
-const queryInput      = document.getElementById('query-input');
-const submitBtn       = document.getElementById('submit');
-const statusEl        = document.getElementById('status');
-const statusMsg       = document.getElementById('status-msg');
-const timerEl         = document.getElementById('status-timer');
-const errorEl         = document.getElementById('error-box');
-const answerBox       = document.getElementById('answer-box');
-const answerEl        = document.getElementById('answer-content');
-const stagesBox       = document.getElementById('stages-box');
-const devToggle       = document.getElementById('dev-toggle');
+/**
+ * app.js — KnessetLM chat shell
+ *
+ * Manages the single-column chat interface.  Sends questions to
+ * /api/research/start, streams SSE events, renders chat messages
+ * (user bubbles, AI stages card, agent response, status, errors).
+ *
+ * Interactivity: handles user_input_required events for option_select
+ * and text_input node types.  Session id is stored for resume via
+ * /api/research/{id}/respond.
+ */
 
-let running           = false;
-let rawAnswer         = '';
-let _timerInterval    = null;
-let _timerStart       = 0;
-let devMode           = true;    // dev mode on by default
-let stageDataBuf      = [];      // buffer of node_result payloads for the current query
-let liveThinkingCard  = null;    // stage card currently streaming thinking tokens
-
-// Initialise toggle to match default devMode
-devToggle.classList.toggle('active', devMode);
-
-devToggle.addEventListener('click', () => {
-  devMode = !devMode;
-  devToggle.classList.toggle('active', devMode);
-  if (devMode) {
-    // Render any cards that arrived before dev mode was turned on
-    stagesBox.innerHTML = '';
-    liveThinkingCard = null;
-    for (const d of stageDataBuf) addStageCard(d);
-    if (stageDataBuf.length) stagesBox.style.display = 'block';
-  } else {
-    stagesBox.innerHTML = '';
-    stagesBox.style.display = 'none';
-    liveThinkingCard = null;
-  }
-});
+/* ── DOM refs ──────────────────────────────────────────────────── */
+const chatColumn  = document.getElementById('chat-column');
+const welcomeEl   = document.getElementById('welcome-state');
+const queryInput  = document.getElementById('query-input');
+const submitBtn   = document.getElementById('submit-btn');
 
 marked.use({ breaks: true, gfm: true });
 
-// Ctrl+Enter submits
+/* ── State ─────────────────────────────────────────────────────── */
+let running     = false;
+let sessionId   = null;   // current or last session id
+
+/* ── Textarea auto-resize ───────────────────────────────────────── */
+queryInput.addEventListener('input', () => {
+  queryInput.style.height = 'auto';
+  queryInput.style.height = Math.min(queryInput.scrollHeight, 160) + 'px';
+});
+
+/* ── Submit on Ctrl+Enter ───────────────────────────────────────── */
 queryInput.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
     e.preventDefault();
@@ -47,20 +37,9 @@ queryInput.addEventListener('keydown', e => {
 });
 submitBtn.addEventListener('click', () => { if (!running) startQuery(); });
 
-function _startTimer() {
-  _timerStart = Date.now();
-  timerEl.style.display = 'block';
-  timerEl.textContent = '0.0s';
-  _timerInterval = setInterval(() => {
-    timerEl.textContent = ((Date.now() - _timerStart) / 1000).toFixed(1) + 's';
-  }, 100);
-}
-
-function _stopTimer() {
-  clearInterval(_timerInterval);
-  _timerInterval = null;
-  timerEl.textContent = ((Date.now() - _timerStart) / 1000).toFixed(1) + 's';
-}
+/* ═══════════════════════════════════════════════════════════════════
+   MAIN QUERY FLOW
+═══════════════════════════════════════════════════════════════════ */
 
 async function startQuery() {
   const question = queryInput.value.trim();
@@ -68,28 +47,28 @@ async function startQuery() {
 
   running = true;
   submitBtn.disabled = true;
-  rawAnswer = '';
-  stageDataBuf = [];
+  queryInput.value = '';
+  queryInput.style.height = 'auto';
 
-  errorEl.style.display = 'none';
-  answerBox.style.display = 'none';
-  answerEl.className = '';
-  answerEl.textContent = '';
-  stagesBox.style.display = 'none';
-  stagesBox.innerHTML = '';
-  liveThinkingCard = null;
-  timerEl.style.display = 'none';
-  setStatus('מחפש...');
-  _startTimer();
+  // Hide welcome state on first query
+  if (welcomeEl) welcomeEl.style.display = 'none';
 
-  let curEvent = '';
-  let buf = '';
+  // Render user bubble
+  appendUserBubble(question);
+
+  // Placeholder elements for this run
+  const stagesEl   = appendStagesCard();    // AI stages gradient card
+  const statusEl   = appendStatus('');      // status line
+  let   agentEl    = null;                  // agent response card (created on first token)
+  let   rawAnswer  = '';
+  let   curEvent   = '';
+  let   buf        = '';
 
   try {
-    const res = await fetch('/api/query', {
-      method: 'POST',
+    const res = await fetch('/api/research/start', {
+      method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question }),
+      body:    JSON.stringify({ question }),
     });
     if (!res.ok) throw new Error('HTTP ' + res.status);
 
@@ -99,7 +78,6 @@ async function startQuery() {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-
       buf += decoder.decode(value, { stream: true });
 
       const lines = buf.split('\n');
@@ -111,152 +89,280 @@ async function startQuery() {
         } else if (line.startsWith('data: ')) {
           let data;
           try { data = JSON.parse(line.slice(6)); } catch { continue; }
-          handleEvent(curEvent, data);
+          handleEvent(curEvent, data, { stagesEl, statusEl, get agentEl() { return agentEl; }, set agentEl(v) { agentEl = v; }, get rawAnswer() { return rawAnswer; }, set rawAnswer(v) { rawAnswer = v; } });
         }
       }
     }
   } catch (err) {
-    showError('שגיאת חיבור: ' + err.message);
+    setStatusMsg(statusEl, '');
+    appendErrorMsg('שגיאת חיבור: ' + err.message);
   } finally {
-    if (rawAnswer) {
-      answerEl.innerHTML = marked.parse(rawAnswer);
-      answerEl.classList.add('rendered');
-    }
-    _stopTimer();
-    statusMsg.innerHTML = '';
-    submitBtn.disabled = false;
-    running = false;
-  }
-}
-
-function handleEvent(ev, data) {
-  switch (ev) {
-    case 'status':
-      setStatus(data.msg || '');
-      break;
-    case 'node_start':
-      if (devMode) createLiveCard(data);
-      break;
-    case 'thinking_token':
-      if (devMode) appendLiveThinking(data.text || '');
-      break;
-    case 'node_result':
-      // Replace live card with completed stage card
-      removeLiveThinkingCard();
-      stageDataBuf.push(data);
-      if (devMode) addStageCard(data);
-      break;
-    case 'token':
-      rawAnswer += data.text || '';
-      if (answerBox.style.display === 'none') {
-        answerBox.style.display = 'block';
-        setStatus('');
+    // Finalize streamed answer
+    if (agentEl && rawAnswer) {
+      const body = agentEl.querySelector('.prose-content');
+      if (body) {
+        body.innerHTML = marked.parse(rawAnswer);
+        // Remove streaming cursor if present
+        const cursor = agentEl.querySelector('.stream-cursor');
+        if (cursor) cursor.remove();
       }
-      answerEl.innerHTML = esc(rawAnswer) + '<span class="cursor"></span>';
+    }
+    setStatusMsg(statusEl, '');
+    // Remove empty status row
+    if (statusEl && !statusEl.textContent.trim()) statusEl.remove();
+    running = false;
+    submitBtn.disabled = false;
+    queryInput.focus();
+    scrollToBottom();
+  }
+}
+
+function handleEvent(ev, data, refs) {
+  switch (ev) {
+    case 'session_id':
+      sessionId = data.session_id;
       break;
+
+    case 'status':
+      setStatusMsg(refs.statusEl, data.msg || '');
+      break;
+
+    case 'node_start':
+      addLiveStageCard(refs.stagesEl, data);
+      break;
+
+    case 'thinking_token':
+      appendLiveThinking(refs.stagesEl, data.text || '');
+      break;
+
+    case 'node_result':
+      finaliseLiveCard(refs.stagesEl);
+      addCompletedStageCard(refs.stagesEl, data);
+      break;
+
+    case 'token': {
+      refs.rawAnswer += data.text || '';
+      if (!refs.agentEl) {
+        refs.agentEl = appendAgentCard();
+        setStatusMsg(refs.statusEl, '');
+      }
+      const body = refs.agentEl.querySelector('.prose-content');
+      if (body) {
+        body.innerHTML = esc(refs.rawAnswer) + '<span class="stream-cursor"></span>';
+      }
+      scrollToBottom();
+      break;
+    }
+
     case 'done':
-      removeLiveThinkingCard();
+      finaliseLiveCard(refs.stagesEl);
       break;
+
     case 'error':
-      removeLiveThinkingCard();
-      showError(data.error || 'שגיאה לא ידועה');
+      finaliseLiveCard(refs.stagesEl);
+      setStatusMsg(refs.statusEl, '');
+      appendErrorMsg(data.error || 'שגיאה לא ידועה');
+      break;
+
+    case 'user_input_required':
+      finaliseLiveCard(refs.stagesEl);
+      setStatusMsg(refs.statusEl, '');
+      renderUserInputPanel(data);
+      break;
+
+    case 'user_paused':
+      // Stream closed — input panel already rendered above
       break;
   }
 }
 
-// ── Live thinking card ────────────────────────────────────────────────────────
+/* ═══════════════════════════════════════════════════════════════════
+   RESUME FLOW  (after user_input_required)
+═══════════════════════════════════════════════════════════════════ */
 
-function createLiveCard(nodeStart) {
-  removeLiveThinkingCard();   // safety: clear any stale card
+async function submitResponse(outputVar, value) {
+  if (!sessionId) return;
 
-  const label = nodeStart.label || 'שלב';
-  const stage = nodeStart.stage || 'unknown';
-  const loop  = nodeStart.loop  || 0;
-  const p     = nodeStart.prompt || {};
+  running = true;
+  submitBtn.disabled = true;
 
+  const stagesEl  = appendStagesCard();
+  const statusEl  = appendStatus('ממשיך...');
+  let   agentEl   = null;
+  let   rawAnswer = '';
+  let   curEvent  = '';
+  let   buf       = '';
+
+  try {
+    const res = await fetch(`/api/research/${sessionId}/respond`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ output_var: outputVar, value }),
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+
+    const reader  = res.body.getReader();
+    const decoder = new TextDecoder();
+
+    while (true) {
+      const { done, value: chunk } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(chunk, { stream: true });
+
+      const lines = buf.split('\n');
+      buf = lines.pop();
+
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          curEvent = line.slice(7).trim();
+        } else if (line.startsWith('data: ')) {
+          let data;
+          try { data = JSON.parse(line.slice(6)); } catch { continue; }
+          handleEvent(curEvent, data, { stagesEl, statusEl, get agentEl() { return agentEl; }, set agentEl(v) { agentEl = v; }, get rawAnswer() { return rawAnswer; }, set rawAnswer(v) { rawAnswer = v; } });
+        }
+      }
+    }
+  } catch (err) {
+    setStatusMsg(statusEl, '');
+    appendErrorMsg('שגיאת חיבור: ' + err.message);
+  } finally {
+    if (agentEl && rawAnswer) {
+      const body = agentEl.querySelector('.prose-content');
+      if (body) {
+        body.innerHTML = marked.parse(rawAnswer);
+        const cursor = agentEl.querySelector('.stream-cursor');
+        if (cursor) cursor.remove();
+      }
+    }
+    setStatusMsg(statusEl, '');
+    if (statusEl && !statusEl.textContent.trim()) statusEl.remove();
+    running = false;
+    submitBtn.disabled = false;
+    queryInput.focus();
+    scrollToBottom();
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   RENDER HELPERS — chat messages
+═══════════════════════════════════════════════════════════════════ */
+
+function appendUserBubble(text) {
+  const row = document.createElement('div');
+  row.className = 'msg-user';
+  row.innerHTML = `<div class="msg-user-bubble">${esc(text)}</div>`;
+  chatColumn.appendChild(row);
+  scrollToBottom();
+}
+
+function appendStagesCard() {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg-agent';
+  wrap.innerHTML =
+    `<div class="ai-stages-card">` +
+    `<div class="ai-stages-header">שלבי עיבוד</div>` +
+    `</div>`;
+  chatColumn.appendChild(wrap);
+  scrollToBottom();
+  return wrap.querySelector('.ai-stages-card');
+}
+
+function appendStatus(msg) {
+  const el = document.createElement('div');
+  el.className = 'msg-status';
+  if (msg) setStatusMsg(el, msg);
+  chatColumn.appendChild(el);
+  return el;
+}
+
+function setStatusMsg(el, msg) {
+  if (!el) return;
+  if (msg) {
+    el.innerHTML =
+      `<span class="thinking-dots"><span></span><span></span><span></span></span>` +
+      `<span>${esc(msg)}</span>`;
+    el.style.display = 'flex';
+  } else {
+    el.innerHTML = '';
+    el.style.display = 'none';
+  }
+}
+
+function appendAgentCard() {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg-agent';
+  wrap.innerHTML =
+    `<div class="msg-agent-card">` +
+    `<div class="prose-content"></div>` +
+    `</div>`;
+  chatColumn.appendChild(wrap);
+  scrollToBottom();
+  return wrap;
+}
+
+function appendErrorMsg(msg) {
+  const el = document.createElement('div');
+  el.className = 'msg-error';
+  el.textContent = msg;
+  chatColumn.appendChild(el);
+  scrollToBottom();
+}
+
+function scrollToBottom() {
+  chatColumn.scrollTop = chatColumn.scrollHeight;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   AI STAGES CARD — live and completed tiles
+═══════════════════════════════════════════════════════════════════ */
+
+// The live card is the last child of the stages card (while streaming thinking)
+function addLiveStageCard(stagesEl, nodeStart) {
+  finaliseLiveCard(stagesEl); // clear any stale live card
+
+  const label    = nodeStart.label || 'שלב';
+  const stage    = nodeStart.stage || 'unknown';
+  const loop     = nodeStart.loop  || 0;
+  const loopHtml = loop > 0 ? `<span class="stage-loop-badge">סבב ${loop + 1}</span>` : '';
   const tagText  = _STAGE_TAGS[stage] || stage;
-  const loopHtml = loop > 0
-    ? `<span class="stage-loop-badge">סבב ${loop + 1}</span>`
-    : '';
 
-  liveThinkingCard = document.createElement('div');
-  liveThinkingCard.className = 'stage-card';
-
-  const liveRetrieval    = nodeStart.retrieval || null;
-  const liveRetrievalHtml = liveRetrieval ? renderRetrievalHtml(liveRetrieval) : '';
-
-  liveThinkingCard.innerHTML =
+  const card = document.createElement('div');
+  card.className = 'stage-card live-stage-card';
+  card.innerHTML =
     `<div class="stage-header open" onclick="toggleStageCard(this)">` +
-      `<span class="stage-arrow">&#9658;</span>` +
+      `<span class="stage-arrow">▶</span>` +
       `<span class="stage-dot ${esc(stage)}"></span>` +
       `<span class="stage-name">${esc(label)}</span>` +
       `<span class="stage-tag">${esc(tagText)}</span>` +
       `<span class="stage-meta"><span class="live-thinking-dot"></span>${loopHtml}</span>` +
     `</div>` +
     `<div class="stage-body visible">` +
-      renderPromptHtml(p, false) +
-      liveRetrievalHtml +
+      renderPromptHtml(nodeStart.prompt || {}) +
       `<details class="sub-details open">` +
         `<summary class="sub-summary thinking-summary">תהליך עבודה…</summary>` +
-        `<div class="sub-details-body">` +
-          `<pre class="prompt-text thinking-text"></pre>` +
-        `</div>` +
+        `<div class="sub-details-body"><pre class="prompt-text thinking-text"></pre></div>` +
       `</details>` +
     `</div>`;
 
-  stagesBox.style.display = 'block';
-  stagesBox.appendChild(liveThinkingCard);
+  stagesEl.appendChild(card);
+  scrollToBottom();
 }
 
-function appendLiveThinking(text) {
-  if (!liveThinkingCard) return;
-  const pre = liveThinkingCard.querySelector('.thinking-text');
+function appendLiveThinking(stagesEl, text) {
+  const live = stagesEl.querySelector('.live-stage-card');
+  if (!live) return;
+  const pre = live.querySelector('.thinking-text');
   if (!pre) return;
   pre.textContent += text;
   pre.scrollTop = pre.scrollHeight;
 }
 
-function removeLiveThinkingCard() {
-  if (liveThinkingCard) {
-    liveThinkingCard.remove();
-    liveThinkingCard = null;
-  }
+function finaliseLiveCard(stagesEl) {
+  const live = stagesEl && stagesEl.querySelector('.live-stage-card');
+  if (live) live.remove();
 }
 
-function setStatus(msg) {
-  if (msg) {
-    statusMsg.innerHTML =
-      '<span class="thinking-dots"><span></span><span></span><span></span></span>' +
-      esc(msg);
-  } else {
-    statusMsg.innerHTML = '';
-  }
-}
-
-function showError(msg) {
-  errorEl.textContent = msg;
-  errorEl.style.display = 'block';
-  setStatus('');
-}
-
-function esc(s) {
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-// ── Stage cards ───────────────────────────────────────────────────────────────
-
-const _STAGE_TAGS = {
-  router:   'ניתוב',
-  rag:      'פרוטוקולים',
-  factual:  'עובדתי',
-  reviewer: 'עריכה',
-};
-
-function addStageCard(data) {
+function addCompletedStageCard(stagesEl, data) {
   const label       = data.label        || 'שלב';
   const stage       = data.stage        || 'unknown';
   const content     = data.content      || '';
@@ -270,14 +376,9 @@ function addStageCard(data) {
   const prompt      = data.prompt       || null;
   const toolResults = data.tool_results || [];
 
-  stagesBox.style.display = 'block';
+  const tagText  = _STAGE_TAGS[stage] || stage;
+  const loopHtml = loop > 0 ? `<span class="stage-loop-badge">סבב ${loop + 1}</span>` : '';
 
-  const card = document.createElement('div');
-  card.className = 'stage-card';
-
-  const tagText = _STAGE_TAGS[stage] || stage;
-
-  // Time breakdown: show LLM+tool split if both are available
   let timeHtml = '';
   if (elapsedMs != null) {
     const totalStr = (elapsedMs / 1000).toFixed(1) + 's';
@@ -291,53 +392,180 @@ function addStageCard(data) {
   }
 
   const uniqueTools = [...new Set(tools)];
-  const toolsHtml = uniqueTools.length > 0
+  const toolsHtml   = uniqueTools.length > 0
     ? `<span class="stage-tools-badge">${uniqueTools.join(' · ')}</span>`
     : '';
 
-  const loopHtml = loop > 0
-    ? `<span class="stage-loop-badge">סבב ${loop + 1}</span>`
-    : '';
+  const promptHtml      = prompt     ? renderPromptHtml(prompt)       : '';
+  const thinkingHtml    = thinking   ? renderThinkingHtml(thinking, llmMs) : '';
+  const toolResultsHtml = toolResults.map(tr => renderToolResultHtml(tr)).join('');
+  const retrievalHtml   = retrieval  ? renderRetrievalHtml(retrieval) : '';
 
-  const promptHtml      = prompt ? renderPromptHtml(prompt, false) : '';
-  const thinkingHtml    = thinking ? renderThinkingHtml(thinking, llmMs) : '';
-  const toolResultsHtml = toolResults.map(tr => renderToolResultHtml(tr, false)).join('');
-  const retrievalHtml   = retrieval ? renderRetrievalHtml(retrieval) : '';
-
-  const bodyClass   = devMode ? 'stage-body visible' : 'stage-body';
-  const headerClass = devMode ? 'stage-header open'  : 'stage-header';
-
+  const card = document.createElement('div');
+  card.className = 'stage-card';
   card.innerHTML =
-    `<div class="${headerClass}" onclick="toggleStageCard(this)">` +
-      `<span class="stage-arrow">&#9658;</span>` +
+    `<div class="stage-header" onclick="toggleStageCard(this)">` +
+      `<span class="stage-arrow">▶</span>` +
       `<span class="stage-dot ${esc(stage)}"></span>` +
       `<span class="stage-name">${esc(label)}</span>` +
       `<span class="stage-tag">${esc(tagText)}</span>` +
       `<span class="stage-meta">${timeHtml}${toolsHtml}${loopHtml}</span>` +
     `</div>` +
-    `<div class="${bodyClass}">${promptHtml}${thinkingHtml}${toolResultsHtml}${retrievalHtml}${marked.parse(content)}</div>`;
+    `<div class="stage-body">` +
+      promptHtml + thinkingHtml + toolResultsHtml + retrievalHtml +
+      (content ? `<div class="prose-content" style="margin-top:8px">${marked.parse(content)}</div>` : '') +
+    `</div>`;
 
-  stagesBox.appendChild(card);
+  stagesEl.appendChild(card);
+  scrollToBottom();
 }
 
-function renderPromptHtml(p, expanded) {
+/* ═══════════════════════════════════════════════════════════════════
+   USER INPUT PANELS
+═══════════════════════════════════════════════════════════════════ */
+
+function renderUserInputPanel(data) {
+  const ui        = data.ui        || 'text_input';
+  const outputVar = data.output_var || 'user_input';
+
+  if (ui === 'option_select') {
+    renderOptionSelect(data, outputVar);
+  } else if (ui === 'text_input') {
+    renderTextInput(data, outputVar);
+  }
+  // meeting_select handled separately via browser.js
+}
+
+function renderOptionSelect(data, outputVar) {
+  const prompt  = data.prompt_he || data.prompt || 'בחר אפשרות:';
+  const options = data.options   || [];
+  const multi   = data.multi_select || false;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'msg-agent';
+
+  const card = document.createElement('div');
+  card.className = 'option-select-card';
+
+  card.innerHTML = `<div class="option-select-prompt">${esc(prompt)}</div>`;
+
+  const selected = new Set();
+
+  options.forEach((opt) => {
+    const label    = typeof opt === 'string' ? opt : (opt.label || opt.text || String(opt));
+    const value    = typeof opt === 'string' ? opt : (opt.value ?? opt.label ?? opt.text ?? opt);
+    const desc     = typeof opt === 'object' ? (opt.description || '') : '';
+    const subtitle = typeof opt === 'object' ? (opt.subtitle || '') : '';
+    const presel   = typeof opt === 'object' ? !!opt.selected : false;
+
+    const btn = document.createElement('button');
+    btn.className = 'option-btn';
+    btn.dataset.value = JSON.stringify(value);
+
+    // Build button content: label + optional description + optional subtitle
+    let inner = `<span class="option-label">${esc(label)}</span>`;
+    if (desc) inner += `<span class="option-desc">${esc(desc)}</span>`;
+    if (subtitle) inner += `<span class="option-subtitle">${esc(subtitle)}</span>`;
+    btn.innerHTML = inner;
+
+    if (presel) {
+      btn.classList.add('selected');
+      selected.add(value);
+    }
+
+    btn.addEventListener('click', () => {
+      if (multi) {
+        btn.classList.toggle('selected');
+        const v = JSON.parse(btn.dataset.value);
+        if (btn.classList.contains('selected')) selected.add(v);
+        else selected.delete(v);
+      } else {
+        card.querySelectorAll('.option-btn').forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        selected.clear();
+        selected.add(JSON.parse(btn.dataset.value));
+      }
+    });
+    card.appendChild(btn);
+  });
+
+  const submitEl = document.createElement('button');
+  submitEl.className = 'option-submit';
+  submitEl.textContent = 'המשך';
+  submitEl.addEventListener('click', () => {
+    if (selected.size === 0) return;
+    const val = multi ? [...selected] : [...selected][0];
+    // Disable the whole panel
+    card.querySelectorAll('button').forEach(b => { b.disabled = true; });
+    submitResponse(outputVar, val);
+  });
+  card.appendChild(submitEl);
+
+  wrap.appendChild(card);
+  chatColumn.appendChild(wrap);
+  scrollToBottom();
+}
+
+function renderTextInput(data, outputVar) {
+  const prompt = data.prompt_he || data.prompt || 'הכנס טקסט:';
+
+  const wrap = document.createElement('div');
+  wrap.className = 'msg-agent';
+
+  const card = document.createElement('div');
+  card.className = 'text-input-card';
+  card.innerHTML = `<div class="text-input-prompt">${esc(prompt)}</div>`;
+
+  const textarea = document.createElement('textarea');
+  textarea.className = 'text-input-field';
+  textarea.rows = 3;
+  textarea.placeholder = 'הקלד כאן...';
+  card.appendChild(textarea);
+
+  const submitEl = document.createElement('button');
+  submitEl.className = 'text-input-submit';
+  submitEl.textContent = 'שלח';
+  submitEl.addEventListener('click', () => {
+    const val = textarea.value.trim();
+    if (!val) return;
+    textarea.disabled = true;
+    submitEl.disabled = true;
+    submitResponse(outputVar, val);
+  });
+  card.appendChild(submitEl);
+
+  wrap.appendChild(card);
+  chatColumn.appendChild(wrap);
+  textarea.focus();
+  scrollToBottom();
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   STAGE CARD DETAIL RENDERERS
+═══════════════════════════════════════════════════════════════════ */
+
+const _STAGE_TAGS = {
+  router:   'ניתוב',
+  rag:      'פרוטוקולים',
+  factual:  'עובדתי',
+  reviewer: 'עריכה',
+};
+
+function toggleStageCard(header) {
+  header.classList.toggle('open');
+  header.nextElementSibling.classList.toggle('visible');
+}
+
+function renderPromptHtml(p) {
   const sys  = p.system || '';
   const user = p.user   || '';
-  const open = expanded ? ' open' : '';
   return (
-    `<details class="sub-details"${open}>` +
+    `<details class="sub-details">` +
     `<summary class="sub-summary">פרומפט</summary>` +
     `<div class="sub-details-body">` +
-    `<div class="prompt-block">` +
-    `<div class="prompt-role">מערכת</div>` +
-    `<pre class="prompt-text">${esc(sys)}</pre>` +
-    `</div>` +
-    `<div class="prompt-block">` +
-    `<div class="prompt-role">משתמש</div>` +
-    `<pre class="prompt-text">${esc(user)}</pre>` +
-    `</div>` +
-    `</div>` +
-    `</details>`
+    `<div class="prompt-block"><div class="prompt-role">מערכת</div><pre class="prompt-text">${esc(sys)}</pre></div>` +
+    `<div class="prompt-block"><div class="prompt-role">משתמש</div><pre class="prompt-text">${esc(user)}</pre></div>` +
+    `</div></details>`
   );
 }
 
@@ -346,37 +574,27 @@ function renderThinkingHtml(thinking, llmMs) {
   return (
     `<details class="sub-details">` +
     `<summary class="sub-summary thinking-summary">מחשבות${esc(timeStr)}</summary>` +
-    `<div class="sub-details-body">` +
-    `<pre class="prompt-text thinking-text">${esc(thinking)}</pre>` +
-    `</div>` +
+    `<div class="sub-details-body"><pre class="prompt-text thinking-text">${esc(thinking)}</pre></div>` +
     `</details>`
   );
 }
 
-function renderToolResultHtml(tr, expanded) {
-  const name       = tr.name       || '';
-  const args       = tr.args       || {};
-  const result     = tr.result     || '';
-  const elapsedMs  = tr.elapsed_ms != null ? tr.elapsed_ms : null;
-  const argsStr    = JSON.stringify(args, null, 2);
-  const open       = expanded ? ' open' : '';
-  const timeStr    = elapsedMs != null
+function renderToolResultHtml(tr) {
+  const name      = tr.name       || '';
+  const args      = tr.args       || {};
+  const result    = tr.result     || '';
+  const elapsedMs = tr.elapsed_ms != null ? tr.elapsed_ms : null;
+  const argsStr   = JSON.stringify(args, null, 2);
+  const timeStr   = elapsedMs != null
     ? ` <span class="tool-time">${(elapsedMs / 1000).toFixed(1)}s</span>`
     : '';
   return (
-    `<details class="sub-details"${open}>` +
+    `<details class="sub-details">` +
     `<summary class="sub-summary"><span class="tool-summary-label">${esc(name)}</span>${timeStr}</summary>` +
     `<div class="sub-details-body">` +
-    `<div class="prompt-block">` +
-    `<div class="prompt-role">ארגומנטים</div>` +
-    `<pre class="prompt-text">${esc(argsStr)}</pre>` +
-    `</div>` +
-    `<div class="prompt-block">` +
-    `<div class="prompt-role">תוצאה</div>` +
-    `<pre class="prompt-text">${esc(result)}</pre>` +
-    `</div>` +
-    `</div>` +
-    `</details>`
+    `<div class="prompt-block"><div class="prompt-role">ארגומנטים</div><pre class="prompt-text">${esc(argsStr)}</pre></div>` +
+    `<div class="prompt-block"><div class="prompt-role">תוצאה</div><pre class="prompt-text">${esc(result)}</pre></div>` +
+    `</div></details>`
   );
 }
 
@@ -385,46 +603,46 @@ function renderRetrievalHtml(r) {
   const chunks   = r.chunks        || [];
   const chars    = r.context_chars || 0;
   const tokEst   = Math.round(chars / 2);
+  const ragMs    = r.rag_ms        || 0;
+  const ragTime  = ragMs > 0 ? ` · ${(ragMs / 1000).toFixed(1)}s` : '';
 
-  const ragMs    = r.rag_ms || 0;
-  const ragTimeStr = ragMs > 0 ? ` · ${(ragMs / 1000).toFixed(1)}s` : '';
-  const summaryLabel =
-    `פרטי אחזור — ${meetings.length} ישיבות · ${chunks.length} קטעים · ~${tokEst.toLocaleString()} טוקנים${ragTimeStr}`;
+  const label = `פרטי אחזור — ${meetings.length} ישיבות · ${chunks.length} קטעים · ~${tokEst.toLocaleString()} טוקנים${ragTime}`;
 
   let body = '<div class="stats-row">';
-  body += 'ישיבות: <strong>' + meetings.length + '</strong>';
-  body += ' &nbsp;|&nbsp; קטעים: <strong>' + chunks.length + '</strong>';
-  body += ' &nbsp;|&nbsp; הקשר: <strong>' + chars.toLocaleString() + '</strong>';
-  body += ' תווים (~' + tokEst.toLocaleString() + ' טוקנים)';
+  body += `ישיבות: <strong>${meetings.length}</strong>`;
+  body += ` &nbsp;|&nbsp; קטעים: <strong>${chunks.length}</strong>`;
+  body += ` &nbsp;|&nbsp; הקשר: <strong>${chars.toLocaleString()}</strong> תווים (~${tokEst.toLocaleString()} טוקנים)`;
   body += '</div>';
 
   if (meetings.length) {
-    body += '<div style="color:#666;font-size:.74rem;margin-bottom:6px;direction:rtl">';
-    body += meetings.map(esc).join(' &middot; ');
-    body += '</div>';
+    body += `<div style="color:#666;font-size:.74rem;margin-bottom:6px;direction:rtl">${meetings.map(esc).join(' · ')}</div>`;
   }
 
   if (chunks.length) {
     body += '<ul class="chunk-list">';
     for (const c of chunks) {
-      body += '<li class="chunk-item">';
-      body += '<span class="chunk-date">' + esc(c.date) + '</span>';
-      body += '<span class="chunk-topic">' + esc(c.topic) + '</span>';
-      body += '<span class="chunk-sim">sim&nbsp;' + c.p1_sim + '</span>';
-      body += '</li>';
+      body += `<li class="chunk-item">` +
+        `<span class="chunk-date">${esc(c.date)}</span>` +
+        `<span class="chunk-topic">${esc(c.topic)}</span>` +
+        `<span class="chunk-sim">sim&nbsp;${c.p1_sim}</span>` +
+        `</li>`;
     }
     body += '</ul>';
   }
 
   return (
     `<details class="sub-details">` +
-    `<summary class="sub-summary">${summaryLabel}</summary>` +
+    `<summary class="sub-summary">${label}</summary>` +
     `<div class="sub-details-body">${body}</div>` +
     `</details>`
   );
 }
 
-function toggleStageCard(header) {
-  header.classList.toggle('open');
-  header.nextElementSibling.classList.toggle('visible');
+/* ── Utility ───────────────────────────────────────────────────── */
+function esc(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }

@@ -1,42 +1,147 @@
 <!DOCTYPE html>
 <html dir="rtl" lang="he">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>KnessetLM</title>
-<link rel="stylesheet" href="/static/style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>כנס להם</title>
+  <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Assistant:wght@300;400;600;700&family=Heebo:wght@300;400;500;700;800&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  <script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          "colors": {
+            "on-surface": "#2e2f2d",
+            "tertiary-fixed": "#fec330",
+            "on-secondary-fixed": "#00375b",
+            "on-background": "#2e2f2d",
+            "background": "#f7f6f3",
+            "on-primary": "#d1ffc8",
+            "on-tertiary": "#fff1db",
+            "tertiary-fixed-dim": "#efb520",
+            "surface-container": "#e8e8e5",
+            "on-secondary-fixed-variant": "#005488",
+            "primary-container": "#b2faa9",
+            "on-surface-variant": "#5b5c5a",
+            "on-primary-fixed-variant": "#2a6c2c",
+            "primary-fixed": "#b2faa9",
+            "surface-container-high": "#e2e3df",
+            "on-tertiary-fixed": "#402d00",
+            "surface-variant": "#ddddda",
+            "surface-container-highest": "#ddddda",
+            "on-secondary-container": "#004a79",
+            "on-error": "#ffefec",
+            "tertiary-dim": "#674b00",
+            "error": "#b02500",
+            "on-primary-fixed": "#054e12",
+            "on-tertiary-fixed-variant": "#634900",
+            "on-tertiary-container": "#584000",
+            "secondary-fixed-dim": "#93c8ff",
+            "on-primary-container": "#1f6223",
+            "error-dim": "#b92902",
+            "on-secondary": "#ecf3ff",
+            "on-error-container": "#520c00",
+            "secondary-fixed": "#afd5ff",
+            "inverse-primary": "#b2faa9",
+            "secondary": "#005f99",
+            "inverse-surface": "#0d0f0d",
+            "error-container": "#f95630",
+            "outline-variant": "#adadab",
+            "primary": "#266829",
+            "surface-container-low": "#f1f1ee",
+            "inverse-on-surface": "#9d9d9b",
+            "tertiary-container": "#fec330",
+            "primary-fixed-dim": "#a4eb9c",
+            "secondary-container": "#afd5ff",
+            "surface": "#f7f6f3",
+            "surface-dim": "#d4d5d1",
+            "primary-dim": "#185c1e",
+            "outline": "#767775",
+            "surface-container-lowest": "#ffffff",
+            "secondary-dim": "#005386",
+            "tertiary": "#765600",
+            "surface-tint": "#266829",
+            "surface-bright": "#f7f6f3"
+          },
+          "borderRadius": {
+            "DEFAULT": "0.25rem",
+            "lg": "0.5rem",
+            "xl": "0.75rem",
+            "full": "9999px"
+          },
+          "fontFamily": {
+            "headline": ["Be Vietnam Pro"],
+            "body": ["Plus Jakarta Sans"],
+            "label": ["Plus Jakarta Sans"]
+          }
+        }
+      }
+    }
+  </script>
+  <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
+<body class="bg-surface overflow-hidden h-screen flex flex-col">
 
-<header>
-  <h1>KnessetLM</h1>
-  <span>חיפוש בפרוטוקולים של ועדות הכנסת</span>
-  <button id="dev-toggle" dir="ltr" title="מצב מפתח"><span class="dev-track"><span class="dev-thumb"></span></span><span class="dev-label">dev</span></button>
-</header>
+  <!-- Fixed header -->
+  <header class="flex-shrink-0 border-b border-surface-variant/20">
+    <div class="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
+      <div class="flex flex-col">
+        <div class="text-2xl font-bold text-[#2E7D32]" style="font-family:'Be Vietnam Pro',sans-serif">כנס להם</div>
+        <div class="text-xs text-on-surface-variant mt-0.5 opacity-70" style="font-family:'Assistant',sans-serif">קונסיירז' דיגיטלי</div>
+      </div>
+      <div class="flex items-center gap-3">
+        <button class="p-2 text-on-surface-variant hover:bg-surface-container rounded-full transition-colors" title="הגדרות">
+          <span class="material-symbols-outlined">settings</span>
+        </button>
+        <button class="p-2 text-on-surface-variant hover:bg-surface-container rounded-full transition-colors" title="עזרה">
+          <span class="material-symbols-outlined">help</span>
+        </button>
+      </div>
+    </div>
+  </header>
 
-<main>
-  <div class="card">
-    <textarea id="query-input"
-      placeholder="הזן שאלה בעברית... (לדוגמה: מה עמדת חברי הכנסת בנושא מיסוי חברות?)"
-      rows="3"></textarea>
-    <div class="row">
-      <span class="hint">Ctrl+Enter לשליחה</span>
-      <button id="submit">חפש</button>
+  <!-- Scrollable chat column -->
+  <div id="chat-column" class="flex-1 overflow-y-auto px-4 py-6 space-y-4">
+    <!-- Welcome state: shown until first query -->
+    <div id="welcome-state" class="flex flex-col items-center justify-center h-full gap-4 text-center py-16">
+      <div class="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
+        <span class="material-symbols-outlined text-3xl text-primary" style="font-variation-settings:'FILL' 1">auto_awesome</span>
+      </div>
+      <div>
+        <div class="text-xl font-bold text-on-surface mb-1">שאל שאלה על הכנסת</div>
+        <div class="text-sm text-on-surface-variant max-w-sm">חיפוש והצלבת מידע בפרוטוקולים של ועדות הכנסת</div>
+      </div>
+    </div>
+    <!-- Messages appended here by JS -->
+  </div>
+
+  <!-- Fixed input bar at bottom -->
+  <div id="input-bar" class="flex-shrink-0 bg-surface-container-highest/30 backdrop-blur-md border-t border-outline-variant/10 px-4 py-3">
+    <div class="max-w-5xl mx-auto flex items-end gap-3">
+      <textarea
+        id="query-input"
+        placeholder="שאל שאלה..."
+        rows="1"
+        class="flex-1 resize-none bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-4 py-3 text-sm text-on-surface placeholder-on-surface-variant/60 outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all leading-relaxed"
+        style="min-height:44px;max-height:160px"
+      ></textarea>
+      <button
+        id="submit-btn"
+        class="flex-shrink-0 w-11 h-11 bg-primary text-on-primary rounded-xl flex items-center justify-center hover:bg-primary-dim transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
+        title="שלח (Ctrl+Enter)"
+      >
+        <span class="material-symbols-outlined text-xl" style="font-variation-settings:'FILL' 1">send</span>
+      </button>
+    </div>
+    <div class="max-w-5xl mx-auto mt-1.5 px-1">
+      <span class="text-xs text-on-surface-variant/50">Ctrl+Enter לשליחה</span>
     </div>
   </div>
 
-  <div id="status"><span id="status-msg"></span><span id="status-timer"></span></div>
-  <div id="error-box"></div>
-
-  <div class="card" id="answer-box">
-    <div class="label">תשובה</div>
-    <div id="answer-content"></div>
-  </div>
-
-  <div id="stages-box"></div>
-</main>
-
-<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
-<script src="/static/app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+  <script src="/static/browser.js"></script>
+  <script src="/static/app.js"></script>
 </body>
 </html>

@@ -58,6 +58,15 @@ SUMMARIES_ROOT: Path = Path(
 TOP_K_MEETINGS: int = int(os.environ.get("KNESSET_TOP_K", str(_cfg.TOP_K_MEETINGS)))
 TOP_N_DIALOGS:  int = int(os.environ.get("KNESSET_TOP_N", str(_cfg.TOP_N_DIALOGS)))
 
+# ── Sessions ─────────────────────────────────────────────────────────────────
+
+SESSIONS_DIR: Path = Path(
+    os.environ.get(
+        "KNESSET_SESSIONS_DIR",
+        str(Path(__file__).parent.parent / "sessions"),
+    )
+)
+
 # ── Server ────────────────────────────────────────────────────────────────────
 
 PORT: int = int(os.environ.get("KNESSET_PORT", "5000"))

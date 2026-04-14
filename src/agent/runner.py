@@ -135,41 +135,92 @@ class MachineRunner:
 
     def run_stream(
         self,
-        question:  str,
-        top_k:     Optional[int] = None,
-        top_n:     Optional[int] = None,
+        question:       str,
+        top_k:          Optional[int] = None,
+        top_n:          Optional[int] = None,
+        resume:         Optional[dict] = None,   # checkpoint dict
+        user_response:  Optional[dict] = None,   # {"output_var": str, "value": any}
     ) -> Generator[tuple[str, object], None, None]:
         """
         Full agent loop: one or more BFS passes, looping when a continue_var is set.
 
         max_loops is read from back-edges in the machine JSON.
+
+        Resume protocol
+        ---------------
+        When a BFS pass hits a user_input node it yields ("user_input_required", {...})
+        and returns.  The caller should persist the checkpoint from that event and
+        later call run_stream again with:
+          resume        = checkpoint   # the dict from the event
+          user_response = {"output_var": <var>, "value": <user's answer>}
+        The resumed call restores context, injects the user's answer, and continues
+        the BFS exactly from where it paused.  Existing behavior when resume=None is
+        fully preserved.
         """
         eff_k = top_k if top_k is not None else self.top_k
         eff_n = top_n if top_n is not None else self.top_n
         max_loops = self.machine.max_loops_from_edges(default=3)
 
-        ctx = Context(question)
+        if resume is not None:
+            # ── Resumed execution ──────────────────────────────────────────
+            ctx = Context.from_snapshot(resume["ctx_snapshot"])
+            if user_response is not None:
+                ctx.set(user_response["output_var"], user_response["value"])
 
-        for loop_idx in range(max_loops):
-            yield from self._run_bfs_pass(ctx, loop_idx, eff_k, eff_n)
+            start_loop = resume["loop_idx"]
 
-            # Check loop_control from the last node that set it
-            # (We check all context vars named as continue/done vars in the machine)
-            continue_question = self._find_continue_var(ctx)
-            if continue_question:
-                ctx.set("question", continue_question)
-                ctx.reset_for_loop()
-                yield ("status", f"שואל שאלת המשך (סבב {loop_idx + 2}/{max_loops})…")
-                continue
+            # Run the resumed BFS pass (it takes over from the paused node)
+            yield from self._run_bfs_pass(ctx, start_loop, eff_k, eff_n, resume=resume)
 
-            # Emit final answer
-            final_answer = self._extract_final_answer(ctx)
-            if final_answer:
-                yield ("token", final_answer)
-            yield ("done", None)
-            return
+            # Check whether the resumed pass itself hit another user_input node
+            # (in that case _run_bfs_pass already yielded user_input_required and we
+            # must not emit "done" here — the next resume call will continue)
+            # We detect this by checking if the last event was user_input_required;
+            # since generators are lazy we can't look back, so instead we set a
+            # sentinel on ctx if a user_input node was encountered.
+            if ctx.get("_user_input_pending"):
+                return
 
-        # Exhausted loops
+            # Continue the outer loop from start_loop + 1
+            loop_range = range(start_loop + 1, max_loops)
+        else:
+            # ── Fresh execution ────────────────────────────────────────────
+            ctx = Context(question)
+            loop_range = range(max_loops)
+
+        if resume is None:
+            # Normal path — run first pass then additional loop passes
+            first_idx = 0
+            yield from self._run_bfs_pass(ctx, first_idx, eff_k, eff_n)
+            if ctx.get("_user_input_pending"):
+                return
+
+            for loop_idx in range(1, max_loops):
+                continue_question = self._find_continue_var(ctx)
+                if continue_question:
+                    ctx.set("question", continue_question)
+                    ctx.reset_for_loop()
+                    yield ("status", f"שואל שאלת המשך (סבב {loop_idx + 1}/{max_loops})…")
+                    yield from self._run_bfs_pass(ctx, loop_idx, eff_k, eff_n)
+                    if ctx.get("_user_input_pending"):
+                        return
+                else:
+                    break
+        else:
+            # Resumed path — the first resumed pass is already done; run more if needed
+            for loop_idx in loop_range:
+                continue_question = self._find_continue_var(ctx)
+                if continue_question:
+                    ctx.set("question", continue_question)
+                    ctx.reset_for_loop()
+                    yield ("status", f"שואל שאלת המשך (סבב {loop_idx + 1}/{max_loops})…")
+                    yield from self._run_bfs_pass(ctx, loop_idx, eff_k, eff_n)
+                    if ctx.get("_user_input_pending"):
+                        return
+                else:
+                    break
+
+        # Emit final answer
         final_answer = self._extract_final_answer(ctx)
         if final_answer:
             yield ("token", final_answer)
@@ -178,13 +229,40 @@ class MachineRunner:
     # ── BFS forward pass ──────────────────────────────────────────────────────
 
     def _run_bfs_pass(
-        self, ctx: Context, loop_idx: int, top_k: int, top_n: int
+        self,
+        ctx:      Context,
+        loop_idx: int,
+        top_k:    int,
+        top_n:    int,
+        resume:   Optional[dict] = None,
     ) -> Generator:
-        first_id  = self.machine.first_llm_node_id()
-        queue:    list[str] = [first_id]
-        enqueued: set[str]  = {first_id}
-        completed: set[str] = set()
-        fired_to: dict[str, set[str]] = {}
+        if resume:
+            # Restore BFS state from checkpoint; mark paused node as completed and
+            # fire its outgoing transitions now that ctx holds the user's answer.
+            completed: set[str]          = set(resume["completed_node_ids"]) | {resume["paused_node_id"]}
+            fired_to:  dict[str, set[str]] = {k: set(v) for k, v in resume.get("fired_to_snapshot", {}).items()}
+            queue:    list[str] = []
+            enqueued: set[str]  = set()
+
+            for edge in self.machine.outgoing_transitions(resume["paused_node_id"]):
+                tgt_id   = edge["target"]
+                tgt_node = self.machine.get_node(tgt_id)
+                if (tgt_node.get("imaginary")
+                        or tgt_node.get("type") not in ("llm_call", "user_input")
+                        or tgt_id in completed):
+                    continue
+                if not evaluate_condition(edge.get("condition", ""), ctx):
+                    continue
+                fired_to.setdefault(tgt_id, set()).add(resume["paused_node_id"])
+                if tgt_id not in enqueued:
+                    queue.append(tgt_id)
+                    enqueued.add(tgt_id)
+        else:
+            first_id   = self.machine.first_llm_node_id()
+            queue      = [first_id]
+            enqueued   = {first_id}
+            completed  = set()
+            fired_to   = {}
 
         while queue:
             node_id = queue.pop(0)
@@ -195,6 +273,14 @@ class MachineRunner:
             if not required.issubset(completed):
                 queue.append(node_id)
                 continue
+
+            # ── user_input node — pause BFS, emit checkpoint ──────────────
+            node_type = node.get("type", "llm_call")
+            if node_type == "user_input":
+                yield from self._run_user_input_node(
+                    node, node_id, loop_idx, completed, fired_to, ctx
+                )
+                return  # BFS ends; caller resumes via run_stream(resume=...)
 
             data         = node.get("data", {})
             node_prompt  = data.get("system_prompt", "")
@@ -323,7 +409,7 @@ class MachineRunner:
                 tgt_node = self.machine.get_node(tgt_id)
 
                 if (tgt_node.get("imaginary")
-                        or tgt_node.get("type") != "llm_call"
+                        or tgt_node.get("type") not in ("llm_call", "user_input")
                         or tgt_id in completed):
                     continue
 
@@ -334,6 +420,92 @@ class MachineRunner:
                 if tgt_id not in enqueued:
                     queue.append(tgt_id)
                     enqueued.add(tgt_id)
+
+    # ── User-input node (pause/checkpoint) ───────────────────────────────────
+
+    def _run_user_input_node(
+        self,
+        node:      dict,
+        node_id:   str,
+        loop_idx:  int,
+        completed: set[str],
+        fired_to:  dict[str, set[str]],
+        ctx:       Context,
+    ) -> Generator:
+        """
+        Pause BFS at a user_input node and emit a checkpoint.
+
+        Yields ("status", ...) and ("user_input_required", {...checkpoint...}).
+        After yielding, the caller must return — BFS resumes on the next
+        run_stream(resume=checkpoint, user_response=...) call.
+        """
+        data    = node.get("data", {})
+        ui      = data.get("ui", "text_input")
+        raw_prompt = data.get("prompt_he", "")
+        # Render {{var}} placeholders in the prompt using current context
+        prompt_he = ctx.render_template(raw_prompt)
+
+        ui_event: dict = {
+            "node_id":    node_id,
+            "node_label": node.get("label", ""),
+            "ui":         ui,
+            "prompt_he":  prompt_he,
+            "output_var": data.get("output_var", "user_input"),
+        }
+
+        # ── option_select payload ─────────────────────────────────────────
+        if ui == "option_select":
+            preselect_var = data.get("preselect_var", "")
+            preselected   = ctx.get(preselect_var, "") if preselect_var else ""
+            multi         = data.get("multi_select", False)
+
+            # Map of option value → which context var holds the reformulated question
+            _QUESTION_VARS: dict[str, str] = {
+                "פרוטוקולים": "question_for_rag",
+                "עובדתי":     "question_for_fact",
+                "דובר":       "question_for_speaker",
+            }
+            raw_options = data.get("options", [])
+            options_out = []
+            for opt in raw_options:
+                if isinstance(opt, str):
+                    val = opt; label = opt; desc = ""
+                else:
+                    val   = opt.get("value", opt.get("label", ""))
+                    label = opt.get("label", val)
+                    desc  = opt.get("description", "")
+
+                item: dict = {
+                    "value":       val,
+                    "label":       label,
+                    "description": desc,
+                    "selected":    (val == preselected),
+                }
+                # Attach reformulated question as subtitle when different from original
+                q_var = _QUESTION_VARS.get(val, "")
+                if q_var:
+                    q_val = ctx.get(q_var, "") or ""
+                    orig  = ctx.get("question", "") or ""
+                    if q_val and q_val.strip() != orig.strip():
+                        item["subtitle"] = q_val
+                options_out.append(item)
+
+            ui_event["options"]      = options_out
+            ui_event["multi_select"] = multi
+            ui_event["preselected"]  = preselected
+        checkpoint: dict = {
+            "loop_idx":           loop_idx,
+            "completed_node_ids": list(completed),
+            "paused_node_id":     node_id,
+            "fired_to_snapshot":  {k: list(v) for k, v in fired_to.items()},
+            "ctx_snapshot":       ctx.to_snapshot(),
+            "pending_ui_event":   ui_event,
+        }
+        # Signal to run_stream that BFS paused on a user_input node
+        ctx.set("_user_input_pending", True)
+
+        yield ("status", f"ממתין לקלט משתמש: {node.get('label', '')}…")
+        yield ("user_input_required", {**ui_event, "checkpoint": checkpoint})
 
     # ── Node executor (agentic tool loop) ─────────────────────────────────────
 

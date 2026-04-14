@@ -71,6 +71,27 @@ class Context:
     def as_dict(self) -> dict:
         return dict(self._vars)
 
+    # ── Serialization ─────────────────────────────────────────────────────────
+
+    def to_snapshot(self) -> dict:
+        """Serialize full context state for checkpointing.
+
+        Internal vars (names starting with '_') are excluded — they are
+        transient signals used within a single run and must not persist.
+        """
+        return {
+            "vars":         {k: v for k, v in self._vars.items() if not k.startswith("_")},
+            "node_outputs": dict(self._node_outputs),
+        }
+
+    @classmethod
+    def from_snapshot(cls, data: dict) -> "Context":
+        """Restore context from a checkpoint snapshot."""
+        obj = cls.__new__(cls)
+        obj._vars         = data.get("vars", {})
+        obj._node_outputs = data.get("node_outputs", {})
+        return obj
+
     # ── Loop reset ────────────────────────────────────────────────────────────
 
     def reset_for_loop(self) -> None:

@@ -4,20 +4,21 @@ machine.py
 StateMachine: loads, validates, and provides graph-traversal helpers for
 a machine JSON produced by the agent designer.
 
-Machine JSON schema (version 2)
---------------------------------
+Machine JSON schema (version 2 / 3)
+-------------------------------------
 {
-  "version": 2,
+  "version": 2,   # or 3 — version 3 adds user_input node type
   "id": "...",
   "name": "...",
   "nodes": [
     {
       "id":        str,
-      "type":      "begin" | "llm_call" | "tool",
+      "type":      "begin" | "llm_call" | "tool" | "user_input",
       "label":     str,
       "imaginary": bool,  # skipped by the engine
       "terminal":  bool,  # no auto-transition continues after this node
       "data": {
+        # llm_call fields:
         "system_prompt":   str,
         "input_template":  str,          # {{var}} placeholders
         "output_format":   dict | null,  # see parsers.py
@@ -25,9 +26,15 @@ Machine JSON schema (version 2)
         "rag":             str,          # "3level" → triggers retrieval
         "temperature":     float,
         "max_tokens":      int,
+        # tool fields:
         "function_name":   str,          # tool nodes only
         "description":     str,          # tool nodes only
         "parameters":      dict,         # tool nodes only (JSON Schema)
+        # user_input fields (version 3):
+        "ui":              str,          # "option_select" | "text_input" | "meeting_select"
+        "prompt_he":       str,          # Hebrew prompt shown to the user
+        "output_var":      str,          # context var name where user response is stored
+        "multi_select":    bool,         # option_select only — allow multiple selections
       }
     }
   ],
@@ -51,7 +58,7 @@ import warnings
 from pathlib import Path
 from typing import Any
 
-_SUPPORTED_VERSIONS = {2}
+_SUPPORTED_VERSIONS = {2, 3}
 
 
 class StateMachine:

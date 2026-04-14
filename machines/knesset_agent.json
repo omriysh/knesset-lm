@@ -18,7 +18,7 @@
       "condition": "agent in ['פרוטוקולים', 'שניהם']",
       "id": "e_9f9e5e11",
       "label": "החלטה",
-      "source": "llm_call_bac8de18",
+      "source": "user_input_confirm_agent",
       "target": "llm_call_0b6c40bd",
       "type": "transition"
     },
@@ -27,6 +27,14 @@
       "label": "",
       "source": "begin_52b20e55",
       "target": "llm_call_bac8de18",
+      "type": "transition"
+    },
+    {
+      "condition": "agent != 'לא רלוונטי'",
+      "id": "e_router_confirm",
+      "label": "אשר",
+      "source": "llm_call_bac8de18",
+      "target": "user_input_confirm_agent",
       "type": "transition"
     },
     {
@@ -44,17 +52,10 @@
       "type": "transition"
     },
     {
-      "id": "e_d282a31f",
-      "label": "החלטה",
-      "source": "llm_call_bac8de18",
-      "target": "llm_call_1a7232ee",
-      "type": "transition"
-    },
-    {
       "condition": "agent in ['עובדתי', 'שניהם']",
       "id": "e_4b31c4f3",
       "label": "החלטה",
-      "source": "llm_call_bac8de18",
+      "source": "user_input_confirm_agent",
       "target": "llm_call_07cae0ca",
       "type": "transition"
     },
@@ -62,7 +63,7 @@
       "condition": "agent == 'דובר'",
       "id": "e_router_speaker",
       "label": "החלטה",
-      "source": "llm_call_bac8de18",
+      "source": "user_input_confirm_agent",
       "target": "llm_call_speaker_prot",
       "type": "transition"
     },
@@ -237,6 +238,31 @@
       },
       "terminal": false,
       "type": "llm_call"
+    },
+    {
+      "data": {
+        "ui": "option_select",
+        "prompt_he": "הסוכן המומלץ: {{agent}}. אשר או שנה את כיוון החיפוש:",
+        "output_var": "agent",
+        "preselect_var": "agent",
+        "multi_select": false,
+        "options": [
+          {"value": "פרוטוקולים", "label": "פרוטוקולים", "description": "חיפוש סמנטי בפרוטוקולי ועדות הכנסת"},
+          {"value": "עובדתי",     "label": "עובדתי",     "description": "מאגר רשמי — הרכב ועדות, חקיקה, פרטי ח\"כ"},
+          {"value": "דובר",       "label": "דובר",       "description": "דברי ח\"כ ספציפי בוועדה מסוימת"},
+          {"value": "שניהם",      "label": "שניהם",      "description": "שני הסוכנים — פרוטוקולים ועובדתי"},
+          {"value": "לא רלוונטי","label": "לא רלוונטי","description": "השאלה מחוץ לתחום הכנסת"}
+        ]
+      },
+      "id": "user_input_confirm_agent",
+      "imaginary": false,
+      "label": "אשר כיוון חיפוש",
+      "position": {
+        "x": 903,
+        "y": 280
+      },
+      "terminal": false,
+      "type": "user_input"
     },
     {
       "data": {
@@ -568,5 +594,5 @@
       "type": "tool"
     }
   ],
-  "version": 2
+  "version": 3
 }
