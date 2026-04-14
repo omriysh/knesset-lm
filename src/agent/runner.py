@@ -278,7 +278,8 @@ class MachineRunner:
             node_type = node.get("type", "llm_call")
             if node_type == "user_input":
                 yield from self._run_user_input_node(
-                    node, node_id, loop_idx, completed, fired_to, ctx
+                    node, node_id, loop_idx, completed, fired_to, ctx,
+                    top_k=top_k, top_n=top_n,
                 )
                 return  # BFS ends; caller resumes via run_stream(resume=...)
 
@@ -294,7 +295,7 @@ class MachineRunner:
 
             # ── RAG retrieval ──────────────────────────────────────────────
             retrieval_info = None
-            if data.get("rag") == "3level":
+            if data.get("rag") == "3level" and not ctx.get("rag_context"):
                 yield ("status", "מאחזר קטעי פרוטוקולים…")
                 rag_q = (
                     ctx.get("question_for_rag")
@@ -431,6 +432,8 @@ class MachineRunner:
         completed: set[str],
         fired_to:  dict[str, set[str]],
         ctx:       Context,
+        top_k:     int = 5,
+        top_n:     int = 15,
     ) -> Generator:
         """
         Pause BFS at a user_input node and emit a checkpoint.
@@ -493,6 +496,49 @@ class MachineRunner:
             ui_event["options"]      = options_out
             ui_event["multi_select"] = multi
             ui_event["preselected"]  = preselected
+
+        # ── deep_dive payload ─────────────────────────────────────────────
+        elif ui == "deep_dive":
+            query = (
+                ctx.get("question_for_rag")
+                or ctx.get("question")
+                or ctx.get("original_question", "")
+            )
+            yield ("status", "מאחזר ישיבות רלוונטיות לעיון…")
+            _DEEP_DIVE_TOP_K = 20
+            context_str, debug = self.retriever(
+                question=query, top_k=_DEEP_DIVE_TOP_K, top_n=top_n
+            )
+            # Pre-populate ctx so if the session is ever resumed the LLM
+            # skips a second retrieval (RAG skip gate).
+            existing_paths = ctx.get("meeting_paths") or {}
+            ctx.set("meeting_paths", {**existing_paths, **debug.get("meeting_paths", {})})
+            ctx.set("rag_context", context_str)
+
+            meeting_ids = debug.get("meetings", [])
+            meta_by_mid: dict[str, dict] = {}
+            for item in debug.get("selected_pass1", []):
+                mid = item["meta"].get("meeting_id", "")
+                if mid and mid not in meta_by_mid:
+                    meta_by_mid[mid] = item["meta"]
+
+            meetings_out = []
+            for rank, mid in enumerate(meeting_ids):
+                meta  = meta_by_mid.get(mid, {})
+                date  = meta.get("date", "")
+                comm  = meta.get("committee", "")
+                title = f"{comm} — {date}" if comm and date else mid
+                meetings_out.append({
+                    "meeting_id": mid,
+                    "date":       date,
+                    "committee":  comm,
+                    "title":      title,
+                    "score":      round(max(0.5, 1.0 - rank * 0.05), 2),
+                })
+
+            ui_event["meetings"]         = meetings_out
+            ui_event["query"]            = query
+            ui_event["original_question"] = ctx.get("original_question", query)
         checkpoint: dict = {
             "loop_idx":           loop_idx,
             "completed_node_ids": list(completed),

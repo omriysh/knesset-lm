@@ -49,7 +49,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 import config
-from agent.llm.qwen3 import Qwen3LlamaBackend  # swap for GemmaLlamaBackend if using Gemma
+from agent.llm.gemma import GemmaLlamaBackend
 from agent.machine import StateMachine
 from agent.runner import MachineRunner, build_tool_registry
 from indexing.embedder import ProtocolEmbedder
@@ -91,7 +91,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[web]   WARNING: could not count collections: {e}", flush=True)
 
-    backend = Qwen3LlamaBackend(url=settings.LLAMA_SERVER)
+    backend = GemmaLlamaBackend(url=settings.LLAMA_SERVER)
 
     # ── Summary tools (need meeting_paths injected per-request) ──────────────
     summaries_root = settings.SUMMARIES_ROOT
@@ -403,6 +403,14 @@ async def research_start(req: ResearchStartRequest, request: Request):
                     checkpoint   = ev_data.get("checkpoint", {})
                     pending_ui   = checkpoint.get("pending_ui_event", {})
 
+                    # Extract meeting_paths from ctx_snapshot so workspace endpoints work
+                    ctx_snap = checkpoint.get("ctx_snapshot", {})
+                    meeting_paths_snap = ctx_snap.get("vars", {}).get("meeting_paths") or {}
+                    workspace_snap: dict = {}
+                    if meeting_paths_snap:
+                        workspace_snap["meeting_paths"] = meeting_paths_snap
+                        workspace_snap.setdefault("selected_chunks", [])
+
                     session = ResearchSession(
                         session_id          = session_id,
                         status              = "awaiting_user",
@@ -410,6 +418,7 @@ async def research_start(req: ResearchStartRequest, request: Request):
                         created_at          = created_at,
                         updated_at          = _now(),
                         machine_checkpoint  = checkpoint,
+                        workspace_data      = workspace_snap or None,
                         final_answer        = None,
                         error               = None,
                     )
@@ -613,6 +622,16 @@ async def research_respond(
                 elif ev_type == "user_input_required":
                     new_checkpoint = ev_data.get("checkpoint", {})
 
+                    # Extract meeting_paths from ctx_snapshot so workspace endpoints work
+                    ctx_snap2 = new_checkpoint.get("ctx_snapshot", {})
+                    meeting_paths_snap2 = ctx_snap2.get("vars", {}).get("meeting_paths") or {}
+                    prev_workspace = session.workspace_data or {}
+                    if meeting_paths_snap2:
+                        merged_workspace: dict = {**prev_workspace, "meeting_paths": {**prev_workspace.get("meeting_paths", {}), **meeting_paths_snap2}}
+                        merged_workspace.setdefault("selected_chunks", [])
+                    else:
+                        merged_workspace = prev_workspace or None
+
                     updated = ResearchSession(
                         session_id          = session_id,
                         status              = "awaiting_user",
@@ -620,6 +639,7 @@ async def research_respond(
                         created_at          = session.created_at,
                         updated_at          = _now(),
                         machine_checkpoint  = new_checkpoint,
+                        workspace_data      = merged_workspace or None,
                         final_answer        = None,
                         error               = None,
                     )
@@ -706,7 +726,7 @@ _ATTEND_RE = __import__("re").compile(r"נוכח|נעדר|חסר")
 
 
 @app.get("/api/research/{session_id}/rag")
-async def research_rag(session_id: str, query: str, request: Request):
+async def research_rag(session_id: str, query: str, request: Request, top_k: int = 0):
     """
     Run 3-level RAG retrieval for a workspace query.
 
@@ -726,7 +746,7 @@ async def research_rag(session_id: str, query: str, request: Request):
 
     settings = request.app.state.settings
     retriever = request.app.state.retriever
-    top_k = settings.TOP_K_MEETINGS
+    top_k = top_k if top_k > 0 else settings.TOP_K_MEETINGS
     top_n = settings.TOP_N_DIALOGS
 
     loop = asyncio.get_event_loop()

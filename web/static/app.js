@@ -19,8 +19,9 @@ const submitBtn   = document.getElementById('submit-btn');
 marked.use({ breaks: true, gfm: true });
 
 /* ── State ─────────────────────────────────────────────────────── */
-let running     = false;
-let sessionId   = null;   // current or last session id
+let running       = false;
+let sessionId     = null;   // current or last session id
+let _lastQuestion = '';     // most recent user question (for explore-sources)
 
 /* ── Textarea auto-resize ───────────────────────────────────────── */
 queryInput.addEventListener('input', () => {
@@ -45,6 +46,7 @@ async function startQuery() {
   const question = queryInput.value.trim();
   if (!question) return;
 
+  _lastQuestion = question;
   running = true;
   submitBtn.disabled = true;
   queryInput.value = '';
@@ -154,9 +156,38 @@ function handleEvent(ev, data, refs) {
       break;
     }
 
-    case 'done':
+    case 'done': {
       finaliseLiveCard(refs.stagesEl);
+      // "Explore sources" button — opens protocol browser post-completion
+      const exploreWrap = document.createElement('div');
+      exploreWrap.className = 'explore-sources-row';
+      const exploreBtn = document.createElement('button');
+      exploreBtn.className = 'explore-sources-btn';
+      exploreBtn.textContent = 'חקור מקורות';
+      exploreBtn.addEventListener('click', async () => {
+        exploreBtn.disabled = true;
+        exploreBtn.textContent = 'טוען…';
+        try {
+          const q   = encodeURIComponent(_lastQuestion);
+          const res = await fetch(`/api/research/${sessionId}/rag?query=${q}&top_k=20`);
+          const rd  = await res.json();
+          const mts = rd.meetings || [];
+          openProtocolBrowser(sessionId, mts[0]?.meeting_id || null, mts, {
+            originalQuestion: _lastQuestion,
+            postCompletion: true,
+          });
+          exploreBtn.textContent = 'חקור מקורות';
+          exploreBtn.disabled = false;
+        } catch {
+          exploreBtn.disabled = false;
+          exploreBtn.textContent = 'שגיאה — נסה שוב';
+        }
+      });
+      exploreWrap.appendChild(exploreBtn);
+      chatColumn.appendChild(exploreWrap);
+      scrollToBottom();
       break;
+    }
 
     case 'error':
       finaliseLiveCard(refs.stagesEl);
@@ -432,8 +463,18 @@ function renderUserInputPanel(data) {
     renderOptionSelect(data, outputVar);
   } else if (ui === 'text_input') {
     renderTextInput(data, outputVar);
+  } else if (ui === 'deep_dive') {
+    const meetings = data.meetings || [];
+    openProtocolBrowser(
+      sessionId,
+      meetings[0]?.meeting_id || null,
+      meetings,
+      {
+        originalQuestion: data.original_question || data.query || _lastQuestion || '',
+        postCompletion: false,
+      }
+    );
   }
-  // meeting_select handled separately via browser.js
 }
 
 function renderOptionSelect(data, outputVar) {

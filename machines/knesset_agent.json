@@ -15,11 +15,35 @@
       "type": "tool_link"
     },
     {
-      "condition": "agent in ['פרוטוקולים', 'שניהם']",
+      "condition": "agent == 'שניהם'",
       "id": "e_9f9e5e11",
       "label": "החלטה",
       "source": "user_input_confirm_agent",
       "target": "llm_call_0b6c40bd",
+      "type": "transition"
+    },
+    {
+      "condition": "agent == 'פרוטוקולים'",
+      "id": "e_confirm_mode",
+      "label": "בחר מצב",
+      "source": "user_input_confirm_agent",
+      "target": "user_input_mode_select",
+      "type": "transition"
+    },
+    {
+      "condition": "research_mode == 'summarize'",
+      "id": "e_mode_summarize",
+      "label": "סכם",
+      "source": "user_input_mode_select",
+      "target": "llm_call_0b6c40bd",
+      "type": "transition"
+    },
+    {
+      "condition": "research_mode == 'deep_dive'",
+      "id": "e_mode_deepdive",
+      "label": "צלול",
+      "source": "user_input_mode_select",
+      "target": "user_input_deep_dive",
       "type": "transition"
     },
     {
@@ -238,6 +262,38 @@
       },
       "terminal": false,
       "type": "llm_call"
+    },
+    {
+      "data": {
+        "ui": "option_select",
+        "prompt_he": "כיצד תרצה להמשיך?",
+        "output_var": "research_mode",
+        "preselect_var": "",
+        "multi_select": false,
+        "options": [
+          {"value": "summarize", "label": "סכם עבורי", "description": "ניתוח אוטומטי של קטעים מומלצים מהפרוטוקולים"},
+          {"value": "deep_dive", "label": "צלול לפרוטוקולים", "description": "עיון עצמי, חיפוש חופשי ושאלות ממוקדות על הישיבות"}
+        ]
+      },
+      "id": "user_input_mode_select",
+      "imaginary": false,
+      "label": "בחר מצב מחקר",
+      "position": {"x": 903, "y": 380},
+      "terminal": false,
+      "type": "user_input"
+    },
+    {
+      "data": {
+        "ui": "deep_dive",
+        "prompt_he": "צוללים לפרוטוקולים…",
+        "output_var": "selected_meetings"
+      },
+      "id": "user_input_deep_dive",
+      "imaginary": false,
+      "label": "צלול לפרוטוקולים",
+      "position": {"x": 720, "y": 380},
+      "terminal": true,
+      "type": "user_input"
     },
     {
       "data": {
