@@ -371,6 +371,15 @@ async function _loadMeeting(meetingId) {
     // Init heatmap with grey bands (no scores yet)
     _initHeatmap(transcriptData.chunks || []);
 
+    // Heatmap strip click → proportional scroll.
+    // Uses col.scrollHeight coordinates to match hm-viewport tracking.
+    const strip = _panel.querySelector('#heatmap-strip');
+    strip.addEventListener('click', e => {
+      const rect = strip.getBoundingClientRect();
+      const pct  = (e.clientY - rect.top) / rect.height;
+      col.scrollTo({ top: Math.max(0, pct * col.scrollHeight), behavior: 'smooth' });
+    });
+
     // Scroll listener → update viewport indicator
     col.addEventListener('scroll', _updateHeatmapViewport, { passive: true });
 
@@ -509,7 +518,6 @@ function _renderHeatmap(scores) {
   bandsEl.innerHTML = _hmChunks.map((c, i) => {
     const flex = c.chars / total;
     return `<div class="hm-band" style="flex:${flex}; background:${_heatColor(scores[i])}"
-                 onclick="browserScrollToChunk('${_esc(c.chunk_id)}')"
                  title="${_heatLabel(scores[i])}"></div>`;
   }).join('');
 }
@@ -584,14 +592,27 @@ function _filterByBullet(bulletIdx) {
 
   // Scroll to first relevant chunk
   const first = col.querySelector('.chunk-card:not(.dimmed)');
-  if (first) first.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (first) {
+    const target = col.scrollTop
+      + first.getBoundingClientRect().top
+      - col.getBoundingClientRect().top
+      - 32;
+    col.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+  }
 }
 
 /* ── Scroll transcript to chunk ──────────────────────────────────── */
 function browserScrollToChunk(chunkId) {
   const col  = _panel?.querySelector('#browser-transcript-col');
   const card = col?.querySelector(`.chunk-card[data-chunk-id="${chunkId}"]`);
-  if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (!col || !card) return;
+
+  const target = col.scrollTop
+    + card.getBoundingClientRect().top
+    - col.getBoundingClientRect().top
+    - col.clientHeight / 2
+    + card.clientHeight / 2;
+  col.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
 }
 
 /* ── Sidebar switch meeting ──────────────────────────────────────── */
