@@ -125,6 +125,66 @@ def parse_full_text_speeches(full_text: str) -> list[dict] | None:
     return speeches if speeches else None
 
 
+def transcript_path_from_summary(summary_path: Path) -> Path:
+    """Derive the raw transcript JSON path from a summary .txt path."""
+    return Path(
+        str(summary_path)
+        .replace("summaries", "raw_transcriptions", 1)
+        .replace(".txt", ".json")
+    )
+
+
+def format_meeting_chunks(meeting: dict) -> list[dict]:
+    """
+    Format a meeting into display chunks for the web UI.
+
+    Returns list of {chunk_id: str, speaker: str, text: str}.
+
+    Three formats handled:
+    - structured speeches  → ftfy-cleaned text per speech
+    - full_text (parsable) → speaker-turn split speeches
+    - full_text (fallback) → paragraph split, empty speaker
+    """
+    import ftfy
+
+    chunks = []
+    if "speeches" in meeting:
+        for idx, speech in enumerate(meeting["speeches"]):
+            speaker = speech.get("speaker", "").strip()
+            text    = speech.get("text_he", "").strip()
+            if not text and not speaker:
+                continue
+            chunks.append({
+                "chunk_id": str(idx),
+                "speaker":  speaker,
+                "text":     ftfy.fix_text(text),
+            })
+    else:
+        full_text = meeting.get("full_text", "")
+        parsed = parse_full_text_speeches(full_text)
+        if parsed:
+            for idx, speech in enumerate(parsed):
+                speaker = speech.get("speaker", "").strip()
+                text    = speech.get("text_he", "").strip()
+                if text:
+                    chunks.append({
+                        "chunk_id": str(idx),
+                        "speaker":  speaker,
+                        "text":     text,
+                    })
+        else:
+            paragraphs = [p.strip() for p in full_text.split("\n\n") if p.strip()]
+            if not paragraphs:
+                paragraphs = [p.strip() for p in full_text.split("\n") if p.strip()]
+            for idx, para in enumerate(paragraphs):
+                chunks.append({
+                    "chunk_id": str(idx),
+                    "speaker":  "",
+                    "text":     para,
+                })
+    return chunks
+
+
 def chunk_transcript(text: str, max_chars: int = MAX_CHUNK_CHARS) -> list[str]:
     """
     Split a transcript into chunks that each fit within max_chars.

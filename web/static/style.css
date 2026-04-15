@@ -654,6 +654,7 @@ details[open] > .sub-summary::before { transform: rotate(90deg); }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  display: none;
 }
 
 .browser-header-actions {

@@ -10,11 +10,12 @@ No index required — just the raw transcriptions.
 
 from __future__ import annotations
 
-import json
 import re
 from difflib import SequenceMatcher, get_close_matches
 from pathlib import Path
 from typing import Optional
+
+from utils.meeting import load_meeting
 
 _HCK_RE = re.compile(r'''ח["׳']\s*כ\s*''')
 
@@ -117,8 +118,7 @@ def get_mk_speeches_in_committee(
 
     for json_path in json_files:
         try:
-            with open(json_path, encoding="utf-8") as f:
-                meeting = json.load(f)
+            meeting = load_meeting(json_path)
         except Exception:
             continue
 

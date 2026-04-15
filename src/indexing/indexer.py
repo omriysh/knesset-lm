@@ -34,6 +34,7 @@ import config
 from indexing.embedder import ProtocolEmbedder
 from indexing.extract_dialogs import extract_dialogs_coherence
 from indexing.parse_summary import parse_summary_bullets
+from utils.meeting import load_meeting
 
 
 @dataclass
@@ -312,8 +313,7 @@ def index_meeting(
     force         : re-index even if already present
     *_coll_name   : override collection names (defaults from config.py)
     """
-    with open(json_path, encoding="utf-8") as f:
-        data = json.load(f)
+    data = load_meeting(json_path)
 
     speeches = data.get("speeches") or []
     if not speeches:

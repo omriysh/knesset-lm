@@ -34,7 +34,6 @@ import sys
 import threading
 import traceback
 import uuid
-import ftfy
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -996,71 +995,28 @@ async def research_meeting_transcript(session_id: str, meeting_id: str, request:
             status_code=404,
         )
 
-    # Derive transcription path from summary path
-    transcript_path = Path(
-        path_str
-        .replace("summaries", "raw_transcriptions", 1)
-        .replace(".txt", ".json")
-    )
+    from utils.meeting import load_meeting, transcript_path_from_summary, format_meeting_chunks
+
+    transcript_path = transcript_path_from_summary(Path(path_str))
     if not transcript_path.exists():
         return JSONResponse(
             {"error": f"Transcript file not found: {transcript_path}"},
             status_code=404,
         )
 
-    import json as _json
-    meeting = _json.loads(transcript_path.read_text(encoding="utf-8"))
+    meeting = load_meeting(transcript_path)
 
     # Derive date and committee from filename
     name = transcript_path.stem
     parts = name.split("_")
     date = f"{parts[0]}/{parts[1]}/{parts[2]}" if len(parts) >= 4 else ""
     committee = transcript_path.parent.name
-    title = f"{committee} — {date}" if committee and date else meeting_id
-
-    chunks = []
-    if "speeches" in meeting:
-        for idx, speech in enumerate(meeting["speeches"]):
-            speaker = speech.get("speaker", "").strip()
-            text    = speech.get("text_he", "").strip()
-            if not text and not speaker:
-                continue
-            chunks.append({
-                "chunk_id": str(idx),
-                "speaker":  speaker,
-                "text":     ftfy.fix_text(text),
-            })
-    else:
-        from utils.meeting import parse_full_text_speeches
-        full_text = meeting.get("full_text", "")
-        parsed = parse_full_text_speeches(full_text)
-
-        if parsed:
-            for idx, speech in enumerate(parsed):
-                speaker = speech.get("speaker", "").strip()
-                text    = speech.get("text_he", "").strip()
-                if text:
-                    chunks.append({
-                        "chunk_id": str(idx),
-                        "speaker":  speaker,
-                        "text":     text,
-                    })
-        else:
-            paragraphs = [p.strip() for p in full_text.split("\n\n") if p.strip()]
-            if not paragraphs:
-                paragraphs = [p.strip() for p in full_text.split("\n") if p.strip()]
-            for idx, para in enumerate(paragraphs):
-                chunks.append({
-                    "chunk_id": str(idx),
-                    "speaker":  "",
-                    "text":     para,
-                })
 
     return {
         "meeting_id": meeting_id,
         "date":       date,
         "committee":  committee,
-        "chunks":     chunks,
+        "chunks":     format_meeting_chunks(meeting),
     }
 
 
@@ -1164,18 +1120,13 @@ async def research_meeting_participants(session_id: str, meeting_id: str, reques
     if not path_str:
         return JSONResponse({"participants": []})
 
-    transcript_path = Path(
-        path_str
-        .replace("summaries", "raw_transcriptions", 1)
-        .replace(".txt", ".json")
-    )
+    from utils.meeting import load_meeting, transcript_path_from_summary, extract_attendance
+
+    transcript_path = transcript_path_from_summary(Path(path_str))
     if not transcript_path.exists():
         return JSONResponse({"participants": []})
 
-    import json as _json
-    meeting = _json.loads(transcript_path.read_text(encoding="utf-8"))
-
-    from utils.meeting import extract_attendance
+    meeting = load_meeting(transcript_path)
     participants = extract_attendance(meeting)
 
     return {"meeting_id": meeting_id, "participants": participants}
