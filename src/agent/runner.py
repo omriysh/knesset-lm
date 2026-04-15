@@ -549,8 +549,9 @@ class MachineRunner:
                 })
             ctx.set("rag_chunks_by_meeting", _rag_by_mtg)
 
-            meeting_ids = debug.get("meetings", [])
-            l1_meta     = debug.get("l1_meeting_meta", {})
+            meeting_ids    = debug.get("meetings", [])
+            meeting_scores = debug.get("meeting_scores", {})
+            l1_meta        = debug.get("l1_meeting_meta", {})
             meta_by_mid: dict[str, dict] = {}
             for item in debug.get("selected_pass1", []):
                 mid = item["meta"].get("meeting_id", "")
@@ -558,7 +559,7 @@ class MachineRunner:
                     meta_by_mid[mid] = item["meta"]
 
             meetings_out = []
-            for rank, mid in enumerate(meeting_ids):
+            for mid in meeting_ids:
                 # Prefer pass-1 meta (richer), fall back to L1 meta (always present)
                 meta  = meta_by_mid.get(mid) or l1_meta.get(mid) or {}
                 date  = meta.get("date", "")
@@ -569,7 +570,7 @@ class MachineRunner:
                     "date":       date,
                     "committee":  comm,
                     "title":      title,
-                    "score":      round(max(0.5, 1.0 - rank * 0.05), 2),
+                    "score":      round(meeting_scores.get(mid, 0.0), 4),
                 })
 
             ui_event["meetings"]         = meetings_out

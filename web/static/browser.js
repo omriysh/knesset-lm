@@ -244,7 +244,7 @@ function _groupedHtml(meetings) {
 function _meetingCardHtml(m, inGroup) {
   const active    = m.meeting_id === _activeId;
   const pct       = Math.round((m.score || 0) * 100);
-  const badgeCls  = pct >= 85 ? 'rel-green' : pct >= 70 ? 'rel-blue' : 'rel-grey';
+  const badgeCls  = pct >= 65 ? 'rel-green' : pct >= 50 ? 'rel-blue' : 'rel-grey';
   const dateStr   = (m.date || m.meeting_id).replace(/_/g, '/');
   const commHtml  = inGroup ? '' :
     `<span class="sidebar-committee">${_esc((m.committee || '').replace(/_/g, ' '))}</span>`;
@@ -522,13 +522,17 @@ function _renderHeatmap(scores) {
   }).join('');
 }
 
-/* Continuous green gradient: null→grey, 0→pale green, 1→dark forest green */
+/* Salmon→yellow-green→green gradient: null→grey, 0→salmon, 1→interface green */
 function _heatColor(s) {
   if (s == null) return '#e2e3df';
   const t = Math.max(0, Math.min(1, s));
-  // hsl(125, 39%, lerp(92→15)%)  — light at low scores, dark at high
-  const l = Math.round(92 - t * 77);
-  return `hsl(125,39%,${l}%)`;
+  // hue: 12 (salmon-red) → 122 (green)
+  // sat: 80 → 45%
+  // lightness: 80 → 38%
+  const h = Math.round(12  + t * 110);
+  const sv = Math.round(80 - t * 35);
+  const l  = Math.round(80 - t * 42);
+  return `hsl(${h},${sv}%,${l}%)`;
 }
 
 function _heatLabel(s) {

@@ -792,6 +792,7 @@ async def research_rag(session_id: str, query: str, request: Request, top_k: int
     )
 
     meeting_ids: list[str] = debug["meetings"]
+    meeting_scores: dict[str, float] = debug.get("meeting_scores", {})
     selected_pass1: list[dict] = debug["selected_pass1"]
     meeting_paths: dict[str, str] = debug["meeting_paths"]
     register_meeting_paths(meeting_paths)
@@ -840,8 +841,7 @@ async def research_rag(session_id: str, query: str, request: Request, top_k: int
         summary_p = get_summary_path_from_id(mid)
         excerpt = _first_non_attendance_bullet(str(summary_p)) if summary_p else ""
 
-        # Score: rank-based, 1.0 at rank 0, decrement 0.05 per rank, floor 0.5
-        score = max(0.5, 1.0 - rank * 0.05)
+        score = meeting_scores.get(mid, 0.0)
 
         title = f"{committee} — {date}" if committee and date else mid
         meetings_out.append({

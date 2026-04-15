@@ -208,8 +208,14 @@ def query_retrieve(
                 "date":      meta.get("date", ""),
             }
 
+    meeting_scores: dict[str, float] = {
+        mid: max(meeting_bullet_sims[mid].values())
+        for mid in meeting_ids
+    }
+
     debug: dict[str, Any] = {
         "meetings":         meeting_ids,
+        "meeting_scores":   meeting_scores,
         "selected_pass1":   pass1_candidates,
         "all_pass2":        pass2_candidates,   # all meetings, pre-top-N cut
         "context_chars":    used,
