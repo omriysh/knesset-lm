@@ -56,6 +56,7 @@ from agent.runner import MachineRunner, build_tool_registry
 from indexing.embedder import ProtocolEmbedder
 from indexing.parse_summary import parse_summary_bullets
 from retrieval.protocol_rag import query_retrieve
+from utils.meeting import register_meeting_paths, get_summary_path_from_id, get_transcript_path_from_id
 from utils.speech import get_mk_speeches_in_committee
 from utils.tools import dispatch as knesset_dispatch
 
@@ -94,18 +95,17 @@ async def lifespan(app: FastAPI):
 
     backend = GemmaLlamaBackend(url=settings.LLAMA_SERVER)
 
-    # ── Summary tools (need meeting_paths injected per-request) ──────────────
+    # ── Summary tools (look up paths via global meeting registry) ────────────
     summaries_root = settings.SUMMARIES_ROOT
 
-    def _summary_executor(name: str, args: dict, meeting_paths: dict) -> str:
+    def _summary_executor(name: str, args: dict) -> str:
+        from utils.meeting import get_summary_path_from_id
         meeting_id = str(args.get("meeting_id", "")).strip()
-        path_str   = meeting_paths.get(meeting_id)
-        if not path_str:
-            available = ", ".join(list(meeting_paths)[:6]) or "אין"
-            return f"ישיבה '{meeting_id}' לא נמצאה.\nמזהים זמינים: {available}"
-        path = Path(path_str)
+        path = get_summary_path_from_id(meeting_id)
+        if not path:
+            return f"ישיבה '{meeting_id}' לא נמצאה. הרץ שאילתת RAG תחילה."
         if not path.exists():
-            return f"קובץ הסיכום לא נמצא: {path_str}"
+            return f"קובץ הסיכום לא נמצא: {path}"
         if name == "get_meeting_summary":
             text = path.read_text(encoding="utf-8")
             return text[:6000] + ("\n…[קוצר]" if len(text) > 6000 else "")
@@ -434,6 +434,7 @@ async def research_start(req: ResearchStartRequest, request: Request):
                     rag_chunks_by_mtg    = ctx_vars.get("rag_chunks_by_meeting") or {}
                     workspace_snap: dict = {}
                     if meeting_paths_snap:
+                        register_meeting_paths(meeting_paths_snap)
                         workspace_snap["meeting_paths"]       = meeting_paths_snap
                         workspace_snap["rag_chunks_by_meeting"] = rag_chunks_by_mtg
                         workspace_snap.setdefault("selected_chunks", [])
@@ -654,6 +655,8 @@ async def research_respond(
                     ctx_vars2   = ctx_snap2.get("vars", {})
                     mp2         = ctx_vars2.get("meeting_paths") or {}
                     rcbm2       = ctx_vars2.get("rag_chunks_by_meeting") or {}
+                    if mp2:
+                        register_meeting_paths(mp2)
                     prev_workspace = session.workspace_data or {}
                     if mp2:
                         merged_workspace: dict = {
@@ -791,6 +794,7 @@ async def research_rag(session_id: str, query: str, request: Request, top_k: int
     meeting_ids: list[str] = debug["meetings"]
     selected_pass1: list[dict] = debug["selected_pass1"]
     meeting_paths: dict[str, str] = debug["meeting_paths"]
+    register_meeting_paths(meeting_paths)
 
     # Build a quick lookup: meeting_id → first pass-1 chunk meta
     meta_by_meeting: dict[str, dict] = {}
@@ -830,11 +834,11 @@ async def research_rag(session_id: str, query: str, request: Request, top_k: int
             date = meta.get("date", "")
             committee = meta.get("committee", "")
         else:
-            path_str = meeting_paths.get(mid, "")
-            date, committee = _parse_filename(path_str) if path_str else ("", "")
+            summary_p = get_summary_path_from_id(mid)
+            date, committee = _parse_filename(str(summary_p)) if summary_p else ("", "")
 
-        path_str = meeting_paths.get(mid, "")
-        excerpt = _first_non_attendance_bullet(path_str) if path_str else ""
+        summary_p = get_summary_path_from_id(mid)
+        excerpt = _first_non_attendance_bullet(str(summary_p)) if summary_p else ""
 
         # Score: rank-based, 1.0 at rank 0, decrement 0.05 per rank, floor 0.5
         score = max(0.5, 1.0 - rank * 0.05)
@@ -894,19 +898,16 @@ async def research_meeting_summary(session_id: str, meeting_id: str, request: Re
     if session is None:
         return JSONResponse({"error": "Session not found"}, status_code=404)
 
-    workspace = session.workspace_data or {}
-    meeting_paths: dict[str, str] = workspace.get("meeting_paths", {})
-    path_str = meeting_paths.get(meeting_id)
-    if not path_str:
+    register_meeting_paths((session.workspace_data or {}).get("meeting_paths", {}))
+    summary_path = get_summary_path_from_id(meeting_id)
+    if not summary_path:
         return JSONResponse(
             {"error": f"Meeting '{meeting_id}' not in workspace. Run /rag first."},
             status_code=404,
         )
-
-    summary_path = Path(path_str)
     if not summary_path.exists():
         return JSONResponse(
-            {"error": f"Summary file not found: {path_str}"},
+            {"error": f"Summary file not found: {summary_path}"},
             status_code=404,
         )
 
@@ -986,18 +987,15 @@ async def research_meeting_transcript(session_id: str, meeting_id: str, request:
     if session is None:
         return JSONResponse({"error": "Session not found"}, status_code=404)
 
-    workspace = session.workspace_data or {}
-    meeting_paths: dict[str, str] = workspace.get("meeting_paths", {})
-    path_str = meeting_paths.get(meeting_id)
-    if not path_str:
+    from utils.meeting import load_meeting, format_meeting_chunks
+
+    register_meeting_paths((session.workspace_data or {}).get("meeting_paths", {}))
+    transcript_path = get_transcript_path_from_id(meeting_id)
+    if not transcript_path:
         return JSONResponse(
             {"error": f"Meeting '{meeting_id}' not in workspace. Run /rag first."},
             status_code=404,
         )
-
-    from utils.meeting import load_meeting, transcript_path_from_summary, format_meeting_chunks
-
-    transcript_path = transcript_path_from_summary(Path(path_str))
     if not transcript_path.exists():
         return JSONResponse(
             {"error": f"Transcript file not found: {transcript_path}"},
@@ -1114,16 +1112,11 @@ async def research_meeting_participants(session_id: str, meeting_id: str, reques
     if session is None:
         return JSONResponse({"error": "Session not found"}, status_code=404)
 
-    workspace = session.workspace_data or {}
-    meeting_paths: dict[str, str] = workspace.get("meeting_paths", {})
-    path_str = meeting_paths.get(meeting_id)
-    if not path_str:
-        return JSONResponse({"participants": []})
+    from utils.meeting import load_meeting, extract_attendance
 
-    from utils.meeting import load_meeting, transcript_path_from_summary, extract_attendance
-
-    transcript_path = transcript_path_from_summary(Path(path_str))
-    if not transcript_path.exists():
+    register_meeting_paths((session.workspace_data or {}).get("meeting_paths", {}))
+    transcript_path = get_transcript_path_from_id(meeting_id)
+    if not transcript_path or not transcript_path.exists():
         return JSONResponse({"participants": []})
 
     meeting = load_meeting(transcript_path)
@@ -1192,9 +1185,9 @@ async def workspace_ask(
     if not question:
         return JSONResponse({"error": "שאלה ריקה"}, status_code=400)
 
-    workspace       = session.workspace_data or {}
+    workspace = session.workspace_data or {}
+    register_meeting_paths(workspace.get("meeting_paths", {}))
     selected_chunks: list[dict] = workspace.get("selected_chunks", [])
-    meeting_paths: dict[str, str] = workspace.get("meeting_paths", {})
 
     # Build context from selected chunks (capped at ~8000 chars)
     MAX_CTX_CHARS = 8000
@@ -1213,18 +1206,16 @@ async def workspace_ask(
 
     # Optionally append meeting summary for the requested meeting_id
     if req.meeting_id and used_chars < MAX_CTX_CHARS:
-        summary_path_str = meeting_paths.get(req.meeting_id)
-        if summary_path_str:
-            summary_path = Path(summary_path_str)
-            if summary_path.exists():
-                try:
-                    bullets = parse_summary_bullets(summary_path)
-                    summary_lines = [b["text"] for b in bullets[:30]]
-                    summary_block = "סיכום ישיבה:\n" + "\n".join(f"• {l}" for l in summary_lines)
-                    if used_chars + len(summary_block) <= MAX_CTX_CHARS:
-                        context_parts.insert(0, summary_block)
-                except Exception:
-                    pass
+        summary_path = get_summary_path_from_id(req.meeting_id)
+        if summary_path and summary_path.exists():
+            try:
+                bullets = parse_summary_bullets(summary_path)
+                summary_lines = [b["text"] for b in bullets[:30]]
+                summary_block = "סיכום ישיבה:\n" + "\n".join(f"• {l}" for l in summary_lines)
+                if used_chars + len(summary_block) <= MAX_CTX_CHARS:
+                    context_parts.insert(0, summary_block)
+            except Exception:
+                pass
 
     context = "\n\n---\n\n".join(context_parts) if context_parts else "(אין מידע נבחר)"
 

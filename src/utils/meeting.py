@@ -35,6 +35,26 @@ _SPEAKER_TURN_RE = re.compile(
 )
 
 
+_meeting_registry: dict[str, str] = {}  # meeting_id → summary .txt path
+
+
+def register_meeting_paths(paths: dict[str, str]) -> None:
+    """Register a batch of meeting_id → summary-path mappings into the global registry."""
+    _meeting_registry.update(paths)
+
+
+def get_summary_path_from_id(meeting_id: str) -> Path | None:
+    """Return the summary .txt Path for a meeting_id, or None if not registered."""
+    p = _meeting_registry.get(str(meeting_id))
+    return Path(p) if p else None
+
+
+def get_transcript_path_from_id(meeting_id: str) -> Path | None:
+    """Return the raw transcript JSON Path for a meeting_id, or None if not registered."""
+    summary = get_summary_path_from_id(meeting_id)
+    return transcript_path_from_summary(summary) if summary else None
+
+
 def load_meeting(filepath: str | Path) -> dict:
     """Load a meeting JSON file and return its contents."""
     with open(filepath, "r", encoding="utf-8") as f:

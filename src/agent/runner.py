@@ -38,6 +38,7 @@ from agent.context import Context, evaluate_condition
 from agent.llm.base import DoneEvent, LLMBackend, ThinkingEvent, TokenEvent, ToolCallsEvent
 from agent.machine import StateMachine
 from agent.parsers import get_loop_control, parse_output
+from utils.meeting import register_meeting_paths
 
 
 # ── Tool registry builder ─────────────────────────────────────────────────────
@@ -56,11 +57,10 @@ def build_tool_registry(
     failing silently at query time.
 
     Callables receive (args: dict) and return a str result.
-    For tools that also need meeting_paths, the runner passes it via a wrapper.
     """
     known: dict[str, Callable] = {}
 
-    # Summary tools (need meeting_paths injected by the runner)
+    # Summary tools (use global meeting registry from utils.meeting)
     if summary_executor:
         for name in ("get_meeting_summary", "get_meeting_summary_section"):
             known[name] = lambda args, n=name, ex=summary_executor: ex(n, args)
@@ -308,7 +308,9 @@ class MachineRunner:
                 )
                 rag_ms = round((time.monotonic() - t_rag) * 1000)
                 existing_paths = ctx.get("meeting_paths") or {}
-                ctx.set("meeting_paths", {**existing_paths, **debug.get("meeting_paths", {})})
+                new_paths = {**existing_paths, **debug.get("meeting_paths", {})}
+                ctx.set("meeting_paths", new_paths)
+                register_meeting_paths(new_paths)
                 ctx.set("rag_context", context_str)
 
                 # Build per-meeting RAG chunk index for the heatmap (pass-1 only).
@@ -361,7 +363,6 @@ class MachineRunner:
             action = self._STATUS_BY_STAGE.get(stage, "מריץ")
             yield ("status", f"{action}: {label}…")
             tool_nodes_list = self.machine.tool_nodes(node_id)
-            meeting_paths   = ctx.get("meeting_paths") or {}
 
             node_start_ev: dict = {
                 "label":  label,
@@ -375,7 +376,7 @@ class MachineRunner:
 
             node_result: dict = {}
             for ev, val in self._run_node(
-                node, user_content, system_prompt, tool_nodes_list, meeting_paths
+                node, user_content, system_prompt, tool_nodes_list
             ):
                 if ev == "status":
                     yield ("status", val)
@@ -528,7 +529,9 @@ class MachineRunner:
             # Pre-populate ctx so if the session is ever resumed the LLM
             # skips a second retrieval (RAG skip gate).
             existing_paths = ctx.get("meeting_paths") or {}
-            ctx.set("meeting_paths", {**existing_paths, **debug.get("meeting_paths", {})})
+            new_paths = {**existing_paths, **debug.get("meeting_paths", {})}
+            ctx.set("meeting_paths", new_paths)
+            register_meeting_paths(new_paths)
             ctx.set("rag_context", context_str)
 
             # Build per-meeting RAG chunk index for the heatmap (pass-1 only).
@@ -594,7 +597,6 @@ class MachineRunner:
         user_content:    str,
         system_prompt:   str,
         tool_nodes_list: list[dict],
-        meeting_paths:   dict,
         max_rounds:      int = 10,
     ) -> Generator:
         """
@@ -688,15 +690,9 @@ class MachineRunner:
                 if fn_name not in tools_used:
                     tools_used.append(fn_name)
 
-                # Summary tools need meeting_paths injected
-                if fn_name in ("get_meeting_summary", "get_meeting_summary_section"):
-                    callable_fn = self.tool_registry.get(fn_name)
-                    t_tool = time.monotonic()
-                    result = callable_fn(fn_args, meeting_paths) if callable_fn else f"כלי לא נמצא: {fn_name}"
-                else:
-                    callable_fn = self.tool_registry.get(fn_name)
-                    t_tool = time.monotonic()
-                    result = callable_fn(fn_args) if callable_fn else f"כלי לא נמצא: {fn_name}"
+                callable_fn = self.tool_registry.get(fn_name)
+                t_tool = time.monotonic()
+                result = callable_fn(fn_args) if callable_fn else f"כלי לא נמצא: {fn_name}"
 
                 tool_elapsed_ms = round((time.monotonic() - t_tool) * 1000)
                 tool_ms_total  += tool_elapsed_ms
