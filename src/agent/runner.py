@@ -38,6 +38,7 @@ from agent.context import Context, evaluate_condition
 from agent.llm.base import DoneEvent, LLMBackend, ThinkingEvent, TokenEvent, ToolCallsEvent
 from agent.machine import StateMachine
 from agent.parsers import get_loop_control, parse_output
+from utils.meeting import register_meeting_paths
 
 
 # ── Tool registry builder ─────────────────────────────────────────────────────
@@ -56,11 +57,10 @@ def build_tool_registry(
     failing silently at query time.
 
     Callables receive (args: dict) and return a str result.
-    For tools that also need meeting_paths, the runner passes it via a wrapper.
     """
     known: dict[str, Callable] = {}
 
-    # Summary tools (need meeting_paths injected by the runner)
+    # Summary tools (use global meeting registry from utils.meeting)
     if summary_executor:
         for name in ("get_meeting_summary", "get_meeting_summary_section"):
             known[name] = lambda args, n=name, ex=summary_executor: ex(n, args)
@@ -135,41 +135,92 @@ class MachineRunner:
 
     def run_stream(
         self,
-        question:  str,
-        top_k:     Optional[int] = None,
-        top_n:     Optional[int] = None,
+        question:       str,
+        top_k:          Optional[int] = None,
+        top_n:          Optional[int] = None,
+        resume:         Optional[dict] = None,   # checkpoint dict
+        user_response:  Optional[dict] = None,   # {"output_var": str, "value": any}
     ) -> Generator[tuple[str, object], None, None]:
         """
         Full agent loop: one or more BFS passes, looping when a continue_var is set.
 
         max_loops is read from back-edges in the machine JSON.
+
+        Resume protocol
+        ---------------
+        When a BFS pass hits a user_input node it yields ("user_input_required", {...})
+        and returns.  The caller should persist the checkpoint from that event and
+        later call run_stream again with:
+          resume        = checkpoint   # the dict from the event
+          user_response = {"output_var": <var>, "value": <user's answer>}
+        The resumed call restores context, injects the user's answer, and continues
+        the BFS exactly from where it paused.  Existing behavior when resume=None is
+        fully preserved.
         """
         eff_k = top_k if top_k is not None else self.top_k
         eff_n = top_n if top_n is not None else self.top_n
         max_loops = self.machine.max_loops_from_edges(default=3)
 
-        ctx = Context(question)
+        if resume is not None:
+            # ── Resumed execution ──────────────────────────────────────────
+            ctx = Context.from_snapshot(resume["ctx_snapshot"])
+            if user_response is not None:
+                ctx.set(user_response["output_var"], user_response["value"])
 
-        for loop_idx in range(max_loops):
-            yield from self._run_bfs_pass(ctx, loop_idx, eff_k, eff_n)
+            start_loop = resume["loop_idx"]
 
-            # Check loop_control from the last node that set it
-            # (We check all context vars named as continue/done vars in the machine)
-            continue_question = self._find_continue_var(ctx)
-            if continue_question:
-                ctx.set("question", continue_question)
-                ctx.reset_for_loop()
-                yield ("status", f"שואל שאלת המשך (סבב {loop_idx + 2}/{max_loops})…")
-                continue
+            # Run the resumed BFS pass (it takes over from the paused node)
+            yield from self._run_bfs_pass(ctx, start_loop, eff_k, eff_n, resume=resume)
 
-            # Emit final answer
-            final_answer = self._extract_final_answer(ctx)
-            if final_answer:
-                yield ("token", final_answer)
-            yield ("done", None)
-            return
+            # Check whether the resumed pass itself hit another user_input node
+            # (in that case _run_bfs_pass already yielded user_input_required and we
+            # must not emit "done" here — the next resume call will continue)
+            # We detect this by checking if the last event was user_input_required;
+            # since generators are lazy we can't look back, so instead we set a
+            # sentinel on ctx if a user_input node was encountered.
+            if ctx.get("_user_input_pending"):
+                return
 
-        # Exhausted loops
+            # Continue the outer loop from start_loop + 1
+            loop_range = range(start_loop + 1, max_loops)
+        else:
+            # ── Fresh execution ────────────────────────────────────────────
+            ctx = Context(question)
+            loop_range = range(max_loops)
+
+        if resume is None:
+            # Normal path — run first pass then additional loop passes
+            first_idx = 0
+            yield from self._run_bfs_pass(ctx, first_idx, eff_k, eff_n)
+            if ctx.get("_user_input_pending"):
+                return
+
+            for loop_idx in range(1, max_loops):
+                continue_question = self._find_continue_var(ctx)
+                if continue_question:
+                    ctx.set("question", continue_question)
+                    ctx.reset_for_loop()
+                    yield ("status", f"שואל שאלת המשך (סבב {loop_idx + 1}/{max_loops})…")
+                    yield from self._run_bfs_pass(ctx, loop_idx, eff_k, eff_n)
+                    if ctx.get("_user_input_pending"):
+                        return
+                else:
+                    break
+        else:
+            # Resumed path — the first resumed pass is already done; run more if needed
+            for loop_idx in loop_range:
+                continue_question = self._find_continue_var(ctx)
+                if continue_question:
+                    ctx.set("question", continue_question)
+                    ctx.reset_for_loop()
+                    yield ("status", f"שואל שאלת המשך (סבב {loop_idx + 1}/{max_loops})…")
+                    yield from self._run_bfs_pass(ctx, loop_idx, eff_k, eff_n)
+                    if ctx.get("_user_input_pending"):
+                        return
+                else:
+                    break
+
+        # Emit final answer
         final_answer = self._extract_final_answer(ctx)
         if final_answer:
             yield ("token", final_answer)
@@ -178,13 +229,40 @@ class MachineRunner:
     # ── BFS forward pass ──────────────────────────────────────────────────────
 
     def _run_bfs_pass(
-        self, ctx: Context, loop_idx: int, top_k: int, top_n: int
+        self,
+        ctx:      Context,
+        loop_idx: int,
+        top_k:    int,
+        top_n:    int,
+        resume:   Optional[dict] = None,
     ) -> Generator:
-        first_id  = self.machine.first_llm_node_id()
-        queue:    list[str] = [first_id]
-        enqueued: set[str]  = {first_id}
-        completed: set[str] = set()
-        fired_to: dict[str, set[str]] = {}
+        if resume:
+            # Restore BFS state from checkpoint; mark paused node as completed and
+            # fire its outgoing transitions now that ctx holds the user's answer.
+            completed: set[str]          = set(resume["completed_node_ids"]) | {resume["paused_node_id"]}
+            fired_to:  dict[str, set[str]] = {k: set(v) for k, v in resume.get("fired_to_snapshot", {}).items()}
+            queue:    list[str] = []
+            enqueued: set[str]  = set()
+
+            for edge in self.machine.outgoing_transitions(resume["paused_node_id"]):
+                tgt_id   = edge["target"]
+                tgt_node = self.machine.get_node(tgt_id)
+                if (tgt_node.get("imaginary")
+                        or tgt_node.get("type") not in ("llm_call", "user_input")
+                        or tgt_id in completed):
+                    continue
+                if not evaluate_condition(edge.get("condition", ""), ctx):
+                    continue
+                fired_to.setdefault(tgt_id, set()).add(resume["paused_node_id"])
+                if tgt_id not in enqueued:
+                    queue.append(tgt_id)
+                    enqueued.add(tgt_id)
+        else:
+            first_id   = self.machine.first_llm_node_id()
+            queue      = [first_id]
+            enqueued   = {first_id}
+            completed  = set()
+            fired_to   = {}
 
         while queue:
             node_id = queue.pop(0)
@@ -195,6 +273,15 @@ class MachineRunner:
             if not required.issubset(completed):
                 queue.append(node_id)
                 continue
+
+            # ── user_input node — pause BFS, emit checkpoint ──────────────
+            node_type = node.get("type", "llm_call")
+            if node_type == "user_input":
+                yield from self._run_user_input_node(
+                    node, node_id, loop_idx, completed, fired_to, ctx,
+                    top_k=top_k, top_n=top_n,
+                )
+                return  # BFS ends; caller resumes via run_stream(resume=...)
 
             data         = node.get("data", {})
             node_prompt  = data.get("system_prompt", "")
@@ -208,7 +295,7 @@ class MachineRunner:
 
             # ── RAG retrieval ──────────────────────────────────────────────
             retrieval_info = None
-            if data.get("rag") == "3level":
+            if data.get("rag") == "3level" and not ctx.get("rag_context"):
                 yield ("status", "מאחזר קטעי פרוטוקולים…")
                 rag_q = (
                     ctx.get("question_for_rag")
@@ -221,8 +308,26 @@ class MachineRunner:
                 )
                 rag_ms = round((time.monotonic() - t_rag) * 1000)
                 existing_paths = ctx.get("meeting_paths") or {}
-                ctx.set("meeting_paths", {**existing_paths, **debug.get("meeting_paths", {})})
+                new_paths = {**existing_paths, **debug.get("meeting_paths", {})}
+                ctx.set("meeting_paths", new_paths)
+                register_meeting_paths(new_paths)
                 ctx.set("rag_context", context_str)
+
+                # Build per-meeting RAG chunk index for the heatmap (pass-1 only).
+                _rag_by_mtg: dict = ctx.get("rag_chunks_by_meeting") or {}
+                for _item in debug.get("selected_pass1", []):
+                    _meta = _item["meta"]
+                    _mid  = _meta.get("meeting_id", "")
+                    if not _mid:
+                        continue
+                    _rag_by_mtg.setdefault(_mid, []).append({
+                        "start": _meta.get("start_speech_idx", 0),
+                        "end":   _meta.get("end_speech_idx",   0),
+                        "sim":   round(float(_item["p1_sim"]), 4),
+                        "tvec":  _item.get("topic_scores_vec", []),
+                    })
+                ctx.set("rag_chunks_by_meeting", _rag_by_mtg)
+
                 retrieval_info = {
                     "meetings":      debug.get("meetings", []),
                     "context_chars": debug.get("context_chars", 0),
@@ -258,7 +363,6 @@ class MachineRunner:
             action = self._STATUS_BY_STAGE.get(stage, "מריץ")
             yield ("status", f"{action}: {label}…")
             tool_nodes_list = self.machine.tool_nodes(node_id)
-            meeting_paths   = ctx.get("meeting_paths") or {}
 
             node_start_ev: dict = {
                 "label":  label,
@@ -272,7 +376,7 @@ class MachineRunner:
 
             node_result: dict = {}
             for ev, val in self._run_node(
-                node, user_content, system_prompt, tool_nodes_list, meeting_paths
+                node, user_content, system_prompt, tool_nodes_list
             ):
                 if ev == "status":
                     yield ("status", val)
@@ -323,7 +427,7 @@ class MachineRunner:
                 tgt_node = self.machine.get_node(tgt_id)
 
                 if (tgt_node.get("imaginary")
-                        or tgt_node.get("type") != "llm_call"
+                        or tgt_node.get("type") not in ("llm_call", "user_input")
                         or tgt_id in completed):
                     continue
 
@@ -335,6 +439,157 @@ class MachineRunner:
                     queue.append(tgt_id)
                     enqueued.add(tgt_id)
 
+    # ── User-input node (pause/checkpoint) ───────────────────────────────────
+
+    def _run_user_input_node(
+        self,
+        node:      dict,
+        node_id:   str,
+        loop_idx:  int,
+        completed: set[str],
+        fired_to:  dict[str, set[str]],
+        ctx:       Context,
+        top_k:     int = 5,
+        top_n:     int = 15,
+    ) -> Generator:
+        """
+        Pause BFS at a user_input node and emit a checkpoint.
+
+        Yields ("status", ...) and ("user_input_required", {...checkpoint...}).
+        After yielding, the caller must return — BFS resumes on the next
+        run_stream(resume=checkpoint, user_response=...) call.
+        """
+        data    = node.get("data", {})
+        ui      = data.get("ui", "text_input")
+        raw_prompt = data.get("prompt_he", "")
+        # Render {{var}} placeholders in the prompt using current context
+        prompt_he = ctx.render_template(raw_prompt)
+
+        ui_event: dict = {
+            "node_id":    node_id,
+            "node_label": node.get("label", ""),
+            "ui":         ui,
+            "prompt_he":  prompt_he,
+            "output_var": data.get("output_var", "user_input"),
+        }
+
+        # ── option_select payload ─────────────────────────────────────────
+        if ui == "option_select":
+            preselect_var = data.get("preselect_var", "")
+            preselected   = ctx.get(preselect_var, "") if preselect_var else ""
+            multi         = data.get("multi_select", False)
+
+            # Map of option value → which context var holds the reformulated question
+            _QUESTION_VARS: dict[str, str] = {
+                "פרוטוקולים": "question_for_rag",
+                "עובדתי":     "question_for_fact",
+                "דובר":       "question_for_speaker",
+            }
+            raw_options = data.get("options", [])
+            options_out = []
+            for opt in raw_options:
+                if isinstance(opt, str):
+                    val = opt; label = opt; desc = ""
+                else:
+                    val   = opt.get("value", opt.get("label", ""))
+                    label = opt.get("label", val)
+                    desc  = opt.get("description", "")
+
+                item: dict = {
+                    "value":       val,
+                    "label":       label,
+                    "description": desc,
+                    "selected":    (val == preselected),
+                }
+                # Attach reformulated question as subtitle when different from original
+                q_var = _QUESTION_VARS.get(val, "")
+                if q_var:
+                    q_val = ctx.get(q_var, "") or ""
+                    orig  = ctx.get("question", "") or ""
+                    if q_val and q_val.strip() != orig.strip():
+                        item["subtitle"] = q_val
+                options_out.append(item)
+
+            ui_event["options"]      = options_out
+            ui_event["multi_select"] = multi
+            ui_event["preselected"]  = preselected
+
+        # ── deep_dive payload ─────────────────────────────────────────────
+        elif ui == "deep_dive":
+            query = (
+                ctx.get("question_for_rag")
+                or ctx.get("question")
+                or ctx.get("original_question", "")
+            )
+            yield ("status", "מאחזר ישיבות רלוונטיות לעיון…")
+            _DEEP_DIVE_TOP_K = 20
+            context_str, debug = self.retriever(
+                question=query, top_k=_DEEP_DIVE_TOP_K, top_n=top_n
+            )
+            # Pre-populate ctx so if the session is ever resumed the LLM
+            # skips a second retrieval (RAG skip gate).
+            existing_paths = ctx.get("meeting_paths") or {}
+            new_paths = {**existing_paths, **debug.get("meeting_paths", {})}
+            ctx.set("meeting_paths", new_paths)
+            register_meeting_paths(new_paths)
+            ctx.set("rag_context", context_str)
+
+            # Build per-meeting RAG chunk index for the heatmap (pass-1 only).
+            _rag_by_mtg: dict = ctx.get("rag_chunks_by_meeting") or {}
+            for _item in debug.get("selected_pass1", []):
+                _meta = _item["meta"]
+                _mid  = _meta.get("meeting_id", "")
+                if not _mid:
+                    continue
+                _rag_by_mtg.setdefault(_mid, []).append({
+                    "start": _meta.get("start_speech_idx", 0),
+                    "end":   _meta.get("end_speech_idx",   0),
+                    "sim":   round(float(_item["p1_sim"]), 4),
+                    "tvec":  _item.get("topic_scores_vec", []),
+                })
+            ctx.set("rag_chunks_by_meeting", _rag_by_mtg)
+
+            meeting_ids    = debug.get("meetings", [])
+            meeting_scores = debug.get("meeting_scores", {})
+            l1_meta        = debug.get("l1_meeting_meta", {})
+            meta_by_mid: dict[str, dict] = {}
+            for item in debug.get("selected_pass1", []):
+                mid = item["meta"].get("meeting_id", "")
+                if mid and mid not in meta_by_mid:
+                    meta_by_mid[mid] = item["meta"]
+
+            meetings_out = []
+            for mid in meeting_ids:
+                # Prefer pass-1 meta (richer), fall back to L1 meta (always present)
+                meta  = meta_by_mid.get(mid) or l1_meta.get(mid) or {}
+                date  = meta.get("date", "")
+                comm  = meta.get("committee", "")
+                title = f"{comm} — {date}" if comm and date else mid
+                meetings_out.append({
+                    "meeting_id": mid,
+                    "date":       date,
+                    "committee":  comm,
+                    "title":      title,
+                    "score":      round(meeting_scores.get(mid, 0.0), 4),
+                })
+
+            ui_event["meetings"]         = meetings_out
+            ui_event["query"]            = query
+            ui_event["original_question"] = ctx.get("original_question", query)
+        checkpoint: dict = {
+            "loop_idx":           loop_idx,
+            "completed_node_ids": list(completed),
+            "paused_node_id":     node_id,
+            "fired_to_snapshot":  {k: list(v) for k, v in fired_to.items()},
+            "ctx_snapshot":       ctx.to_snapshot(),
+            "pending_ui_event":   ui_event,
+        }
+        # Signal to run_stream that BFS paused on a user_input node
+        ctx.set("_user_input_pending", True)
+
+        yield ("status", f"ממתין לקלט משתמש: {node.get('label', '')}…")
+        yield ("user_input_required", {**ui_event, "checkpoint": checkpoint})
+
     # ── Node executor (agentic tool loop) ─────────────────────────────────────
 
     def _run_node(
@@ -343,7 +598,6 @@ class MachineRunner:
         user_content:    str,
         system_prompt:   str,
         tool_nodes_list: list[dict],
-        meeting_paths:   dict,
         max_rounds:      int = 10,
     ) -> Generator:
         """
@@ -437,15 +691,9 @@ class MachineRunner:
                 if fn_name not in tools_used:
                     tools_used.append(fn_name)
 
-                # Summary tools need meeting_paths injected
-                if fn_name in ("get_meeting_summary", "get_meeting_summary_section"):
-                    callable_fn = self.tool_registry.get(fn_name)
-                    t_tool = time.monotonic()
-                    result = callable_fn(fn_args, meeting_paths) if callable_fn else f"כלי לא נמצא: {fn_name}"
-                else:
-                    callable_fn = self.tool_registry.get(fn_name)
-                    t_tool = time.monotonic()
-                    result = callable_fn(fn_args) if callable_fn else f"כלי לא נמצא: {fn_name}"
+                callable_fn = self.tool_registry.get(fn_name)
+                t_tool = time.monotonic()
+                result = callable_fn(fn_args) if callable_fn else f"כלי לא נמצא: {fn_name}"
 
                 tool_elapsed_ms = round((time.monotonic() - t_tool) * 1000)
                 tool_ms_total  += tool_elapsed_ms

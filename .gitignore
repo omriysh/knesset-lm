@@ -3,3 +3,9 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+
+# Session files
+sessions/
+
+# Query log
+web/query_log.jsonl

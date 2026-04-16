@@ -17,6 +17,43 @@ _MK_TITLE_RE = re.compile(
     re.MULTILINE,
 )
 
+# Matches speaker-turn headers in OData full_text protocols.
+# Handles:  "היו"ר שם:"  "ח"כ שם:"  "שם (מפלגה):"  "שם:"
+# Requires colon at end of line (no body text after it on same line).
+# Uses [ \t]+ (not \s+) between name tokens to avoid crossing line boundaries.
+# NOTE: full_text must be LF-normalised before use — CR-only PDFs fool re.MULTILINE.
+_SPEAKER_TURN_RE = re.compile(
+    r'^('
+    r'(?:היו["\u05f3\u05f4\u2019\u201d]ר[ \t]+|ח["\u05f3\u05f4\u2019\u201d]כ[ \t]+|'
+    r'(?:סגן[ \t]+)?שר(?:ת)?[ \t]+|ממלא[ \t]+מקום[ \t]+)?'   # optional title prefix
+    r'[\u05d0-\u05ea][\u05d0-\u05ea\-\u05f3\u05f4"\']{0,20}'  # first name token
+    r'(?:[ \t]+[\u05d0-\u05ea][\u05d0-\u05ea\-\u05f3\u05f4"\']{0,20}){0,3}'  # up to 3 more
+    r')'
+    r'(?:[ \t]*\([^)\n]{1,40}\))?'   # optional (party / role)
+    r'[ \t]*:[ \t]*$',               # colon at end of line only
+    re.MULTILINE,
+)
+
+
+_meeting_registry: dict[str, str] = {}  # meeting_id → summary .txt path
+
+
+def register_meeting_paths(paths: dict[str, str]) -> None:
+    """Register a batch of meeting_id → summary-path mappings into the global registry."""
+    _meeting_registry.update(paths)
+
+
+def get_summary_path_from_id(meeting_id: str) -> Path | None:
+    """Return the summary .txt Path for a meeting_id, or None if not registered."""
+    p = _meeting_registry.get(str(meeting_id))
+    return Path(p) if p else None
+
+
+def get_transcript_path_from_id(meeting_id: str) -> Path | None:
+    """Return the raw transcript JSON Path for a meeting_id, or None if not registered."""
+    summary = get_summary_path_from_id(meeting_id)
+    return transcript_path_from_summary(summary) if summary else None
+
 
 def load_meeting(filepath: str | Path) -> dict:
     """Load a meeting JSON file and return its contents."""
@@ -79,6 +116,93 @@ def extract_attendance(meeting: dict) -> list[str]:
         return seen
 
     return []
+
+
+def parse_full_text_speeches(full_text: str) -> list[dict] | None:
+    """
+    Parse a raw OData full_text protocol into [{speaker, text_he}] entries.
+
+    Splits on speaker-turn headers (e.g. 'היו"ר שם:' / 'שם (מפלגה):').
+    Returns None if fewer than 2 speaker turns are found (triggers fallback).
+    """
+    # PDF extraction often produces CR-only line endings; re.MULTILINE ^ only
+    # matches after \n, so normalise before applying the regex.
+    full_text = full_text.replace('\r\n', '\n').replace('\r', '\n')
+
+    matches = list(_SPEAKER_TURN_RE.finditer(full_text))
+    if len(matches) < 2:
+        return None
+
+    speeches: list[dict] = []
+    for i, m in enumerate(matches):
+        speaker = m.group(1).strip()
+        text_start = m.end()
+        text_end = matches[i + 1].start() if i + 1 < len(matches) else len(full_text)
+        text = full_text[text_start:text_end].strip()
+        if text:
+            speeches.append({"speaker": speaker, "text_he": text})
+
+    return speeches if speeches else None
+
+
+def transcript_path_from_summary(summary_path: Path) -> Path:
+    """Derive the raw transcript JSON path from a summary .txt path."""
+    return Path(
+        str(summary_path)
+        .replace("summaries", "raw_transcriptions", 1)
+        .replace(".txt", ".json")
+    )
+
+
+def format_meeting_chunks(meeting: dict) -> list[dict]:
+    """
+    Format a meeting into display chunks for the web UI.
+
+    Returns list of {chunk_id: str, speaker: str, text: str}.
+
+    Three formats handled:
+    - structured speeches  → ftfy-cleaned text per speech
+    - full_text (parsable) → speaker-turn split speeches
+    - full_text (fallback) → paragraph split, empty speaker
+    """
+    import ftfy
+
+    chunks = []
+    if "speeches" in meeting:
+        for idx, speech in enumerate(meeting["speeches"]):
+            speaker = speech.get("speaker", "").strip()
+            text    = speech.get("text_he", "").strip()
+            if not text and not speaker:
+                continue
+            chunks.append({
+                "chunk_id": str(idx),
+                "speaker":  speaker,
+                "text":     ftfy.fix_text(text),
+            })
+    else:
+        full_text = meeting.get("full_text", "")
+        parsed = parse_full_text_speeches(full_text)
+        if parsed:
+            for idx, speech in enumerate(parsed):
+                speaker = speech.get("speaker", "").strip()
+                text    = speech.get("text_he", "").strip()
+                if text:
+                    chunks.append({
+                        "chunk_id": str(idx),
+                        "speaker":  speaker,
+                        "text":     text,
+                    })
+        else:
+            paragraphs = [p.strip() for p in full_text.split("\n\n") if p.strip()]
+            if not paragraphs:
+                paragraphs = [p.strip() for p in full_text.split("\n") if p.strip()]
+            for idx, para in enumerate(paragraphs):
+                chunks.append({
+                    "chunk_id": str(idx),
+                    "speaker":  "",
+                    "text":     para,
+                })
+    return chunks
 
 
 def chunk_transcript(text: str, max_chars: int = MAX_CHUNK_CHARS) -> list[str]:

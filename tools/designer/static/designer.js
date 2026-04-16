@@ -123,6 +123,17 @@ function initCy() {
           'height':           '44',
         },
       },
+      // ── User Input node — purple ──
+      {
+        selector: 'node[type="user_input"]',
+        style: {
+          'background-color': '#cba6f7',
+          'border-color':     '#9a7ec8',
+          'shape':            'round-rectangle',
+          'width':            '130',
+          'height':           '54',
+        },
+      },
       // ── Terminal node (can end the run) — gold double-ring ──
       {
         selector: 'node[?terminal]',
@@ -334,8 +345,8 @@ function openNodePanel(nodeId) {
   const mNode = machine.nodes.find(n => n.id === nodeId);
   if (!mNode) return;
 
-  const typeLabel = {begin:'Begin',llm_call:'LLM Call',tool:'Tool'}[mNode.type] || mNode.type;
-  const badgeCls  = {begin:'badge-begin',llm_call:'badge-llm',tool:'badge-tool'}[mNode.type] || '';
+  const typeLabel = {begin:'Begin',llm_call:'LLM Call',tool:'Tool',user_input:'User Input'}[mNode.type] || mNode.type;
+  const badgeCls  = {begin:'badge-begin',llm_call:'badge-llm',tool:'badge-tool',user_input:'badge-userinput'}[mNode.type] || '';
 
   panelTitle.innerHTML = `<span class="badge ${badgeCls}">${typeLabel}</span> ${esc(mNode.label)}`;
 
@@ -449,6 +460,45 @@ function openNodePanel(nodeId) {
     </div>`;
   }
 
+  if (mNode.type === 'user_input') {
+    const d = mNode.data || {};
+    html += `<div class="field">
+      <label>UI Type</label>
+      <select id="pf-ui">
+        <option value="option_select"  ${d.ui === 'option_select'  ? 'selected' : ''}>Option Select — card choices</option>
+        <option value="text_input"     ${d.ui === 'text_input'     ? 'selected' : ''}>Text Input — free text</option>
+        <option value="meeting_select" ${d.ui === 'meeting_select' ? 'selected' : ''}>Meeting Select — browse meetings</option>
+      </select>
+    </div>`;
+    html += `<div class="field">
+      <label>Prompt (Hebrew)</label>
+      <textarea id="pf-prompt-he" dir="rtl" rows="3"
+        placeholder="בחר אפשרות... (תומך ב-{{var}} מהקשר)">${esc(d.prompt_he || '')}</textarea>
+      <div class="hint">Supports {{var}} template placeholders from context.</div>
+    </div>`;
+    html += `<div class="field">
+      <label>Output Variable</label>
+      <input id="pf-output-var" value="${esc(d.output_var || '')}"
+        placeholder="e.g. agent, user_choice"
+        style="direction:ltr;text-align:left;font-family:monospace" />
+      <div class="hint">Context variable that receives the user's answer on resume.</div>
+    </div>`;
+    html += `<div class="field">
+      <label>Pre-select Variable <span style="font-weight:400;color:#6c7086">(option_select only)</span></label>
+      <input id="pf-preselect-var" value="${esc(d.preselect_var || '')}"
+        placeholder="e.g. agent"
+        style="direction:ltr;text-align:left;font-family:monospace" />
+      <div class="hint">Context var whose current value is pre-selected in the option list.</div>
+    </div>`;
+    html += `<div class="field">
+      <label>Options <span style="font-weight:400;color:#6c7086">(option_select only)</span></label>
+      <textarea id="pf-options" rows="10"
+        style="font-family:monospace;font-size:.75rem;direction:ltr;text-align:left;min-height:160px"
+        placeholder='[\n  {"value":"a","label":"א","description":"..."}\n]'>${esc(d.options ? JSON.stringify(d.options, null, 2) : '')}</textarea>
+      <div class="hint">JSON array of {value, label, description?} objects.</div>
+    </div>`;
+  }
+
   // Connected edges summary
   const connEdges = machine.edges.filter(e => e.source === nodeId || e.target === nodeId);
   if (connEdges.length) {
@@ -523,6 +573,25 @@ function applyNodePanel(nodeId) {
     mNode.data.description = document.getElementById('pf-desc')?.value || '';
   }
 
+  if (mNode.type === 'user_input') {
+    mNode.data = mNode.data || {};
+    mNode.data.ui         = document.getElementById('pf-ui')?.value         || 'text_input';
+    mNode.data.prompt_he  = document.getElementById('pf-prompt-he')?.value  || '';
+    mNode.data.output_var = document.getElementById('pf-output-var')?.value.trim() || '';
+
+    const preselVar = document.getElementById('pf-preselect-var')?.value.trim();
+    if (preselVar) mNode.data.preselect_var = preselVar;
+    else delete mNode.data.preselect_var;
+
+    const optsRaw = document.getElementById('pf-options')?.value.trim() || '';
+    if (optsRaw) {
+      try { mNode.data.options = JSON.parse(optsRaw); }
+      catch { toast('⚠ options: invalid JSON — not saved'); }
+    } else {
+      delete mNode.data.options;
+    }
+  }
+
   // Sync Cytoscape node data
   const cyNode = cy.getElementById(nodeId);
   if (cyNode.length) {
@@ -533,8 +602,8 @@ function applyNodePanel(nodeId) {
 
   // Refresh panel title to reflect updated label
   panelTitle.innerHTML = `<span class="badge ${
-    {begin:'badge-begin',llm_call:'badge-llm',tool:'badge-tool'}[mNode.type]||''
-  }">${{begin:'Begin',llm_call:'LLM Call',tool:'Tool'}[mNode.type]||mNode.type}</span> ${esc(mNode.label)}`;
+    {begin:'badge-begin',llm_call:'badge-llm',tool:'badge-tool',user_input:'badge-userinput'}[mNode.type]||''
+  }">${{begin:'Begin',llm_call:'LLM Call',tool:'Tool',user_input:'User Input'}[mNode.type]||mNode.type}</span> ${esc(mNode.label)}`;
 
   markDirty();
   toast('Applied');
@@ -623,7 +692,7 @@ function deleteEdge(edgeId) {
 function addNode(type) {
   if (!machine) { toast('Create or load a machine first'); return; }
   const id = type + '_' + crypto.randomUUID().slice(0,8);
-  const labels = { llm_call: 'LLM Call', tool: 'Tool' };
+  const labels = { llm_call: 'LLM Call', tool: 'Tool', user_input: 'User Input' };
   const label = labels[type] || type;
 
   // Place near center of current view
@@ -644,8 +713,9 @@ function addNode(type) {
   openNodePanel(id);
 }
 
-document.getElementById('add-llm').addEventListener('click', () => addNode('llm_call'));
-document.getElementById('add-tool').addEventListener('click', () => addNode('tool'));
+document.getElementById('add-llm').addEventListener('click',       () => addNode('llm_call'));
+document.getElementById('add-tool').addEventListener('click',      () => addNode('tool'));
+document.getElementById('add-userinput').addEventListener('click', () => addNode('user_input'));
 
 
 // ═══════════════════════════════════════════════════════════════════════════

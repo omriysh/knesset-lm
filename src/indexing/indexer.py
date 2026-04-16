@@ -34,6 +34,7 @@ import config
 from indexing.embedder import ProtocolEmbedder
 from indexing.extract_dialogs import extract_dialogs_coherence
 from indexing.parse_summary import parse_summary_bullets
+from utils.meeting import load_meeting, parse_full_text_speeches
 
 
 @dataclass
@@ -97,7 +98,7 @@ def _index_speeches(
             # Already indexed — load embeddings for reuse in dialog extraction
             ids  = [f"{meeting_id}_{i}" for i, _ in valid]
             rows = coll.get(ids=ids, include=["embeddings"])
-            if len(rows["ids"]) == len(ids) and rows["embeddings"]:
+            if len(rows["ids"]) == len(ids) and rows["embeddings"] is not None and len(rows["embeddings"]) > 0:
                 idx_map = {rid: emb for rid, emb in zip(rows["ids"], rows["embeddings"])}
                 embs    = [idx_map.get(id_) for id_ in ids]
                 if all(e is not None for e in embs):
@@ -312,10 +313,15 @@ def index_meeting(
     force         : re-index even if already present
     *_coll_name   : override collection names (defaults from config.py)
     """
-    with open(json_path, encoding="utf-8") as f:
-        data = json.load(f)
+    data = load_meeting(json_path)
 
     speeches = data.get("speeches") or []
+    if not speeches and data.get("full_text"):
+        parsed = parse_full_text_speeches(data["full_text"])
+        if parsed:
+            data["speeches"] = parsed
+            speeches = parsed
+
     if not speeches:
         return IndexResult(status="skip", reason="no structured speeches")
 
