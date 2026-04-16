@@ -213,7 +213,7 @@ def summarize_meeting(meeting_path: str | Path, backend: LLMBackend | None = Non
             attendance_block=attendance_block,
         )
 
-        print("⏳ Sending to llama-server...\n")
+        print("⏳ Sending to llm backend...\n")
         partial_summary, tokens = run_agent_loop(messages, backend=backend)
         total_tokens += tokens
 

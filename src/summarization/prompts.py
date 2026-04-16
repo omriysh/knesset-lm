@@ -32,7 +32,7 @@ Summarize the following meeting in Hebrew. The summary MUST strictly follow this
 3. עמדות מרכזיות (Main Opinions - STRICT FORMATTING):
    - This section MUST be formatted as a single bulleted list.
    - Each bullet point must represent an opinion expressed about a topic that was meaningful to the discussion.
-   - If opinions were expressed by MKs, state their names and parties within the bullet point.
+   - State the name of the person (or people) expressing the opinion at the beginning of the bullet point. If these were MKs, state their names and parties within the bullet point.
    - CONCISENESS RULE: Each bullet point must be extremely concise, limited to a maximum of two short sentences. This list is intended for strict database retrieval (RAG). Do not expand or write in paragraphs.
 
 4. החלטות ומסקנות (Decisions and Conclusions):
