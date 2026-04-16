@@ -112,9 +112,8 @@ class GeminiBackend:
 
     @property
     def max_chunk_chars(self) -> int:
-        # Reserve space for system prompt, partial summary, and model output
-        reserved = config.MAX_TOKENS + 4096
-        return (self.ctx_size - reserved) * config.CHARS_PER_TOK
+        # no need to reserve space, since ctx_size is already conservative
+        return self.ctx_size * config.CHARS_PER_TOK
 
     def __init__(
         self,
