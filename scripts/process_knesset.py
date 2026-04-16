@@ -51,6 +51,7 @@ from utils.knesset_db import (
     SESSION_TYPE_CLASSIFIED,
 )
 from summarization.pipeline import summarize_meeting, save_summary
+from config import NOT_PROTOCOL
 from indexing.embedder import ProtocolEmbedder
 from indexing.indexer import index_meeting, IndexResult
 
@@ -95,7 +96,7 @@ def _summarize_phase(
         "total":         0,
         "classified":    0, "cancelled":     0,
         "skipped_dl":    0, "downloaded_ok": 0, "no_transcript": 0,
-        "skipped_summ":  0, "summarized":    0, "too_long":      0, "failed_summ": 0,
+        "skipped_summ":  0, "summarized":    0, "too_long":      0, "not_protocol": 0, "failed_summ": 0,
     }
 
     sessions = get_committee_sessions(committee_id, knesset_num)
@@ -167,6 +168,9 @@ def _summarize_phase(
                 if summary is None:
                     stats["too_long"] += 1
                     tqdm.write(f"  [skip-long] {proto_path.name}")
+                elif summary == NOT_PROTOCOL:
+                    stats["not_protocol"] += 1
+                    tqdm.write(f"  [not-protocol] transcript deleted: {proto_path.name}")
                 elif summary:
                     save_summary(summary, proto_path, knesset_num)
                     stats["summarized"] += 1
@@ -274,6 +278,8 @@ def _format_committee_summary(name: str, stats: dict) -> str:
     flags = []
     if stats["too_long"]:
         flags.append(f"{stats['too_long']} long")
+    if stats["not_protocol"]:
+        flags.append(f"{stats['not_protocol']} not-proto")
     if stats["no_transcript"]:
         flags.append(f"{stats['no_transcript']} no-tr")
     if stats["failed_summ"]:
@@ -300,6 +306,8 @@ def _print_stats(stats: dict) -> None:
     print(f"  Summarized        : {stats['summarized']}")
     if stats["too_long"]:
         print(f"  Too long          : {stats['too_long']}")
+    if stats["not_protocol"]:
+        print(f"  Not protocol      : {stats['not_protocol']}")
     if stats["failed_summ"]:
         print(f"  Summary failed    : {stats['failed_summ']}")
     print(f"  Indexed           : {stats['indexed']}")
@@ -359,7 +367,7 @@ def main() -> None:
     grand: dict[str, int] = {k: 0 for k in (
         "total", "classified", "cancelled",
         "skipped_dl", "downloaded_ok", "no_transcript",
-        "skipped_summ", "summarized", "too_long", "failed_summ",
+        "skipped_summ", "summarized", "too_long", "not_protocol", "failed_summ",
         "indexed", "index_skip", "index_err",
     )}
 

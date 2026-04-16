@@ -7,11 +7,12 @@ Top-level meeting summarization pipeline.
 import time
 from pathlib import Path
 
+from agent.llm.base import LLMBackend
 from summarization.agent import run_agent_loop
 from summarization.prompts import SYSTEM_PROMPT_PASS1, SYSTEM_PROMPT_CONTINUATION
 from utils.meeting import load_meeting, build_transcript_text, chunk_transcript, extract_attendance
 from utils.knesset_db import get_mk_profile, get_active_committee_members_by_name
-from config import summaries_dir, CHARS_PER_TOK, MAX_SUMMARIZATION_CHUNKS
+from config import summaries_dir, CHARS_PER_TOK, MAX_CHUNK_CHARS, MAX_SUMMARIZATION_CHUNKS, NOT_PROTOCOL
 
 
 def _mk_line(profile: dict, knesset_num: int, duty_desc: str = "") -> str:
@@ -142,7 +143,7 @@ def _build_messages(
     ]
 
 
-def summarize_meeting(meeting_path: str | Path) -> str | None:
+def summarize_meeting(meeting_path: str | Path, backend: LLMBackend | None = None) -> str | None:
     """
     Load a meeting protocol file and produce a Hebrew summary via the agentic loop.
 
@@ -166,7 +167,8 @@ def summarize_meeting(meeting_path: str | Path) -> str | None:
     print(f"   Date      : {date}")
     print(f"   ~Tokens   : {char_count // CHARS_PER_TOK:,} (estimated)")
 
-    chunks = chunk_transcript(transcript_text)
+    max_chars = backend.max_chunk_chars if backend is not None else MAX_CHUNK_CHARS
+    chunks = chunk_transcript(transcript_text, max_chars=max_chars)
 
     if len(chunks) > MAX_SUMMARIZATION_CHUNKS:
         print(
@@ -212,8 +214,13 @@ def summarize_meeting(meeting_path: str | Path) -> str | None:
         )
 
         print("⏳ Sending to llama-server...\n")
-        partial_summary, tokens = run_agent_loop(messages)
+        partial_summary, tokens = run_agent_loop(messages, backend=backend)
         total_tokens += tokens
+
+        if partial_summary and partial_summary.strip() == NOT_PROTOCOL:
+            meeting_path.unlink(missing_ok=True)
+            print("⚠️  Not a protocol — transcript deleted.")
+            return NOT_PROTOCOL
 
     elapsed = time.time() - t_start
     print(f"\n⏱️  Done in {elapsed:.1f}s | {total_tokens} tokens | {total_tokens / elapsed:.1f} tok/s")

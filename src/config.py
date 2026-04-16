@@ -29,6 +29,11 @@ MAX_TOKENS          = 16384
 MAX_THINKING_TOKENS = 6000
 CHARS_PER_TOK       = 2      # rough estimate for Hebrew
 
+API_RETRY_ATTEMPTS  = 5      # number of attempts for external API calls
+API_RETRY_SLEEP     = 30     # seconds between retries
+
+NOT_PROTOCOL        = "לא פרוטוקול"   # sentinel returned by summarize_meeting when LLM detects non-protocol
+
 # Chunk sizing: reserve space for system prompt, partial summary, and response
 _ESTIMATED_SUMMARY_TOKENS = 2048
 _RESERVED_TOKENS = 2048 + MAX_TOKENS + _ESTIMATED_SUMMARY_TOKENS

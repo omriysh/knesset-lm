@@ -7,63 +7,17 @@ dispatching Knesset tool calls along the way.
 """
 
 import json
-import re
 
-from summarization.llm_client import call_model
-from utils.tools import dispatch
-
-_THINK_BLOCK_RE = re.compile(r'<think>.*?</think>', re.DOTALL)
-_XML_TOOL_RE    = re.compile(
-    r'<tool_call>\s*<function=(\w+)>\s*<parameter=(\w+)>\s*(.*?)\s*</parameter>\s*</function>\s*</tool_call>',
-    re.DOTALL,
-)
+from agent.llm.base import DoneEvent, LLMBackend, ThinkingEvent, TokenEvent, ToolCallsEvent
+from agent.llm.gemini import GeminiBackend
+from utils.tools import TOOLS, dispatch
 
 
-def _strip_thinking(text: str) -> str:
-    """Remove <think>...</think> blocks from a string."""
-    return _THINK_BLOCK_RE.sub('', text).strip()
-
-
-def _extract_xml_tool_calls(content: str) -> list[dict]:
-    """
-    Fallback: parse raw <tool_call> XML from content when llama.cpp
-    fails to populate message.tool_calls properly.
-    """
-    matches = _XML_TOOL_RE.findall(content)
-    return [
-        {
-            "id": f"xml_fallback_{i}",
-            "function": {
-                "name":      fn_name,
-                "arguments": json.dumps({param_name: param_value.strip()}, ensure_ascii=False),
-            },
-        }
-        for i, (fn_name, param_name, param_value) in enumerate(matches)
-    ]
-
-
-def _extract_tool_calls(message: dict, content: str) -> tuple[list[dict], str]:
-    """
-    Extract tool calls from a model message, falling back to XML parsing.
-    If XML tool calls are found in content, strips them from content.
-    Returns (tool_calls, cleaned_content).
-    """
-    tool_calls = message.get("tool_calls") or []
-    if content and not tool_calls:
-        xml_calls = _extract_xml_tool_calls(content)
-        if xml_calls:
-            print(f"⚠️  Parsed {len(xml_calls)} tool call(s) from raw XML (llama.cpp fallback)")
-            tool_calls = xml_calls
-            content    = _XML_TOOL_RE.sub('', content).strip()
-    return tool_calls, content
-
-
-def _clean_content(raw: str) -> str:
-    """Strip thinking blocks and XML tool markup from model output."""
-    return _XML_TOOL_RE.sub('', _strip_thinking(raw)).strip()
-
-
-def run_agent_loop(messages: list[dict], max_rounds: int = 30) -> tuple[str, int]:
+def run_agent_loop(
+    messages:   list[dict],
+    max_rounds: int        = 30,
+    backend:    LLMBackend | None = None,
+) -> tuple[str, int]:
     """
     Drive the tool-call loop until the model produces a final text answer.
     Returns (final_answer, total_completion_tokens).
@@ -73,36 +27,45 @@ def run_agent_loop(messages: list[dict], max_rounds: int = 30) -> tuple[str, int
     - Thinking-only responses (no visible output) → retries with /no_think
     - Max tool round limit → forces a final answer
     """
+    if backend is None:
+        backend = GeminiBackend()
+
     total_tokens      = 0
     tool_call_count   = 0
     suppress_thinking = False
-    max_iterations    = max_rounds + 5  # slack for thinking-only retries
+    max_iterations    = max_rounds + 5
 
     for _ in range(max_iterations):
-        if suppress_thinking:
-            last = messages[-1]
-            if last["role"] == "user":
-                messages[-1] = {**last, "content": last["content"] + " /no_think"}
-            suppress_thinking = False
+        send_messages = backend.prepare_messages(messages, suppress_thinking=suppress_thinking)
+        suppress_thinking = False
 
-        response_data = call_model(messages)
-        total_tokens += response_data.get("usage", {}).get("completion_tokens", 0)
+        raw_content = ""
+        tool_calls: list[dict] = []
+        token_count = 0
 
-        choice              = response_data["choices"][0]
-        message             = choice["message"]
-        finish              = choice.get("finish_reason", "")
-        content             = message.get("content", "") or ""
-        tool_calls, content = _extract_tool_calls(message, content)
-        clean_content       = _clean_content(content)
+        for event in backend.stream(send_messages, tools=TOOLS, temperature=0.7):
+            if isinstance(event, TokenEvent):
+                raw_content += event.text
+                token_count += 1
+            elif isinstance(event, ThinkingEvent):
+                pass
+            elif isinstance(event, ToolCallsEvent):
+                tool_calls = event.calls
+            elif isinstance(event, DoneEvent):
+                break
 
-        if not tool_calls or finish == "stop":
-            if clean_content:
+        total_tokens += token_count
+
+        tool_calls, clean_content = backend.extract_tool_calls({}, raw_content)
+        clean_content = backend.extract_visible_content(clean_content)
+
+        if not tool_calls:
+            if not backend.needs_thinking_retry(clean_content, tool_calls):
                 print("\n" + "=" * 60)
                 print("📋 OUTPUT")
                 print("=" * 60)
                 print(clean_content)
                 return clean_content, total_tokens
-            # Thinking-only response — retry with thinking disabled
             print("\n⚠️  Thinking-only response. Re-requesting with thinking disabled.\n")
             messages.append({
                 "role":    "user",

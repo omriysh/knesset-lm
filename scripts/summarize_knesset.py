@@ -33,7 +33,7 @@ from utils.knesset_db import (
     SESSION_TYPE_CLASSIFIED,
 )
 from summarization.pipeline import summarize_meeting, save_summary
-from config import transcriptions_dir, summaries_dir
+from config import transcriptions_dir, summaries_dir, NOT_PROTOCOL
 
 _WIN_UNSAFE = re.compile(r'[\\/:*?"<>|]')
 _CANCELLED_STATUS_IDS = {193}
@@ -76,7 +76,7 @@ def _process_committee(
         "total":         len(sessions),
         "classified":    0, "cancelled":     0,
         "skipped_dl":    0, "downloaded_ok": 0, "no_transcript": 0,
-        "skipped_summ":  0, "summarized":    0, "too_long":      0, "failed_summ": 0,
+        "skipped_summ":  0, "summarized":    0, "too_long":      0, "not_protocol": 0, "failed_summ": 0,
     }
 
     if not sessions:
@@ -159,6 +159,9 @@ def _process_committee(
                 if summary is None:
                     stats["too_long"] += 1
                     tqdm.write(f"  [skip-long] {proto_path.name}")
+                elif summary == NOT_PROTOCOL:
+                    stats["not_protocol"] += 1
+                    tqdm.write(f"  [not-protocol] transcript deleted: {proto_path.name}")
                 elif summary:
                     save_summary(summary, proto_path, knesset_num)
                     stats["summarized"] += 1
@@ -208,7 +211,7 @@ def main() -> None:
     grand: dict[str, int] = {
         "total":         0, "classified":    0, "cancelled":     0,
         "skipped_dl":    0, "downloaded_ok": 0, "no_transcript": 0,
-        "skipped_summ":  0, "summarized":    0, "too_long":      0, "failed_summ":   0,
+        "skipped_summ":  0, "summarized":    0, "too_long":      0, "not_protocol":  0, "failed_summ":   0,
     }
 
     with tqdm(
@@ -256,6 +259,8 @@ def _format_stats(label: str, stats: dict) -> str:
         parts.append(f"{stats['skipped_summ']} cached")
     if stats["too_long"]:
         parts.append(f"{stats['too_long']} long")
+    if stats["not_protocol"]:
+        parts.append(f"{stats['not_protocol']} not-proto")
     if stats["no_transcript"]:
         parts.append(f"{stats['no_transcript']} no-transcript")
     if stats["failed_summ"]:
@@ -278,6 +283,8 @@ def _print_stats(stats: dict) -> None:
     print(f"  Newly summarized  : {stats['summarized']}")
     if stats["too_long"]:
         print(f"  Too long (skip)   : {stats['too_long']}")
+    if stats["not_protocol"]:
+        print(f"  Not protocol      : {stats['not_protocol']}")
     if stats["failed_summ"]:
         print(f"  Summary failed    : {stats['failed_summ']}")
 

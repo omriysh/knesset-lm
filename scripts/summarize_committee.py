@@ -34,7 +34,7 @@ from utils.knesset_db import (
     SESSION_TYPE_CLASSIFIED,
 )
 from summarization.pipeline import summarize_meeting, save_summary
-from config import transcriptions_dir, summaries_dir
+from config import transcriptions_dir, summaries_dir, NOT_PROTOCOL
 
 _WIN_UNSAFE = re.compile(r'[\\/:*?"<>|]')
 _CANCELLED_STATUS_IDS = {193}
@@ -84,7 +84,7 @@ def main() -> None:
         "total":         len(sessions),
         "classified":    0, "cancelled":     0,
         "skipped_dl":    0, "downloaded_ok": 0, "no_transcript": 0,
-        "skipped_summ":  0, "summarized":    0, "too_long":      0, "failed_summ": 0,
+        "skipped_summ":  0, "summarized":    0, "too_long":      0, "not_protocol": 0, "failed_summ": 0,
     }
 
     with tqdm(
@@ -162,6 +162,9 @@ def main() -> None:
                 if summary is None:
                     tqdm.write(f"  [skip-long] transcript too long")
                     stats["too_long"] += 1
+                elif summary == NOT_PROTOCOL:
+                    tqdm.write("  [not-protocol] transcript deleted")
+                    stats["not_protocol"] += 1
                 elif summary:
                     save_summary(summary, proto_path, args.knesset)
                     tqdm.write(f"  summary saved: {summ_path.name}")
@@ -195,6 +198,8 @@ def main() -> None:
     print(f"  Newly summarized  : {stats['summarized']}")
     if stats["too_long"]:
         print(f"  Too long (skip)   : {stats['too_long']}")
+    if stats["not_protocol"]:
+        print(f"  Not protocol      : {stats['not_protocol']}")
     if stats["failed_summ"]:
         print(f"  Summary failed    : {stats['failed_summ']}")
 
