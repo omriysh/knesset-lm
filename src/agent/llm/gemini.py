@@ -3,7 +3,7 @@ gemini.py
 
 GeminiBackend — LLMBackend implementation for Google's Gemini API.
 
-Uses gemini-2.5-flash-lite via the v1beta REST endpoint with SSE streaming.
+Uses google.genai SDK (google-genai package) with gemini-2.5-flash-lite.
 API key read from GEMINI_API_KEY env var.
 """
 
@@ -14,33 +14,31 @@ import os
 import time
 from typing import Generator
 
-import requests
+from google import genai
+from google.genai import types
 
 import config
 from agent.llm.base import DoneEvent, LLMEvent, ThinkingEvent, TokenEvent, ToolCallsEvent
 
 
-_GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
-
-
-def _convert_tools(tools: list[dict]) -> list[dict]:
-    """Convert OpenAI-style tool schema to Gemini functionDeclarations."""
-    return [
-        {
-            "name":        t["function"]["name"],
-            "description": t["function"].get("description", ""),
-            "parameters":  t["function"].get("parameters", {}),
-        }
+def _convert_tools_genai(tools: list[dict]) -> list[types.Tool] | None:
+    """Convert OpenAI-style tool schema to google.genai Tool objects."""
+    if not tools:
+        return None
+    declarations = [
+        types.FunctionDeclaration(
+            name        = t["function"]["name"],
+            description = t["function"].get("description", ""),
+            parameters  = t["function"].get("parameters", {}),
+        )
         for t in tools
         if t.get("type") == "function"
     ]
+    return [types.Tool(function_declarations=declarations)] if declarations else None
 
 
 def _build_tool_call_map(messages: list[dict]) -> dict[str, str]:
-    """
-    Build a map of tool_call_id → function_name by scanning assistant messages.
-    Used to resolve function names when converting tool-result messages.
-    """
+    """Build tool_call_id → function_name map from assistant messages."""
     mapping: dict[str, str] = {}
     for msg in messages:
         if msg.get("role") == "assistant":
@@ -49,12 +47,10 @@ def _build_tool_call_map(messages: list[dict]) -> dict[str, str]:
     return mapping
 
 
-def _convert_messages(messages: list[dict]) -> tuple[list[dict], dict | None]:
+def _convert_messages(messages: list[dict]) -> tuple[list[dict], str | None]:
     """
     Convert OpenAI-style messages to Gemini contents format.
-
-    Returns (contents, system_instruction) where system_instruction is a
-    Gemini systemInstruction dict or None.
+    Returns (contents, system_instruction_text).
     """
     system_parts: list[str] = []
     contents: list[dict] = []
@@ -94,35 +90,44 @@ def _convert_messages(messages: list[dict]) -> tuple[list[dict], dict | None]:
                 }],
             })
 
-    system_instruction = (
-        {"parts": [{"text": "\n\n".join(system_parts)}]}
-        if system_parts else None
-    )
-    return contents, system_instruction
+    system_text = "\n\n".join(system_parts) if system_parts else None
+    return contents, system_text
+
+
+_CTX_SIZE: dict[str, int] = {
+    "gemini-2.5-flash-lite": 500_000,
+    "gemini-2.5-flash":      500_000,
+    "gemini-2.5-pro":        500_000,
+    "gemma-4-31b-it":        15_000,
+    "gemma-4-12b-it":        15_000,
+}
+_CTX_SIZE_DEFAULT = 500_000
 
 
 class GeminiBackend:
-    """LLMBackend for Google Gemini API (gemini-2.5-flash-lite)."""
+    """LLMBackend for Google Gemini API / Gemma via google.genai SDK."""
 
     MODEL             = "gemini-2.5-flash-lite"
     supports_thinking = False
     TEMPERATURE       = 1.0
     _log_prefix       = "gemini"
-    ctx_size          = 500_000   # gemini-2.5-flash-lite: 1M context; use 500k conservatively
 
     @property
     def max_chunk_chars(self) -> int:
-        # no need to reserve space, since ctx_size is already conservative
         return self.ctx_size * config.CHARS_PER_TOK
 
     def __init__(
         self,
+        model:      str | None = None,
         api_key:    str | None = None,
         timeout:    int        = 300,
         max_tokens: int        = config.MAX_TOKENS,
     ):
-        self._api_key   = api_key or os.environ.get("GEMINI_API_KEY", "")
-        self._timeout   = timeout
+        api_key          = api_key or os.environ.get("GEMINI_API_KEY", "")
+        self._model      = model or self.MODEL
+        self.ctx_size    = _CTX_SIZE.get(self._model, _CTX_SIZE_DEFAULT)
+        self._client     = genai.Client(api_key=api_key)
+        self._timeout    = timeout
         self._max_tokens = max_tokens
 
     # ── Protocol methods ──────────────────────────────────────────────────────
@@ -160,79 +165,51 @@ class GeminiBackend:
         temperature: float | None      = None,
         max_tokens:  int               = config.MAX_TOKENS,
     ) -> Generator[LLMEvent, None, None]:
-        contents, system_instruction = _convert_messages(messages)
+        contents, system_text = _convert_messages(messages)
 
-        body: dict = {
-            "contents":        contents,
-            "generationConfig": {
-                "maxOutputTokens": max_tokens,
-                "temperature":     temperature if temperature is not None else self.TEMPERATURE,
-            },
-        }
-        if system_instruction:
-            body["systemInstruction"] = system_instruction
-        if tools:
-            body["tools"] = [{"functionDeclarations": _convert_tools(tools)}]
-
-        url = (
-            f"{_GEMINI_BASE}/models/{self.MODEL}:streamGenerateContent"
-            f"?alt=sse&key={self._api_key}"
+        gen_config = types.GenerateContentConfig(
+            max_output_tokens  = max_tokens,
+            temperature        = temperature if temperature is not None else self.TEMPERATURE,
+            system_instruction = system_text,
+            tools              = _convert_tools_genai(tools) if tools else None,
         )
-
-        resp = requests.post(url, json=body, stream=True, timeout=self._timeout)
-        resp.raise_for_status()
 
         tc_list:    list[dict] = []
         t0                     = time.monotonic()
         ttft:       float      = 0.0
         token_count            = 0
 
-        for raw in resp.iter_lines():
-            if not raw:
-                continue
-            line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-            if not line.startswith("data: "):
-                continue
-            payload = line[6:]
-            if payload == "[DONE]":
-                break
-            try:
-                chunk      = json.loads(payload)
-                candidates = chunk.get("candidates") or []
-                if not candidates:
+        for chunk in self._client.models.generate_content_stream(
+            model    = self._model,
+            contents = contents,
+            config   = gen_config,
+        ):
+            for candidate in chunk.candidates or []:
+                if not candidate.content:
                     continue
-                candidate = candidates[0]
-                parts     = (candidate.get("content") or {}).get("parts") or []
-
-                for part in parts:
-                    if part.get("thought"):
-                        thinking = part.get("text", "")
-                        if thinking:
+                for part in candidate.content.parts or []:
+                    if getattr(part, "thought", False):
+                        if part.text:
                             if not ttft:
                                 ttft = time.monotonic() - t0
-                            yield ThinkingEvent(thinking)
+                            yield ThinkingEvent(part.text)
 
-                    elif "text" in part:
-                        text = part["text"]
-                        if text:
-                            if not ttft:
-                                ttft = time.monotonic() - t0
-                            token_count += 1
-                            yield TokenEvent(text)
-
-                    elif "functionCall" in part:
-                        fc = part["functionCall"]
+                    elif part.function_call:
+                        fc = part.function_call
                         tc_list.append({
                             "id":   f"gemini_{len(tc_list)}",
                             "type": "function",
                             "function": {
-                                "name":      fc["name"],
-                                "arguments": json.dumps(fc.get("args", {}), ensure_ascii=False),
+                                "name":      fc.name,
+                                "arguments": json.dumps(dict(fc.args), ensure_ascii=False),
                             },
                         })
 
-            except (json.JSONDecodeError, KeyError):
-                continue
+                    elif part.text:
+                        if not ttft:
+                            ttft = time.monotonic() - t0
+                        token_count += 1
+                        yield TokenEvent(part.text)
 
         total = time.monotonic() - t0
         gen   = total - ttft
