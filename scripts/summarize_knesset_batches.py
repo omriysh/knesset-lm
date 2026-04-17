@@ -1,7 +1,7 @@
 """
 summarize_knesset_batches.py
 
-Batch summarization for a Knesset using Google's Gemini Batch API (gemma-4-31b-it).
+Batch summarization for a Knesset using Google's Gemini Batch API (gemini-2.5-flash-lite).
 
 Phase 1: All single-chunk transcripts — submitted concurrently under an
          enqueued-token budget; results processed as each job drains.
@@ -77,10 +77,11 @@ _MK_UNENRICHED_RE = re.compile(
 # Strip the ח"כ prefix to extract just the name
 _MK_PREFIX_RE = re.compile(r'^ח["\u05f3\u05f4\u2019\u201d]כ\s+')
 
-GEMMA_MODEL                    = "gemma-4-31b-it"
-GEMMA_CTX_TOKENS               = 30_000                            # input tokens per request
-GEMMA_CHUNK_CHARS              = GEMMA_CTX_TOKENS * CHARS_PER_TOK  # 60 000 chars
+GEMINI_MODEL                    = "gemini-2.5-flash-lite"
+GEMINI_CTX_TOKENS               = 500_000                            # input tokens per request
+GEMINI_CHUNK_CHARS              = GEMINI_CTX_TOKENS * CHARS_PER_TOK  # 1 000 000 chars
 MAX_BATCH_INPUT_TOKENS         = 9_500_000                         # per-batch cap (API limit 10M)
+MAX_CONCURRENT_BATCH_REQUESTS = 100                                # api limit
 ENQUEUE_CAP_TOKENS             = 9_500_000                         # cross-batch enqueue cap (API limit 10M)
 BATCH_METADATA_OVERHEAD_TOKENS = 100                               # per-line JSONL framing
 POLL_INTERVAL_S                = 60
@@ -241,7 +242,7 @@ def _build_requests_for_entries(
             continue
 
         text   = build_transcript_text(meeting)
-        chunks = chunk_transcript(text, max_chars=GEMMA_CHUNK_CHARS)
+        chunks = chunk_transcript(text, max_chars=GEMINI_CHUNK_CHARS)
 
         chunk_idx = entry.get("chunk_index", 0)
         if chunk_idx >= len(chunks):
@@ -287,9 +288,9 @@ def _split_batches(
             raise ValueError(
                 f"Single request for meeting {entry.get('meeting_id')} estimated at "
                 f"{tok:,} tokens — exceeds per-batch cap {MAX_BATCH_INPUT_TOKENS:,}. "
-                f"Lower GEMMA_CHUNK_CHARS or skip this meeting."
+                f"Lower GEMINI_CHUNK_CHARS or skip this meeting."
             )
-        if cur_reqs and cur_tokens + tok > MAX_BATCH_INPUT_TOKENS:
+        if cur_reqs and (cur_tokens + tok > MAX_BATCH_INPUT_TOKENS or len(cur_reqs) == MAX_CONCURRENT_BATCH_REQUESTS):
             batches.append((cur_reqs, cur_entries))
             cur_reqs, cur_entries, cur_tokens = [], [], 0
         cur_reqs.append(req)
@@ -500,7 +501,7 @@ def _submit_no_poll(
     uploaded = client.files.upload(file=jsonl_path, config={"mime_type": "application/jsonl"})
     try:
         job = client.batches.create(
-            model  = GEMMA_MODEL,
+            model  = GEMINI_MODEL,
             src    = uploaded.name,
             config = {"display_name": label},
         )
@@ -619,11 +620,19 @@ def _run_pool(
         while pending:
             reqs, entries, label = pending[0]
             est = sum(_estimate_tokens(r) for r in reqs)
-            if active and budget_used + est > ENQUEUE_CAP_TOKENS:
-                tqdm.write(
-                    f"  [budget] pool full: {budget_used/1_000_000:.1f}M used + "
-                    f"{est/1_000_000:.1f}M next > {ENQUEUE_CAP_TOKENS/1_000_000:.0f}M cap — draining"
-                )
+            if active and (
+                budget_used + est > ENQUEUE_CAP_TOKENS
+                or len(active) + len(reqs) >= MAX_CONCURRENT_BATCH_REQUESTS
+            ):
+                if len(active) + len(reqs)>= MAX_CONCURRENT_BATCH_REQUESTS:
+                    tqdm.write(
+                        f"  [budget] pool full: {len(active)}/{MAX_CONCURRENT_BATCH_REQUESTS} jobs — draining"
+                    )
+                else:
+                    tqdm.write(
+                        f"  [budget] pool full: {budget_used/1_000_000:.1f}M used + "
+                        f"{est/1_000_000:.1f}M next > {ENQUEUE_CAP_TOKENS/1_000_000:.0f}M cap — draining"
+                    )
                 break
             try:
                 info = _submit_no_poll(
@@ -781,7 +790,7 @@ def _scan_committees(
             try:
                 meeting = load_meeting(proto_path)
                 text    = build_transcript_text(meeting)
-                chunks  = chunk_transcript(text, max_chars=GEMMA_CHUNK_CHARS)
+                chunks  = chunk_transcript(text, max_chars=GEMINI_CHUNK_CHARS)
             except Exception as e:
                 tqdm.write(f"  [WARN] {proto_path.name}: {e}")
                 continue
