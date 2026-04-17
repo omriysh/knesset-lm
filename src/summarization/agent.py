@@ -17,6 +17,7 @@ def run_agent_loop(
     messages:   list[dict],
     max_rounds: int        = 30,
     backend:    LLMBackend | None = None,
+    quiet:      bool       = False,
 ) -> tuple[str, int]:
     """
     Drive the tool-call loop until the model produces a final text answer.
@@ -61,12 +62,14 @@ def run_agent_loop(
 
         if not tool_calls:
             if not backend.needs_thinking_retry(clean_content, tool_calls):
-                print("\n" + "=" * 60)
-                print("📋 OUTPUT")
-                print("=" * 60)
-                print(clean_content)
+                if not quiet:
+                    print("\n" + "=" * 60)
+                    print("📋 OUTPUT")
+                    print("=" * 60)
+                    print(clean_content)
                 return clean_content, total_tokens
-            print("\n⚠️  Thinking-only response. Re-requesting with thinking disabled.\n")
+            if not quiet:
+                print("\n⚠️  Thinking-only response. Re-requesting with thinking disabled.\n")
             messages.append({
                 "role":    "user",
                 "content": "כעת כתוב את הסיכום הסופי בעברית, ללא קריאות לכלים נוספים.",
@@ -79,18 +82,22 @@ def run_agent_loop(
             tool_call_count += 1
             fn_name = tc["function"]["name"]
             fn_args = json.loads(tc["function"]["arguments"])
-            print(f"🔧 Tool [{tool_call_count}]: {fn_name}({json.dumps(fn_args, ensure_ascii=False)})")
+            if not quiet:
+                print(f"🔧 Tool [{tool_call_count}]: {fn_name}({json.dumps(fn_args, ensure_ascii=False)})")
             result = dispatch(fn_name, fn_args)
-            print(f"   ↳ {result[:200]}{'...' if len(result) > 200 else ''}\n")
+            if not quiet:
+                print(f"   ↳ {result[:200]}{'...' if len(result) > 200 else ''}\n")
             messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
 
         if tool_call_count >= max_rounds:
-            print(f"⚠️  Reached max tool rounds ({max_rounds}), forcing final answer.\n")
+            if not quiet:
+                print(f"⚠️  Reached max tool rounds ({max_rounds}), forcing final answer.\n")
             messages.append({
                 "role":    "user",
                 "content": "כעת כתוב את הסיכום הסופי בעברית, ללא קריאות לכלים נוספים.",
             })
             suppress_thinking = True
 
-    print("⚠️  Agent loop exhausted without producing a final answer.")
+    if not quiet:
+        print("⚠️  Agent loop exhausted without producing a final answer.")
     return "", total_tokens

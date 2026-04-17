@@ -143,7 +143,11 @@ def _build_messages(
     ]
 
 
-def summarize_meeting(meeting_path: str | Path, backend: LLMBackend | None = None) -> str | None:
+def summarize_meeting(
+    meeting_path: str | Path,
+    backend: LLMBackend | None = None,
+    quiet: bool = False,
+) -> str | None:
     """
     Load a meeting protocol file and produce a Hebrew summary via the agentic loop.
 
@@ -152,7 +156,13 @@ def summarize_meeting(meeting_path: str | Path, backend: LLMBackend | None = Non
 
     Returns the final Hebrew summary text, or None if the transcript is too long
     (more than MAX_SUMMARIZATION_CHUNKS chunks) and was skipped.
+
+    quiet=True suppresses all progress output (for parallel workers).
     """
+    def _print(*args, **kwargs):
+        if not quiet:
+            print(*args, **kwargs)
+
     meeting_path = Path(meeting_path)
     meeting      = load_meeting(meeting_path)
 
@@ -163,15 +173,15 @@ def summarize_meeting(meeting_path: str | Path, backend: LLMBackend | None = Non
     knesset_num     = meeting.get("knesset_num", 25)
 
     char_count = len(transcript_text)
-    print(f"   Committee : {committee}")
-    print(f"   Date      : {date}")
-    print(f"   ~Tokens   : {char_count // CHARS_PER_TOK:,} (estimated)")
+    _print(f"   Committee : {committee}")
+    _print(f"   Date      : {date}")
+    _print(f"   ~Tokens   : {char_count // CHARS_PER_TOK:,} (estimated)")
 
     max_chars = backend.max_chunk_chars if backend is not None else MAX_CHUNK_CHARS
     chunks = chunk_transcript(transcript_text, max_chars=max_chars)
 
     if len(chunks) > MAX_SUMMARIZATION_CHUNKS:
-        print(
+        _print(
             f"\n⏩ Transcript too long ({len(chunks)} chunks > {MAX_SUMMARIZATION_CHUNKS} max) — skipping.\n"
         )
         return None
@@ -187,14 +197,14 @@ def summarize_meeting(meeting_path: str | Path, backend: LLMBackend | None = Non
             if not any(m["full_name"].lower() in n.lower() or n.lower() in m["full_name"].lower()
                        for n in raw_names)
         )
-        print(f"   Attendance: {len(raw_names)} present, {absent_count} absent committee member(s)")
+        _print(f"   Attendance: {len(raw_names)} present, {absent_count} absent committee member(s)")
 
     t_start = time.time()
 
     if len(chunks) == 1:
-        print("\n📄 Transcript fits in one chunk — single pass.\n")
+        _print("\n📄 Transcript fits in one chunk — single pass.\n")
     else:
-        print(f"\n📄 Transcript split into {len(chunks)} chunks.\n")
+        _print(f"\n📄 Transcript split into {len(chunks)} chunks.\n")
 
     partial_summary: str | None = None
     total_tokens = 0
@@ -202,9 +212,9 @@ def summarize_meeting(meeting_path: str | Path, backend: LLMBackend | None = Non
     for i, chunk in enumerate(chunks, 1):
         is_last = (i == len(chunks))
         if len(chunks) > 1:
-            print(f"\n{'='*60}")
-            print(f"🔄 Chunk {i}/{len(chunks)} ({len(chunk):,} chars){' [FINAL]' if is_last else ''}")
-            print(f"{'='*60}\n")
+            _print(f"\n{'='*60}")
+            _print(f"🔄 Chunk {i}/{len(chunks)} ({len(chunk):,} chars){' [FINAL]' if is_last else ''}")
+            _print(f"{'='*60}\n")
 
         system_prompt = SYSTEM_PROMPT_PASS1 if partial_summary is None else SYSTEM_PROMPT_CONTINUATION
         messages = _build_messages(
@@ -213,17 +223,17 @@ def summarize_meeting(meeting_path: str | Path, backend: LLMBackend | None = Non
             attendance_block=attendance_block,
         )
 
-        print("⏳ Sending to llm backend...\n")
-        partial_summary, tokens = run_agent_loop(messages, backend=backend)
+        _print("⏳ Sending to llm backend...\n")
+        partial_summary, tokens = run_agent_loop(messages, backend=backend, quiet=quiet)
         total_tokens += tokens
 
         if partial_summary and partial_summary.strip() == NOT_PROTOCOL:
             meeting_path.unlink(missing_ok=True)
-            print("⚠️  Not a protocol — transcript deleted.")
+            _print("⚠️  Not a protocol — transcript deleted.")
             return NOT_PROTOCOL
 
     elapsed = time.time() - t_start
-    print(f"\n⏱️  Done in {elapsed:.1f}s | {total_tokens} tokens | {total_tokens / elapsed:.1f} tok/s")
+    _print(f"\n⏱️  Done in {elapsed:.1f}s | {total_tokens} tokens | {total_tokens / elapsed:.1f} tok/s")
 
     return partial_summary or ""
 
