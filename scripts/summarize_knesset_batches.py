@@ -8,7 +8,8 @@ Phase 2: Multi-chunk transcripts — one batch job per round; each round advance
          every pending meeting by one chunk using the running partial summary.
 
 State is saved to a JSON file after every batch so runs can be safely interrupted
-and resumed.
+and resumed. If interrupted mid-poll, the active job is reconnected on resume
+(no re-submission / double billing).
 
 Requirements
 ------------
@@ -31,7 +32,10 @@ import re
 import sys
 import tempfile
 import time
+from functools import lru_cache
 from pathlib import Path
+
+from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
@@ -72,13 +76,14 @@ _MK_UNENRICHED_RE = re.compile(
 # Strip the ח"כ prefix to extract just the name
 _MK_PREFIX_RE = re.compile(r'^ח["\u05f3\u05f4\u2019\u201d]כ\s+')
 
-GEMMA_MODEL            = "gemma-4-31b-it"
-GEMMA_CTX_TOKENS       = 30_000                            # input tokens per request
-GEMMA_CHUNK_CHARS      = GEMMA_CTX_TOKENS * CHARS_PER_TOK  # 60 000 chars
-MAX_BATCH_INPUT_TOKENS = 9_500_000                         # stay under 10M API limit
-OVERHEAD_TOKENS        = 2_500   # system prompt + attendance header (estimated)
-POLL_INTERVAL_S        = 60
-MAX_POLL_ATTEMPTS      = 180     # 3 hours max
+GEMMA_MODEL                    = "gemma-4-31b-it"
+GEMMA_CTX_TOKENS               = 30_000                            # input tokens per request
+GEMMA_CHUNK_CHARS              = GEMMA_CTX_TOKENS * CHARS_PER_TOK  # 60 000 chars
+MAX_BATCH_INPUT_TOKENS         = 9_500_000                         # stay under 10M API limit
+BATCH_METADATA_OVERHEAD_TOKENS = 100                               # per-line JSONL framing
+POLL_INTERVAL_S                = 60
+MAX_POLL_ATTEMPTS              = 180     # 3 hours max
+MAX_ENTRY_ATTEMPTS             = 3       # per-entry retry budget before giving up
 
 
 # ── Path helpers ──────────────────────────────────────────────────────────────
@@ -94,6 +99,21 @@ def _session_filename(date_iso: str, session_id: int) -> str:
     return f"00_00_0000_{session_id}"
 
 
+def _make_key(entry: dict) -> str:
+    """
+    Stable per-request key for batch result correlation. Gemini batch does not
+    guarantee that output order matches input order — correlate by this key.
+    """
+    return f"{entry['meeting_id']}:{entry.get('chunk_index', 0)}"
+
+
+# ── Cached profile lookups ───────────────────────────────────────────────────
+
+@lru_cache(maxsize=4096)
+def _cached_mk_profile(name: str, knesset_num: int):
+    return get_mk_profile(name, knesset_num)
+
+
 # ── Post-processing: attendance enrichment ────────────────────────────────────
 
 def _enrich_summary_attendance(text: str, knesset_num: int) -> str:
@@ -105,18 +125,17 @@ def _enrich_summary_attendance(text: str, knesset_num: int) -> str:
     This catches MKs who appear in the body of the protocol but were not in
     the pre-computed attendance block, so the model couldn't add their party.
     """
-    # Collect unique unenriched mentions: full_match → replacement
     replacements: dict[str, str] = {}
 
     for m in _MK_UNENRICHED_RE.finditer(text):
         full_match = m.group(1)
         if full_match in replacements:
-            continue                      # already resolved in this pass
+            continue
 
         name = _MK_PREFIX_RE.sub("", full_match).strip()
-        profile = get_mk_profile(name, knesset_num)
+        profile = _cached_mk_profile(name, knesset_num)
         if not profile:
-            replacements[full_match] = full_match   # no profile → keep as-is
+            replacements[full_match] = full_match
             continue
 
         factions = [
@@ -130,7 +149,6 @@ def _enrich_summary_attendance(text: str, knesset_num: int) -> str:
 
         replacements[full_match] = f"{full_match} ({faction['faction_name']})"
 
-    # Apply only the substitutions that actually add something
     for original, enriched in replacements.items():
         if original == enriched:
             continue
@@ -186,7 +204,7 @@ def _estimate_tokens(req: dict) -> int:
     for content in req.get("contents", []):
         for part in content.get("parts", []):
             total += len(part.get("text", ""))
-    return total // CHARS_PER_TOK + OVERHEAD_TOKENS
+    return total // CHARS_PER_TOK + BATCH_METADATA_OVERHEAD_TOKENS
 
 
 def _build_requests_for_entries(
@@ -196,16 +214,20 @@ def _build_requests_for_entries(
     """
     Build one Gemini request per queue entry. Loads meeting files from disk.
     Returns (requests, valid_entries) — entries that fail to load are excluded.
+
+    Committee member lookups are memoised within this call so the same
+    committee is only resolved once per round.
     """
-    reqs_out:    list[dict] = []
-    entries_out: list[dict] = []
+    reqs_out:      list[dict] = []
+    entries_out:   list[dict] = []
+    members_cache: dict[str, list] = {}
 
     for entry in entries:
         proto_path = Path(entry["proto"])
         try:
             meeting = load_meeting(proto_path)
         except Exception as e:
-            print(f"  [WARN] load failed {proto_path.name}: {e}")
+            tqdm.write(f"  [WARN] load failed {proto_path.name}: {e}")
             continue
 
         text   = build_transcript_text(meeting)
@@ -213,14 +235,18 @@ def _build_requests_for_entries(
 
         chunk_idx = entry.get("chunk_index", 0)
         if chunk_idx >= len(chunks):
-            print(f"  [WARN] chunk_index {chunk_idx} ≥ {len(chunks)} for {proto_path.name}")
+            tqdm.write(f"  [WARN] chunk_index {chunk_idx} ≥ {len(chunks)} for {proto_path.name}")
             continue
 
         partial_summ  = entry.get("partial_summary")
         system_prompt = SYSTEM_PROMPT_BATCH_PASS1 if partial_summ is None else SYSTEM_PROMPT_BATCH_CONTINUATION
 
-        raw_names = extract_attendance(meeting)
-        members   = get_active_committee_members_by_name(entry["committee"], knesset_num)
+        committee = entry["committee"]
+        if committee not in members_cache:
+            members_cache[committee] = get_active_committee_members_by_name(committee, knesset_num)
+        members = members_cache[committee]
+
+        raw_names  = extract_attendance(meeting)
         attendance = _build_attendance_block(raw_names, members, knesset_num)
 
         req = _build_request(
@@ -247,6 +273,12 @@ def _split_batches(
 
     for req, entry in zip(reqs, entries):
         tok = _estimate_tokens(req)
+        if tok > MAX_BATCH_INPUT_TOKENS:
+            raise ValueError(
+                f"Single request for meeting {entry.get('meeting_id')} estimated at "
+                f"{tok:,} tokens — exceeds per-batch cap {MAX_BATCH_INPUT_TOKENS:,}. "
+                f"Lower GEMMA_CHUNK_CHARS or skip this meeting."
+            )
         if cur_reqs and cur_tokens + tok > MAX_BATCH_INPUT_TOKENS:
             batches.append((cur_reqs, cur_entries))
             cur_reqs, cur_entries, cur_tokens = [], [], 0
@@ -262,59 +294,93 @@ def _split_batches(
 
 # ── Batch submission + result download ───────────────────────────────────────
 
-def _submit_batch(
-    client: genai.Client,
-    reqs: list[dict],
-    name: str,
-    tmp_dir: Path,
-) -> list[dict]:
-    """Write JSONL → upload → submit → poll → return result dicts (one per input line)."""
-    jsonl_path = tmp_dir / f"{name}.jsonl"
-    with jsonl_path.open("w", encoding="utf-8") as f:
-        for req in reqs:
-            f.write(json.dumps(req, ensure_ascii=False) + "\n")
-
-    est = sum(_estimate_tokens(r) for r in reqs)
-    print(f"  Uploading {len(reqs)} requests (~{est // 1_000}K input tokens) …")
-
-    uploaded = client.files.upload(path=str(jsonl_path))
-    print(f"  File API: {uploaded.name}")
-
-    job = client.batches.create(
-        model  = GEMMA_MODEL,
-        src    = uploaded.name,
-        config = {"display_name": name},
-    )
-    print(f"  Batch job: {job.name}  (polling every {POLL_INTERVAL_S}s)")
-
+def _poll_to_completion(client: genai.Client, job):
+    """Poll `job` until a terminal state. Returns refreshed job object."""
+    terminal = ("SUCCEEDED", "COMPLETED", "FAILED", "CANCELLED", "ERROR")
     for attempt in range(1, MAX_POLL_ATTEMPTS + 1):
         time.sleep(POLL_INTERVAL_S)
         job   = client.batches.get(name=job.name)
         state = str(getattr(job, "state", "")).upper()
         print(f"  [{attempt:3d}/{MAX_POLL_ATTEMPTS}] {state}                    ", end="\r", flush=True)
 
-        if any(s in state for s in ("SUCCEEDED", "COMPLETED")):
+        if any(s in state for s in terminal):
             print()
-            break
-        if any(s in state for s in ("FAILED", "CANCELLED", "ERROR")):
-            print()
-            raise RuntimeError(f"Batch job {job.name} ended in state: {state}")
-    else:
-        raise TimeoutError(
-            f"Batch job {job.name} did not complete within "
-            f"{MAX_POLL_ATTEMPTS * POLL_INTERVAL_S // 60} minutes"
-        )
+            return job
 
-    print("  Downloading results …")
-    results = _download_results(client, job)
-    print(f"  Received {len(results)} result lines.")
+    raise TimeoutError(
+        f"Batch job {job.name} did not complete within "
+        f"{MAX_POLL_ATTEMPTS * POLL_INTERVAL_S // 60} minutes"
+    )
+
+
+def _submit_batch(
+    client:     genai.Client,
+    reqs:       list[dict],
+    entries:    list[dict],
+    label:      str,
+    tmp_dir:    Path,
+    state:      dict,
+    state_path: Path,
+    phase:      str,
+) -> list[dict]:
+    """
+    Write JSONL → upload → submit → poll → download → return result dicts.
+
+    Each JSONL line is `{"key": <make_key(entry)>, "request": <req>}`; the
+    `key` field is echoed back on each result line so we can correlate by
+    key rather than relying on output order (which Gemini does not guarantee).
+
+    Active job is persisted to state *before* polling begins. If the run is
+    interrupted, the next startup reconnects to the same job via
+    `_resume_active_job` — no duplicate submission.
+    """
+    jsonl_path = tmp_dir / f"{label}.jsonl"
+    with jsonl_path.open("w", encoding="utf-8") as f:
+        for entry, req in zip(entries, reqs):
+            line = {"key": _make_key(entry), "request": req}
+            f.write(json.dumps(line, ensure_ascii=False) + "\n")
+
+    est = sum(_estimate_tokens(r) for r in reqs)
+    print(f"  Uploading {len(reqs)} requests (~{est // 1_000}K input tokens) …")
+
+    uploaded = client.files.upload(file=jsonl_path, config={"mime_type": "application/jsonl"})
+    print(f"  File API: {uploaded.name}")
 
     try:
-        client.files.delete(name=uploaded.name)
-    except Exception:
-        pass
+        job = client.batches.create(
+            model  = GEMMA_MODEL,
+            src    = uploaded.name,
+            config = {"display_name": label},
+        )
+        print(f"  Batch job: {job.name}  (polling every {POLL_INTERVAL_S}s)")
 
-    return results
+        # Persist BEFORE polling so an interrupt lets us reconnect.
+        state["active_job"] = {
+            "job_name":      job.name,
+            "uploaded_name": uploaded.name,
+            "phase":         phase,
+            "batch_label":   label,
+        }
+        _save_state(state, state_path)
+
+        job       = _poll_to_completion(client, job)
+        state_str = str(getattr(job, "state", "")).upper()
+        if not any(s in state_str for s in ("SUCCEEDED", "COMPLETED")):
+            raise RuntimeError(f"Batch job {job.name} ended in state: {state_str}")
+
+        print("  Downloading results …")
+        results = _download_results(client, job)
+        print(f"  Received {len(results)} result lines.")
+        return results
+    finally:
+        # Always clean up the uploaded input JSONL — job references its own
+        # output on the server, so the input file is no longer needed.
+        try:
+            client.files.delete(name=uploaded.name)
+        except Exception:
+            pass
+        # active_job is cleared by the caller AFTER _process_results succeeds,
+        # so that an exception here leaves active_job set on disk for resume.
 
 
 def _download_results(client: genai.Client, job) -> list[dict]:
@@ -336,8 +402,8 @@ def _download_results(client: genai.Client, job) -> list[dict]:
             "Check the google-genai SDK version — batch result access API may differ."
         )
 
-    dest_name = getattr(dest, "name", None) or str(dest)
-    raw = b"".join(client.files.download(name=dest_name))
+    dest_name = getattr(dest, "file_name", None) or str(dest)
+    raw = client.files.download(file=dest_name)
 
     results = []
     for line in raw.decode("utf-8").splitlines():
@@ -346,11 +412,11 @@ def _download_results(client: genai.Client, job) -> list[dict]:
     return results
 
 
-def _extract_text(result: dict) -> str | None:
-    """Return generated text from a Gemini batch result line, or None on error."""
-    if "error" in result:
+def _extract_text(response: dict) -> str | None:
+    """Return generated text from a Gemini batch response dict, or None on error/empty."""
+    if not response or "error" in response:
         return None
-    candidates = result.get("candidates", [])
+    candidates = response.get("candidates", [])
     if not candidates:
         return None
     parts = candidates[0].get("content", {}).get("parts", [])
@@ -359,39 +425,78 @@ def _extract_text(result: dict) -> str | None:
 
 # ── Result processing ─────────────────────────────────────────────────────────
 
+def _handle_terminal_failure(
+    entry:       dict,
+    state:       dict,
+    is_multi:    bool,
+    knesset_num: int,
+    done_protos: set,
+) -> None:
+    """
+    Give up on an entry after MAX_ENTRY_ATTEMPTS. For multi-chunk entries
+    that already have a partial_summary, flush it to disk rather than
+    discard hours of prior work.
+    """
+    proto_name = Path(entry["proto"]).name
+    if is_multi and entry.get("partial_summary"):
+        partial = _enrich_summary_attendance(entry["partial_summary"], knesset_num)
+        summ_path = Path(entry["summ"])
+        summ_path.parent.mkdir(parents=True, exist_ok=True)
+        summ_path.write_text(partial, encoding="utf-8")
+        state["stats"]["summarized"] += 1
+        print(f"    → {proto_name}: flushed partial summary ({len(partial)} chars) after {entry['attempts']} attempts")
+    else:
+        state["stats"]["failed"] += 1
+        print(f"    → {proto_name}: giving up after {entry['attempts']} attempts")
+    done_protos.add(entry["proto"])
+
+
 def _process_results(
-    results: list[dict],
-    entries: list[dict],
-    state: dict,
-    is_multi: bool,
+    results:     list[dict],
+    entries:     list[dict],
+    state:       dict,
+    is_multi:    bool,
     knesset_num: int,
 ) -> None:
     """
     Apply batch results to queue entries, updating state in-place.
 
+    Results are correlated by `key` (Gemini batch output ordering is not
+    guaranteed). Entries whose result errors *and* entries that receive
+    no result at all both increment `attempts`; MAX_ENTRY_ATTEMPTS
+    triggers a terminal drop (flushing partial summary for multi-chunk).
+
     Single-chunk: enrich attendance → save summary → mark done.
     Multi-chunk:  update partial_summary + advance chunk_index;
                   enrich + save when final chunk reached → mark done.
     NOT_PROTOCOL: delete transcript → mark done.
-    Error:        log → mark done (remove to avoid infinite retry).
-
-    "Mark done" means adding the proto path to done_protos, which is used
-    to filter out the entry from the queue at the end.
     """
-    done_protos: set[str] = set()
+    entries_by_key: dict[str, dict] = {_make_key(e): e for e in entries}
+    unmatched_keys: set[str]        = set(entries_by_key.keys())
+    done_protos:    set[str]        = set()
     queue_key = "multi_queue" if is_multi else "single_queue"
 
-    for result, entry in zip(results, entries):
+    for result in results:
+        key   = result.get("key")
+        entry = entries_by_key.get(key)
+        if entry is None:
+            print(f"  [WARN] result with unknown key {key!r} — skipping")
+            continue
+        unmatched_keys.discard(key)
+
         proto      = entry["proto"]
         proto_path = Path(proto)
         summ_path  = Path(entry["summ"])
-        text       = _extract_text(result)
+        response   = result.get("response") or {}
+        text       = _extract_text(response)
 
         if text is None:
-            err = result.get("error", {}).get("message", "empty response")
+            err_src = result.get("error") or response.get("error") or {}
+            err = err_src.get("message", "empty response") if isinstance(err_src, dict) else str(err_src)
             print(f"  [ERROR] {proto_path.name}: {err}")
-            state["stats"]["failed"] += 1
-            done_protos.add(proto)
+            entry["attempts"] = entry.get("attempts", 0) + 1
+            if entry["attempts"] >= MAX_ENTRY_ATTEMPTS:
+                _handle_terminal_failure(entry, state, is_multi, knesset_num, done_protos)
             continue
 
         if text.strip() == NOT_PROTOCOL:
@@ -412,6 +517,7 @@ def _process_results(
             # so in-place mutation propagates directly to the queue.
             entry["partial_summary"]  = text
             entry["chunk_index"]     += 1
+            entry["attempts"]         = 0  # reset on success
 
             if entry["chunk_index"] >= entry["total_chunks"]:
                 text = _enrich_summary_attendance(text, knesset_num)
@@ -419,9 +525,16 @@ def _process_results(
                 summ_path.write_text(text, encoding="utf-8")
                 state["stats"]["summarized"] += 1
                 done_protos.add(proto)
-            # else: stays in queue with updated chunk_index + partial_summary
             # NOTE: partial_summary stored WITHOUT enrichment intentionally —
             # enrichment runs only on the final completed summary, not mid-chain.
+
+    # Entries that got no result this round — count as an attempt.
+    for k in unmatched_keys:
+        entry = entries_by_key[k]
+        print(f"  [no-result] {Path(entry['proto']).name} (key={k})")
+        entry["attempts"] = entry.get("attempts", 0) + 1
+        if entry["attempts"] >= MAX_ENTRY_ATTEMPTS:
+            _handle_terminal_failure(entry, state, is_multi, knesset_num, done_protos)
 
     state[queue_key] = [e for e in state[queue_key] if e["proto"] not in done_protos]
 
@@ -442,12 +555,75 @@ def _load_state(path: Path) -> dict | None:
         return None
 
 
+# ── Active-job resumption ─────────────────────────────────────────────────────
+
+def _resume_active_job(client: genai.Client, state: dict, state_path: Path) -> None:
+    """
+    If a batch job was mid-flight at last shutdown, reconnect to it:
+    poll to completion (if still running), download + process results,
+    then clear active_job. Prevents duplicate submissions / double billing.
+
+    If download fails we leave active_job set on disk so the next run
+    retries the download rather than re-submitting.
+    """
+    aj = state.get("active_job")
+    if not aj:
+        return
+
+    job_name      = aj["job_name"]
+    uploaded_name = aj.get("uploaded_name")
+    phase         = aj.get("phase", "p1")
+    label         = aj.get("batch_label", job_name)
+
+    print(f"\nResuming active batch job: {label} ({job_name})")
+
+    try:
+        job = client.batches.get(name=job_name)
+    except Exception as e:
+        print(f"  [WARN] Failed to fetch active job: {e}. Clearing.")
+        state["active_job"] = None
+        _save_state(state, state_path)
+        return
+
+    state_str = str(getattr(job, "state", "")).upper()
+    terminal  = ("SUCCEEDED", "COMPLETED", "FAILED", "CANCELLED", "ERROR")
+    if not any(s in state_str for s in terminal):
+        job       = _poll_to_completion(client, job)
+        state_str = str(getattr(job, "state", "")).upper()
+
+    if any(s in state_str for s in ("SUCCEEDED", "COMPLETED")):
+        try:
+            results = _download_results(client, job)
+        except Exception as e:
+            print(f"  [WARN] download failed: {e}. Leaving active_job set for retry.")
+            return
+        print(f"  Resumed job returned {len(results)} result lines.")
+
+        is_multi = (phase == "p2")
+        queue    = state["multi_queue" if is_multi else "single_queue"]
+        keyset   = {_make_key(e) for e in queue}
+        matched  = [r for r in results if r.get("key") in keyset]
+        if len(matched) < len(results):
+            print(f"  [WARN] {len(results) - len(matched)} result(s) had keys not in current queue — ignored.")
+        _process_results(matched, queue, state, is_multi=is_multi, knesset_num=state["knesset_num"])
+    else:
+        print(f"  Active job ended in state {state_str}; nothing to apply.")
+
+    if uploaded_name:
+        try:
+            client.files.delete(name=uploaded_name)
+        except Exception:
+            pass
+    state["active_job"] = None
+    _save_state(state, state_path)
+
+
 # ── Scan phase ────────────────────────────────────────────────────────────────
 
 def _scan_committees(
-    knesset_num: int,
+    knesset_num:     int,
     force_summarize: bool,
-    skip_patterns: list[str],
+    skip_patterns:   list[str],
 ) -> dict:
     """
     Walk all committees. Download missing protocols.
@@ -472,21 +648,25 @@ def _scan_committees(
     cnt = {k: 0 for k in ("total", "classified", "cancelled",
                            "downloaded", "no_transcript", "already_done", "too_long")}
 
-    for committee in committees:
+    for committee in tqdm(committees, desc="Scanning committees", unit="committee", total=len(committees)):
         name         = committee["Name"]
         committee_id = committee["CommitteeID"]
         dirname      = _safe_dirname(name)
         proto_dir    = config.transcriptions_dir(knesset_num) / dirname
         summ_dir     = config.summaries_dir(knesset_num)      / dirname
 
-        sessions = get_committee_sessions(committee_id, knesset_num)
+        try:
+            sessions = get_committee_sessions(committee_id, knesset_num)
+        except Exception as e:
+            tqdm.write(f"  [WARN] sessions fetch failed for {name}: {e}")
+            continue
         if not sessions:
             continue
 
         proto_dir.mkdir(parents=True, exist_ok=True)
         summ_dir.mkdir(parents=True, exist_ok=True)
 
-        for session in sessions:
+        for session in tqdm(sessions, desc="Scanning sessions", unit="session", total=len(sessions), leave=False):
             cnt["total"] += 1
             session_id = session["session_id"]
             date_iso   = session["date"]
@@ -502,13 +682,18 @@ def _scan_committees(
             if status_id in _CANCELLED_STATUS:
                 cnt["cancelled"] += 1
                 continue
-            if summ_path.exists() and not force_summarize:
+            if summ_path.exists() and summ_path.stat().st_size > 0 and not force_summarize:
                 cnt["already_done"] += 1
                 continue
 
             # Download protocol if missing
             if not proto_path.exists():
-                transcript = get_session_transcript(session_id)
+                try:
+                    transcript = get_session_transcript(session_id)
+                except Exception as e:
+                    tqdm.write(f"  [WARN] transcript fetch failed for session {session_id}: {e}")
+                    cnt["no_transcript"] += 1
+                    continue
                 if not transcript:
                     cnt["no_transcript"] += 1
                     continue
@@ -530,12 +715,12 @@ def _scan_committees(
                 text    = build_transcript_text(meeting)
                 chunks  = chunk_transcript(text, max_chars=GEMMA_CHUNK_CHARS)
             except Exception as e:
-                print(f"  [WARN] {proto_path.name}: {e}")
+                tqdm.write(f"  [WARN] {proto_path.name}: {e}")
                 continue
 
             if len(chunks) > MAX_SUMMARIZATION_CHUNKS:
                 cnt["too_long"] += 1
-                print(f"  [skip-long] {proto_path.name} ({len(chunks)} chunks)")
+                tqdm.write(f"  [skip-long] {proto_path.name} ({len(chunks)} chunks)")
                 continue
 
             entry: dict = {
@@ -545,6 +730,7 @@ def _scan_committees(
                 "date":         date_iso,
                 "meeting_id":   str(session_id),
                 "total_chunks": len(chunks),
+                "attempts":     0,
             }
 
             if len(chunks) == 1:
@@ -569,6 +755,7 @@ def _scan_committees(
         "scan_complete": True,
         "single_queue":  single_queue,
         "multi_queue":   multi_queue,
+        "active_job":    None,
         "stats":         {"summarized": 0, "not_protocol": 0, "failed": 0},
     }
 
@@ -576,10 +763,10 @@ def _scan_committees(
 # ── Phase runners ─────────────────────────────────────────────────────────────
 
 def _run_phase1(
-    client: genai.Client,
-    state: dict,
-    state_path: Path,
-    tmp_dir: Path,
+    client:        genai.Client,
+    state:         dict,
+    state_path:    Path,
+    tmp_dir:       Path,
     batch_counter: list[int],
 ) -> None:
     knesset_num = state["knesset_num"]
@@ -602,12 +789,13 @@ def _run_phase1(
 
     for reqs, entries in sub_batches:
         batch_counter[0] += 1
-        job_name = f"knesset{knesset_num}-p1-{batch_counter[0]:03d}"
-        print(f"\n  [{job_name}]  {len(reqs)} requests")
+        label = f"knesset{knesset_num}-p1-{batch_counter[0]:03d}"
+        print(f"\n  [{label}]  {len(reqs)} requests")
 
-        results = _submit_batch(client, reqs, job_name, tmp_dir)
+        results = _submit_batch(client, reqs, entries, label, tmp_dir, state, state_path, phase="p1")
         _process_results(results, entries, state, is_multi=False, knesset_num=knesset_num)
 
+        state["active_job"] = None
         _save_state(state, state_path)
         s = state["stats"]
         print(f"  summarized={s['summarized']}  not_proto={s['not_protocol']}  failed={s['failed']}")
@@ -616,10 +804,10 @@ def _run_phase1(
 
 
 def _run_phase2(
-    client: genai.Client,
-    state: dict,
-    state_path: Path,
-    tmp_dir: Path,
+    client:        genai.Client,
+    state:         dict,
+    state_path:    Path,
+    tmp_dir:       Path,
     batch_counter: list[int],
 ) -> None:
     knesset_num = state["knesset_num"]
@@ -650,12 +838,13 @@ def _run_phase2(
 
         for reqs, entries in sub_batches:
             batch_counter[0] += 1
-            job_name = f"knesset{knesset_num}-p2-r{round_num:02d}-{batch_counter[0]:03d}"
-            print(f"\n  [{job_name}]  {len(reqs)} requests")
+            label = f"knesset{knesset_num}-p2-r{round_num:02d}-{batch_counter[0]:03d}"
+            print(f"\n  [{label}]  {len(reqs)} requests")
 
-            results = _submit_batch(client, reqs, job_name, tmp_dir)
+            results = _submit_batch(client, reqs, entries, label, tmp_dir, state, state_path, phase="p2")
             _process_results(results, entries, state, is_multi=True, knesset_num=knesset_num)
 
+            state["active_job"] = None
             _save_state(state, state_path)
             s = state["stats"]
             print(f"  summarized={s['summarized']}  not_proto={s['not_protocol']}  failed={s['failed']}")
@@ -701,10 +890,14 @@ def main() -> None:
         _save_state(state, state_path)
         print(f"State saved: {state_path}\n")
     else:
+        state.setdefault("active_job", None)
         print(f"Resuming from {state_path}:")
         print(f"  Single-chunk remaining : {len(state['single_queue'])}")
         print(f"  Multi-chunk  remaining : {len(state['multi_queue'])}")
         print(f"  Already summarized     : {state['stats']['summarized']}\n")
+
+    # Reconnect to a job that was mid-flight at last shutdown.
+    _resume_active_job(client, state, state_path)
 
     batch_counter = [0]
 

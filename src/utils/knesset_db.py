@@ -42,7 +42,7 @@ import config as _config
 
 OKNESSET_API = "https://backend.oknesset.org"
 OFFICIAL_KNESSET_NEW_API = "https://knesset.gov.il/OdataV4/ParliamentInfo"
-TIMEOUT = 30
+TIMEOUT = 60
 
 SESSION_TYPE_CLASSIFIED  = 160  # חסויה — classified session; no public transcript
 _PROTOCOL_NAME_SUBSTRINGS = ("פרוטוקול", "protocol")
@@ -84,7 +84,7 @@ def _retry_get(url: str, **kwargs) -> requests.Response:
 
         if i < attempts - 1:
             print(
-                f"[knesset_db] request failed ({last_exc}), "
+                f"[knesset_db] request failed (url: {url}, error: {last_exc}), "
                 f"retrying in {sleep}s … ({i + 1}/{attempts})",
                 flush=True,
             )
@@ -652,27 +652,32 @@ def get_active_committee_members_by_name(name: str, knesset_num: int = 25) -> li
 def get_committee_sessions(committee_id: int, knesset_num: int = 25) -> list[dict]:
     """
     List ALL sessions for a committee from OData KNS_CommitteeSession, newest first.
-    Uses explicit $skip pagination (API caps at 100 per page).
+    Uses $count=true on first request to determine total, then paginates exactly
+    as many times as needed (avoids blind range-based pagination up to 100K).
     Returns list of {session_id, date, committee_id, knesset_num, type_id, status_id, note}.
     Check type_id against SESSION_TYPE_CLASSIFIED to skip classified sessions.
     """
     url       = f"{OFFICIAL_KNESSET_NEW_API}/KNS_CommitteeSession"
     page_size = 100
-    all_sessions: list[dict] = []
+    base_params = {
+        "$filter":  f"CommitteeID eq {committee_id} and KnessetNum eq {knesset_num}",
+        "$select":  "Id,CommitteeID,KnessetNum,StartDate,Note,TypeID,StatusID",
+        "$orderby": "StartDate desc",
+        "$top":     page_size,
+    }
 
-    for offset in range(0, 100_000, page_size):
-        r = _retry_get(url, params={
-            "$filter":  f"CommitteeID eq {committee_id} and KnessetNum eq {knesset_num}",
-            "$select":  "Id,CommitteeID,KnessetNum,StartDate,Note,TypeID,StatusID",
-            "$orderby": "StartDate desc",
-            "$top":     page_size,
-            "$skip":    offset,
-        }, timeout=TIMEOUT)
+    # First request: get count + first page in one shot
+    r = _retry_get(url, params={**base_params, "$count": "true"}, timeout=TIMEOUT)
+    r.raise_for_status()
+    data  = r.json()
+    total = data.get("@odata.count", 0)
+    all_sessions: list[dict] = list(data.get("value", []))
+
+    # Fetch remaining pages (exactly ceil(total/page_size) - 1 more requests)
+    for offset in range(page_size, total, page_size):
+        r = _retry_get(url, params={**base_params, "$skip": offset}, timeout=TIMEOUT)
         r.raise_for_status()
-        page = r.json().get("value", [])
-        all_sessions.extend(page)
-        if len(page) < page_size:
-            break
+        all_sessions.extend(r.json().get("value", []))
 
     return [
         {
