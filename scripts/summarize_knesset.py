@@ -16,6 +16,7 @@ Usage
 """
 
 import argparse
+import asyncio
 import json
 import re
 import sys
@@ -33,13 +34,14 @@ from utils.knesset_db import (
     SESSION_TYPE_CLASSIFIED,
 )
 from summarization.pipeline import summarize_meeting, save_summary
+from agent.llm.gemini import GeminiBackend
 from config import transcriptions_dir, summaries_dir, NOT_PROTOCOL
 
 _WIN_UNSAFE = re.compile(r'[\\/:*?"<>|]')
 _CANCELLED_STATUS_IDS = {193}
 
 MEETING_SUMMARY_RETRIES = 10
-MEETING_SUMMARY_RETRY_DELAY = 600  # seconds
+MEETING_SUMMARY_RETRY_DELAY = 60   # seconds — short enough for per-minute rate limits
 
 
 def _safe_dirname(name: str) -> str:
@@ -53,15 +55,98 @@ def _session_filename(date_iso: str, session_id: int) -> str:
     return f"00_00_0000_{session_id}"
 
 
+def _summarize_with_retry(proto_path: Path, backend: GeminiBackend, quiet: bool = False) -> str | None:
+    """
+    Call summarize_meeting with retry logic.
+    Returns summary text, NOT_PROTOCOL, None (too long), or "" (all retries failed).
+    """
+    summary = None
+    for attempt in range(MEETING_SUMMARY_RETRIES):
+        try:
+            summary = summarize_meeting(proto_path, backend=backend, quiet=quiet)
+            return summary
+        except Exception as e:
+            tqdm.write(
+                f"  [ERROR] summarization exception "
+                f"(attempt {attempt + 1}/{MEETING_SUMMARY_RETRIES}): {proto_path.name}\n    {e}"
+            )
+            if attempt < MEETING_SUMMARY_RETRIES - 1:
+                tqdm.write(f"  sleeping {MEETING_SUMMARY_RETRY_DELAY}s before retrying …")
+                time.sleep(MEETING_SUMMARY_RETRY_DELAY)
+    return ""  # all retries exhausted
+
+
+async def _run_parallel_summaries(
+    pending:  list[tuple[Path, Path]],
+    parallel: int,
+    backend:  GeminiBackend,
+) -> list[tuple[Path, Path, str | None]]:
+    """
+    Run _summarize_with_retry for each (proto_path, summ_path) pair using up to
+    `parallel` concurrent threads. Returns results in completion order.
+    """
+    semaphore = asyncio.Semaphore(parallel)
+    loop      = asyncio.get_running_loop()
+
+    async def _one(proto_path: Path, summ_path: Path):
+        async with semaphore:
+            result = await loop.run_in_executor(
+                None, lambda: _summarize_with_retry(proto_path, backend, quiet=True)
+            )
+        return proto_path, summ_path, result
+
+    tasks = [asyncio.ensure_future(_one(p, s)) for p, s in pending]
+    results = []
+    for coro in asyncio.as_completed(tasks):
+        item = await coro
+        results.append(item)
+        proto_path, _, result = item
+        if result is None:
+            tag = "skip-long"
+        elif result == NOT_PROTOCOL:
+            tag = "not-protocol"
+        elif result:
+            tag = "ok"
+        else:
+            tag = "ERROR"
+        tqdm.write(f"    [{tag}] {proto_path.stem}")
+
+    return results
+
+
+def _apply_summary_result(
+    summary: str | None,
+    proto_path: Path,
+    summ_path: Path,
+    knesset_num: int,
+    stats: dict,
+) -> None:
+    """Update stats and persist the summary (or log skip/error)."""
+    if summary is None:
+        stats["too_long"] += 1
+        tqdm.write(f"  [skip-long] {proto_path.name}")
+    elif summary == NOT_PROTOCOL:
+        stats["not_protocol"] += 1
+        tqdm.write(f"  [not-protocol] transcript deleted: {proto_path.name}")
+    elif summary:
+        save_summary(summary, proto_path, knesset_num)
+        stats["summarized"] += 1
+    else:
+        stats["failed_summ"] += 1
+        tqdm.write(f"  [ERROR] summarization failed: {proto_path.name}")
+
+
 def _process_committee(
     committee: dict,
     knesset_num: int,
     dry_run: bool,
     force_summarize: bool,
+    parallel: int = 1,
+    backend: GeminiBackend | None = None,
 ) -> dict:
     """
     Download and summarize all sessions for one committee.
-    Drives its own inner session progress bar (position=1, transient).
+    When parallel > 1, summarization runs concurrently via asyncio + thread pool.
     Returns a stats dict.
     """
     name         = committee["Name"]
@@ -85,6 +170,9 @@ def _process_committee(
     if not dry_run:
         proto_dir.mkdir(parents=True, exist_ok=True)
         summ_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── Phase 1: download protocols ───────────────────────────────────────────
+    pending: list[tuple[Path, Path]] = []  # (proto_path, summ_path) awaiting summarization
 
     with tqdm(
         total   = len(sessions),
@@ -113,7 +201,6 @@ def _process_committee(
                 sbar.update(1)
                 continue
 
-            # ── Protocol download ──────────────────────────────────────────────
             if proto_path.exists():
                 stats["skipped_dl"] += 1
             elif dry_run:
@@ -138,46 +225,48 @@ def _process_committee(
                     sbar.update(1)
                     continue
 
-            # ── Summarization ──────────────────────────────────────────────────
-            if summ_path.exists() and not force_summarize:
-                stats["skipped_summ"] += 1
-            elif dry_run:
-                pass
-            else:
-                sbar.set_description("  Summarizing")
-                # summarize_meeting() prints its own progress to stdout;
-                # tqdm will redraw the bars after each line automatically.
-                for i in range(MEETING_SUMMARY_RETRIES):
-                    try:
-                        summary = summarize_meeting(proto_path)
-                        break
-                    except Exception as e:
-                        stats["failed_summ"] += 1
-                        tqdm.write(f"  [ERROR] summarization exception (attempt {i+1}/{MEETING_SUMMARY_RETRIES}): {proto_path.name}\n    {e}")
-                        tqdm.write(f"sleeping for {MEETING_SUMMARY_RETRY_DELAY} seconds before retrying …")
-                        time.sleep(MEETING_SUMMARY_RETRY_DELAY)
-                if summary is None:
-                    stats["too_long"] += 1
-                    tqdm.write(f"  [skip-long] {proto_path.name}")
-                elif summary == NOT_PROTOCOL:
-                    stats["not_protocol"] += 1
-                    tqdm.write(f"  [not-protocol] transcript deleted: {proto_path.name}")
-                elif summary:
-                    save_summary(summary, proto_path, knesset_num)
-                    stats["summarized"] += 1
+            if proto_path.exists():
+                if summ_path.exists() and not force_summarize:
+                    stats["skipped_summ"] += 1
                 else:
-                    stats["failed_summ"] += 1
-                    tqdm.write(f"  [ERROR] summarization failed: {proto_path.name}")
+                    pending.append((proto_path, summ_path))
 
             sbar.set_description("  Sessions")
             sbar.update(1)
             sbar.set_postfix(
                 dl   = stats["downloaded_ok"],
-                summ = stats["summarized"],
                 skip = stats["skipped_summ"],
-                err  = stats["failed_summ"] + stats["no_transcript"],
                 refresh = False,
             )
+
+    if dry_run or not pending:
+        return stats
+
+    # ── Phase 2: summarize ────────────────────────────────────────────────────
+    if parallel == 1:
+        with tqdm(
+            total   = len(pending),
+            desc    = "  Summarizing",
+            unit    = "meet",
+            leave   = False,
+            position= 1,
+            dynamic_ncols = True,
+        ) as sbar:
+            for proto_path, summ_path in pending:
+                sbar.set_postfix_str(proto_path.stem[-30:], refresh=False)
+                summary = _summarize_with_retry(proto_path, backend, quiet=False)
+                _apply_summary_result(summary, proto_path, summ_path, knesset_num, stats)
+                sbar.update(1)
+                sbar.set_postfix(
+                    summ = stats["summarized"],
+                    err  = stats["failed_summ"],
+                    refresh = False,
+                )
+    else:
+        tqdm.write(f"  Summarizing {len(pending)} meetings ({parallel} parallel) …")
+        results = asyncio.run(_run_parallel_summaries(pending, parallel, backend))
+        for proto_path, summ_path, summary in results:
+            _apply_summary_result(summary, proto_path, summ_path, knesset_num, stats)
 
     return stats
 
@@ -191,10 +280,16 @@ def main() -> None:
                     help="Show what would be done without writing any files")
     ap.add_argument("--force-summarize", action="store_true",
                     help="Re-summarize even if a summary file already exists")
+    ap.add_argument("--parallel", type=int, default=1, metavar="N",
+                    help="Number of concurrent summarization calls per committee (default: 1)")
+    ap.add_argument("--model", default="gemma-4-31b-it",
+                    help="Gemini/Gemma model name (default: gemma-4-31b-it)")
     ap.add_argument("--skip", nargs="*", default=[],
                     help="Committee names to skip (substring match)")
     args = ap.parse_args()
 
+    backend = GeminiBackend(args.model)
+    tqdm.write(f"Model: {args.model}")
     tqdm.write(f"Fetching committee list for Knesset {args.knesset} …")
     committees = get_all_committees(args.knesset)
     if not committees:
@@ -226,7 +321,7 @@ def main() -> None:
             cbar.set_postfix_str(name[:30], refresh=True)
 
             stats = _process_committee(
-                committee, args.knesset, args.dry_run, args.force_summarize
+                committee, args.knesset, args.dry_run, args.force_summarize, args.parallel, backend
             )
             for k, v in stats.items():
                 grand[k] += v
