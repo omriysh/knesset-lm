@@ -68,15 +68,17 @@ _CANCELLED_STATUS = {193}
 # Matches  ח"כ FIRSTNAME [LASTNAME ...]  NOT already followed by  (party)
 # Used to find unenriched MK mentions in the summary for post-processing.
 #
-# The two lookaheads together prevent backtracking to a partial name:
+# Three lookaheads prevent backtracking to a partial/incomplete name:
+#   (?![\u05d0-\u05ea])     — not mid-word (e.g. "אש" must not be followed directly by "ר")
 #   (?!\s+[\u05d0-\u05ea])  — not followed by space+Hebrew (= more name tokens remain)
 #   (?!\s*\()               — not already followed by (party)
-# Without the first lookahead the regex could backtrack from "ח"כ א ב (X)" to
-# match only "ח"כ א", then incorrectly insert (party) between the two name parts.
+# The first two together stop the regex from matching "ח"כ א" or "ח"כ אש" when
+# the full name is "ח"כ א ב" or "ח"כ אשר (party)".
 _MK_UNENRICHED_RE = re.compile(
     r'(ח["\u05f3\u05f4\u2019\u201d]כ\s+'
     r'[\u05d0-\u05ea][\u05d0-\u05ea\'\-\u05f3\u05f4"]{0,20}'
     r'(?:\s+[\u05d0-\u05ea][\u05d0-\u05ea\'\-\u05f3\u05f4"]{0,20}){0,3})'
+    r'(?![\u05d0-\u05ea])'      # not mid-word (last token must be complete)
     r'(?!\s+[\u05d0-\u05ea])'   # not followed by space + more Hebrew name token
     r'(?!\s*\()',                # not already followed by (party)
     re.MULTILINE,
@@ -87,9 +89,9 @@ _MK_PREFIX_RE = re.compile(r'^ח["\u05f3\u05f4\u2019\u201d]כ\s+')
 GEMINI_MODEL                    = "gemini-2.5-flash-lite"
 GEMINI_CTX_TOKENS               = 500_000                            # input tokens per request
 GEMINI_CHUNK_CHARS              = GEMINI_CTX_TOKENS * CHARS_PER_TOK  # 1 000 000 chars
-MAX_BATCH_INPUT_TOKENS         = 9_500_000                         # per-batch cap (API limit 10M)
+MAX_BATCH_INPUT_TOKENS         = 3_000_000                         # per-batch cap (API limit 10M)
 MAX_CONCURRENT_BATCH_REQUESTS = 100                                # api limit
-ENQUEUE_CAP_TOKENS             = 9_500_000                         # cross-batch enqueue cap (API limit 10M)
+ENQUEUE_CAP_TOKENS             = 3_000_000                         # cross-batch enqueue cap (API limit 10M)
 BATCH_METADATA_OVERHEAD_TOKENS = 100                               # per-line JSONL framing
 POLL_INTERVAL_S                = 60
 MAX_POLL_ATTEMPTS              = 180     # 3 hours max (used by legacy single-job polling only)
@@ -174,8 +176,8 @@ def _enrich_summary_attendance(text: str, knesset_num: int) -> str:
     for original, enriched in replacements.items():
         if original == enriched:
             continue
-        # Negative lookahead prevents double-enriching on re-run
-        pattern = re.compile(re.escape(original) + r'(?!\s*\()', re.MULTILINE)
+        # Three lookaheads prevent mid-word matches and double-enriching on re-run
+        pattern = re.compile(re.escape(original) + r'(?![\u05d0-\u05ea])(?!\s*\()', re.MULTILINE)
         text = pattern.sub(enriched, text)
 
     return text
