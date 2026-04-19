@@ -67,11 +67,18 @@ _CANCELLED_STATUS = {193}
 
 # Matches  ח"כ FIRSTNAME [LASTNAME ...]  NOT already followed by  (party)
 # Used to find unenriched MK mentions in the summary for post-processing.
+#
+# The two lookaheads together prevent backtracking to a partial name:
+#   (?!\s+[\u05d0-\u05ea])  — not followed by space+Hebrew (= more name tokens remain)
+#   (?!\s*\()               — not already followed by (party)
+# Without the first lookahead the regex could backtrack from "ח"כ א ב (X)" to
+# match only "ח"כ א", then incorrectly insert (party) between the two name parts.
 _MK_UNENRICHED_RE = re.compile(
     r'(ח["\u05f3\u05f4\u2019\u201d]כ\s+'
     r'[\u05d0-\u05ea][\u05d0-\u05ea\'\-\u05f3\u05f4"]{0,20}'
     r'(?:\s+[\u05d0-\u05ea][\u05d0-\u05ea\'\-\u05f3\u05f4"]{0,20}){0,3})'
-    r'(?!\s*\()',
+    r'(?!\s+[\u05d0-\u05ea])'   # not followed by space + more Hebrew name token
+    r'(?!\s*\()',                # not already followed by (party)
     re.MULTILINE,
 )
 # Strip the ח"כ prefix to extract just the name
@@ -153,6 +160,11 @@ def _enrich_summary_attendance(text: str, knesset_num: int) -> str:
             if f and f.get("knesset") == knesset_num
         ]
         faction = max(factions, key=lambda f: f.get("start_date") or "", default=None)
+        if not faction:
+            # Fallback: use most recent faction from any knesset (handles MKs whose
+            # API record lists them under a slightly different knesset number).
+            all_factions = [f for f in (profile.get("factions") or []) if f]
+            faction = max(all_factions, key=lambda f: f.get("start_date") or "", default=None)
         if not faction:
             replacements[full_match] = full_match
             continue
@@ -497,6 +509,13 @@ def _submit_no_poll(
         for entry, req in zip(entries, reqs):
             line = {"key": _make_key(entry), "request": req}
             f.write(json.dumps(line, ensure_ascii=False) + "\n")
+
+    size_kb = jsonl_path.stat().st_size // 1024
+    tqdm.write(
+        f"  [upload] {label}: {len(reqs)} requests, "
+        f"~{est_tokens/1_000_000:.2f}M tokens est, "
+        f"{size_kb} KB  →  {jsonl_path}"
+    )
 
     uploaded = client.files.upload(file=jsonl_path, config={"mime_type": "application/jsonl"})
     try:
@@ -963,6 +982,7 @@ def main() -> None:
     state_path = args.state_file or Path(f"batch_state_k{args.knesset}.json")
     tmp_dir    = args.tmp_dir or Path(tempfile.mkdtemp(prefix="knesset_batch_"))
     tmp_dir.mkdir(parents=True, exist_ok=True)
+    print(f"JSONL debug files: {tmp_dir}")
 
     skip_patterns = [s.strip() for s in (args.skip or []) if s.strip()]
 

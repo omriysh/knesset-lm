@@ -22,6 +22,11 @@ def _mk_line(profile: dict, knesset_num: int, duty_desc: str = "") -> str:
         if f and f.get("knesset") == knesset_num
     ]
     faction = max(factions, key=lambda f: f.get("start_date") or "", default=None)
+    if not faction:
+        # Fallback: most recent faction from any knesset (MK may be recorded under
+        # a different knesset number in the API).
+        all_factions = [f for f in (profile.get("factions") or []) if f]
+        faction = max(all_factions, key=lambda f: f.get("start_date") or "", default=None)
     party = faction["faction_name"] if faction else ""
     first = profile.get("mk_individual_first_name", "")
     last  = profile.get("mk_individual_name", "")
