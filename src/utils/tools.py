@@ -28,6 +28,10 @@ from utils.knesset_db import (
     get_active_committee_members_by_name,
     get_bill_details_by_name,
     get_bill_text_by_name,
+    get_mk_votes,
+    get_votes_on_topic,
+    get_votes_on_topic_by_mk,
+    get_recent_votes,
 )
 
 
@@ -114,6 +118,118 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "get_mk_votes",
+            "description": (
+                "Return the most recent plenum votes cast by a specific MK, including how they voted. "
+                "Use this to analyse an MK's voting history or stance on issues they have voted on."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "mk_name": {
+                        "type": "string",
+                        "description": "Full or partial name of the MK in Hebrew or English.",
+                    },
+                    "knesset_num": {
+                        "type": "integer",
+                        "description": "Knesset number. Defaults to 25.",
+                        "default": 25,
+                    },
+                    "top_n": {
+                        "type": "integer",
+                        "description": "Maximum number of votes to return (most recent first). Defaults to 20.",
+                        "default": 20,
+                    },
+                },
+                "required": ["mk_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_votes_on_topic",
+            "description": (
+                "Search plenum votes by topic keyword — matches against vote title and subject. "
+                "Returns vote metadata without individual MK results. "
+                "Use this to find all votes related to a subject (e.g. 'תקציב', 'בריאות', 'ביטחון')."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {
+                        "type": "string",
+                        "description": "Keyword to search for in vote titles and subjects (Hebrew).",
+                    },
+                    "top_n": {
+                        "type": "integer",
+                        "description": "Maximum number of votes to return (most recent first). Defaults to 20.",
+                        "default": 20,
+                    },
+                },
+                "required": ["topic"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_votes_on_topic_by_mk",
+            "description": (
+                "Search plenum votes on a topic and show how a specific MK voted on each. "
+                "Combines topic search with per-MK vote result. "
+                "Use this when you need to know a specific MK's position on a policy area."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {
+                        "type": "string",
+                        "description": "Keyword to search for in vote titles and subjects (Hebrew).",
+                    },
+                    "mk_name": {
+                        "type": "string",
+                        "description": "Full or partial name of the MK in Hebrew or English.",
+                    },
+                    "knesset_num": {
+                        "type": "integer",
+                        "description": "Knesset number. Defaults to 25.",
+                        "default": 25,
+                    },
+                    "top_n": {
+                        "type": "integer",
+                        "description": "Maximum number of votes to return (most recent first). Defaults to 20.",
+                        "default": 20,
+                    },
+                },
+                "required": ["topic", "mk_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_recent_votes",
+            "description": (
+                "Return the most recent plenum votes (no topic or MK filter). "
+                "Use this when the user asks what the Knesset has voted on recently."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "top_n": {
+                        "type": "integer",
+                        "description": "Number of most recent votes to return. Defaults to 10.",
+                        "default": 10,
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_bill_text",
             "description": (
                 "Fetch and extract the full text of a bill from its official PDF. "
@@ -182,6 +298,42 @@ def dispatch(tool_name: str, args: dict) -> str:
             )
             if result is None:
                 return json.dumps({"error": f"Could not retrieve text for bill '{args['bill_name']}'"}, ensure_ascii=False)
+            return json.dumps(result, ensure_ascii=False, default=str)
+
+        elif tool_name == "get_mk_votes":
+            result = get_mk_votes(
+                mk_name=args["mk_name"],
+                knesset_num=args.get("knesset_num", 25),
+                top_n=args.get("top_n", 20),
+            )
+            if not result:
+                return json.dumps({"error": f"No votes found for MK '{args['mk_name']}'"}, ensure_ascii=False)
+            return json.dumps(result, ensure_ascii=False, default=str)
+
+        elif tool_name == "get_votes_on_topic":
+            result = get_votes_on_topic(
+                topic=args["topic"],
+                top_n=args.get("top_n", 20),
+            )
+            if not result:
+                return json.dumps({"error": f"No votes found for topic '{args['topic']}'"}, ensure_ascii=False)
+            return json.dumps(result, ensure_ascii=False, default=str)
+
+        elif tool_name == "get_votes_on_topic_by_mk":
+            result = get_votes_on_topic_by_mk(
+                topic=args["topic"],
+                mk_name=args["mk_name"],
+                knesset_num=args.get("knesset_num", 25),
+                top_n=args.get("top_n", 20),
+            )
+            if not result:
+                return json.dumps(
+                    {"error": f"No votes found for topic '{args['topic']}' or MK '{args['mk_name']}'"}, ensure_ascii=False
+                )
+            return json.dumps(result, ensure_ascii=False, default=str)
+
+        elif tool_name == "get_recent_votes":
+            result = get_recent_votes(top_n=args.get("top_n", 10))
             return json.dumps(result, ensure_ascii=False, default=str)
 
         else:
