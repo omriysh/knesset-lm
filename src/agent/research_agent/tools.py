@@ -1,0 +1,452 @@
+"""Research-domain tool registry.
+
+This is the *only* module that knows which tools the research agent
+exposes. Per design §5.2 / §5.3 the registry is a flat list of
+:class:`ToolSpec` entries; the planner consumes it via the view-builders
+in :mod:`agent.plan_execute.tools` (Phase 4c, out of scope for Phase 3b).
+
+The pseudo-tool ``expand`` is **not** in this list — it is dispatched by
+the plan-execute graph itself, not via :func:`utils.tools.dispatch`.
+
+Schema policy
+-------------
+Numeric defaults / minima / maxima are sourced from :mod:`config` (per
+design §5.3 note: "the schema is built from those constants at startup,
+not as a second source of truth"). When config and the design text
+disagree (e.g. ``BILL_TEXT_DEFAULT_MAX_CHARS`` is 1000 in both, but the
+schema example shows 1000 as well — they currently agree), we always
+follow config.
+"""
+
+from __future__ import annotations
+
+import config
+from utils.tools import (
+    ToolSpec,
+    handle_deep_dive_meeting,
+    handle_find_bill,
+    handle_find_committee,
+    handle_find_mk,
+    handle_find_vote,
+    handle_get_bill_details,
+    handle_get_bill_text,
+    handle_get_committee_members,
+    handle_get_committee_sessions,
+    handle_get_meeting_summary,
+    handle_get_mk_committees,
+    handle_get_mk_profile,
+    handle_get_mk_votes,
+    handle_get_recent_votes,
+    handle_get_votes_on_topic,
+    handle_get_votes_on_topic_by_mk,
+    handle_search_protocols_keyword,
+    handle_search_topics,
+)
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+#
+# Order: discovery → fetch → votes → deep. Matches the §5.3 inventory's
+# layout so the planner prompt rendering is reading the list in the same
+# logical order a human would.
+#
+# Each entry's ``schema`` is the JSON Schema fragment that goes under the
+# ``parameters`` key in an OpenAI-style tool definition. View-builders in
+# :mod:`agent.plan_execute.tools` are expected to wrap it with
+# ``{"name": <spec.name>, "description": <…>, "parameters": <spec.schema>}``
+# and prepend a ``"type": "function"`` envelope where required.
+
+RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
+
+    # ── Discovery / search ────────────────────────────────────────────────
+    ToolSpec(
+        name="search_topics",
+        schema={
+            "type": "object",
+            "description": (
+                "Discover meetings whose topical bullets match the query. "
+                "Hybrid BM25 + embedding scored via Reciprocal Rank Fusion. "
+                "Return up to top_k bullets with their meeting IDs."
+            ),
+            "properties": {
+                "query":       {"type": "string"},
+                "top_k": {
+                    "type":    "integer",
+                    "default": config.SEARCH_TOPICS_DEFAULT_TOP_K,
+                    "minimum": 1,
+                    "maximum": config.SEARCH_TOPICS_MAX_TOP_K,
+                },
+                "knesset_num": {"type": "integer", "default": 25},
+            },
+            "required": ["query"],
+        },
+        handler=handle_search_topics,
+        task_kinds=["discover"],
+        cost_hint="cheap",
+    ),
+
+    ToolSpec(
+        name="search_protocols_keyword",
+        schema={
+            "type": "object",
+            "description": (
+                "Keyword search across all protocol speeches with optional "
+                "filters by committee, meeting, speaker, or date range. "
+                "Returns top_k speech-anchor hits with meeting+speaker context. "
+                "Cost scales with top_k: top_k > 100 becomes expensive (BM25 "
+                "over many MB of speeches); prefer narrowing via committee_ids "
+                "/ speaker / date range before raising top_k."
+            ),
+            "properties": {
+                "query":         {"type": "string"},
+                "committee_ids": {"type": "array", "items": {"type": "string"}},
+                "meeting_ids":   {"type": "array", "items": {"type": "string"}},
+                "speaker":       {"type": "string"},
+                "date_from":     {"type": "string", "format": "date"},
+                "date_to":       {"type": "string", "format": "date"},
+                "sort": {
+                    "type":    "string",
+                    "enum":    ["relevance", "recency"],
+                    "default": "relevance",
+                },
+                "top_k": {
+                    "type":    "integer",
+                    "default": config.SEARCH_PROTOCOLS_DEFAULT_TOP_K,
+                    "minimum": 1,
+                    "maximum": config.SEARCH_PROTOCOLS_MAX_TOP_K,
+                },
+                "knesset_num": {"type": "integer", "default": 25},
+            },
+            "required": ["query"],
+        },
+        handler=handle_search_protocols_keyword,
+        task_kinds=["filter", "discover"],
+        cost_hint="cheap",
+    ),
+
+    ToolSpec(
+        name="find_mk",
+        schema={
+            "type": "object",
+            "description": (
+                "Resolve an MK name to one or more candidate records with "
+                "stable mk_id. Returns top BM25 matches sorted by score; the "
+                "calling LLM must pick a single mk_id from the returned list "
+                "before any downstream get_mk_* call."
+            ),
+            "properties": {
+                "query":       {"type": "string"},
+                "knesset_num": {"type": "integer", "default": 25},
+                "top_k":       {"type": "integer", "default": 5, "minimum": 1},
+            },
+            "required": ["query"],
+        },
+        handler=handle_find_mk,
+        task_kinds=["discover", "fetch"],
+        cost_hint="cheap",
+    ),
+
+    ToolSpec(
+        name="find_committee",
+        schema={
+            "type": "object",
+            "description": "Resolve a committee name to candidate committee_id values.",
+            "properties": {
+                "query":       {"type": "string"},
+                "knesset_num": {"type": "integer", "default": 25},
+                "top_k":       {"type": "integer", "default": 5, "minimum": 1},
+            },
+            "required": ["query"],
+        },
+        handler=handle_find_committee,
+        task_kinds=["discover", "fetch"],
+        cost_hint="cheap",
+    ),
+
+    ToolSpec(
+        name="find_bill",
+        schema={
+            "type": "object",
+            "description": (
+                "Resolve a bill name to candidate bill records by Hebrew "
+                "title BM25 match."
+            ),
+            "properties": {
+                "query":       {"type": "string"},
+                "knesset_num": {"type": "integer", "default": 25},
+                "top_k":       {"type": "integer", "default": 5, "minimum": 1},
+            },
+            "required": ["query"],
+        },
+        handler=handle_find_bill,
+        task_kinds=["discover", "fetch"],
+        cost_hint="cheap",
+    ),
+
+    ToolSpec(
+        name="find_vote",
+        schema={
+            "type": "object",
+            "description": "Resolve a vote by title or topic to candidate vote_id values.",
+            "properties": {
+                "query":       {"type": "string"},
+                "knesset_num": {"type": "integer", "default": 25},
+                "top_k":       {"type": "integer", "default": 10, "minimum": 1},
+            },
+            "required": ["query"],
+        },
+        handler=handle_find_vote,
+        task_kinds=["discover", "fetch"],
+        cost_hint="cheap",
+    ),
+
+    # ── Fetch / data tools ────────────────────────────────────────────────
+    ToolSpec(
+        name="get_meeting_summary",
+        schema={
+            "type": "object",
+            "description": "Return the raw text summary for a single meeting.",
+            "properties": {
+                "meeting_id":  {"type": "string"},
+                "section_num": {
+                    "type":        "integer",
+                    "description": "Optional 1-indexed section to return only one section.",
+                    "minimum":     1,
+                },
+            },
+            "required": ["meeting_id"],
+        },
+        handler=handle_get_meeting_summary,
+        task_kinds=["fetch"],
+        cost_hint="cheap",
+    ),
+
+    ToolSpec(
+        name="get_mk_profile",
+        schema={
+            "type": "object",
+            "description": (
+                "Fetch full profile for an MK by mk_id (preferred) or name. "
+                "Returns party/faction history, committee memberships, "
+                "ministerial roles. Use find_mk first to disambiguate."
+            ),
+            "properties": {
+                "mk_id":       {"type": "string"},
+                "name":        {"type": "string"},
+                "knesset_num": {"type": "integer", "default": 25},
+            },
+        },
+        handler=handle_get_mk_profile,
+        task_kinds=["fetch"],
+        cost_hint="cheap",
+    ),
+
+    ToolSpec(
+        name="get_mk_committees",
+        schema={
+            "type": "object",
+            "description": "List committees the MK serves on in the given Knesset.",
+            "properties": {
+                "mk_id":       {"type": "string"},
+                "name":        {"type": "string"},
+                "knesset_num": {"type": "integer", "default": 25},
+            },
+        },
+        handler=handle_get_mk_committees,
+        task_kinds=["fetch"],
+        cost_hint="cheap",
+    ),
+
+    ToolSpec(
+        name="get_committee_members",
+        schema={
+            "type": "object",
+            "description": (
+                "List active members of a committee with role "
+                "(chair, deputy, member)."
+            ),
+            "properties": {
+                "committee_id": {"type": "string"},
+                "name":         {"type": "string"},
+                "knesset_num":  {"type": "integer", "default": 25},
+            },
+        },
+        handler=handle_get_committee_members,
+        task_kinds=["fetch"],
+        cost_hint="cheap",
+    ),
+
+    ToolSpec(
+        name="get_committee_sessions",
+        schema={
+            "type": "object",
+            "description": (
+                "List sessions for a committee in a Knesset. Optional date "
+                "range. Returns metadata only — no transcripts."
+            ),
+            "properties": {
+                "committee_id": {"type": "string"},
+                "knesset_num":  {"type": "integer", "default": 25},
+                "date_from":    {"type": "string", "format": "date"},
+                "date_to":      {"type": "string", "format": "date"},
+            },
+            "required": ["committee_id"],
+        },
+        handler=handle_get_committee_sessions,
+        task_kinds=["fetch", "discover"],
+        cost_hint="cheap",
+    ),
+
+    ToolSpec(
+        name="get_bill_details",
+        schema={
+            "type": "object",
+            "description": (
+                "Fetch metadata for a bill by bill_id (preferred) or name. "
+                "Returns status, type, initiators, document links."
+            ),
+            "properties": {
+                "bill_id":     {"type": "string"},
+                "bill_name":   {"type": "string"},
+                "knesset_num": {"type": "integer", "default": 25},
+            },
+        },
+        handler=handle_get_bill_details,
+        task_kinds=["fetch"],
+        cost_hint="cheap",
+    ),
+
+    ToolSpec(
+        name="get_bill_text",
+        schema={
+            "type": "object",
+            "description": (
+                "Fetch the extracted text of a bill PDF, capped at "
+                "max_chars characters. The cap keeps this tool usable inside "
+                "the plan-execute loop without blowing the executor's "
+                "context; raise max_chars only when the bill text itself is "
+                "the answer the user wants."
+            ),
+            "properties": {
+                "bill_id":     {"type": "string"},
+                "bill_name":   {"type": "string"},
+                "knesset_num": {"type": "integer", "default": 25},
+                "max_chars": {
+                    "type":    "integer",
+                    "default": config.BILL_TEXT_DEFAULT_MAX_CHARS,
+                    "minimum": config.BILL_TEXT_MIN_MAX_CHARS,
+                    "maximum": config.BILL_TEXT_MAX_MAX_CHARS,
+                },
+            },
+        },
+        handler=handle_get_bill_text,
+        task_kinds=["fetch"],
+        cost_hint="medium",
+    ),
+
+    # ── Voting tools ──────────────────────────────────────────────────────
+    ToolSpec(
+        name="get_mk_votes",
+        schema={
+            "type": "object",
+            "description": "Recent plenum votes cast by an MK and how they voted.",
+            "properties": {
+                "mk_id":       {"type": "string"},
+                "name":        {"type": "string"},
+                "knesset_num": {"type": "integer", "default": 25},
+                "top_n":       {"type": "integer", "default": 20, "minimum": 1},
+            },
+        },
+        handler=handle_get_mk_votes,
+        task_kinds=["fetch"],
+        cost_hint="cheap",
+    ),
+
+    ToolSpec(
+        name="get_votes_on_topic",
+        schema={
+            "type": "object",
+            "description": (
+                "Search plenum votes by topic keyword. Returns vote "
+                "metadata, no per-MK results."
+            ),
+            "properties": {
+                "topic":       {"type": "string"},
+                "knesset_num": {"type": "integer", "default": 25},
+                "top_n":       {"type": "integer", "default": 20, "minimum": 1},
+            },
+            "required": ["topic"],
+        },
+        handler=handle_get_votes_on_topic,
+        task_kinds=["discover"],
+        cost_hint="cheap",
+    ),
+
+    ToolSpec(
+        name="get_votes_on_topic_by_mk",
+        schema={
+            "type": "object",
+            "description": "How a specific MK voted on each vote matching a topic.",
+            "properties": {
+                "topic":       {"type": "string"},
+                "mk_id":       {"type": "string"},
+                "name":        {"type": "string"},
+                "knesset_num": {"type": "integer", "default": 25},
+                "top_n":       {"type": "integer", "default": 20, "minimum": 1},
+            },
+            "required": ["topic"],
+        },
+        handler=handle_get_votes_on_topic_by_mk,
+        task_kinds=["fetch", "filter"],
+        cost_hint="cheap",
+    ),
+
+    ToolSpec(
+        name="get_recent_votes",
+        schema={
+            "type": "object",
+            "description": "Most recent plenum votes overall. No filters.",
+            "properties": {
+                "knesset_num": {"type": "integer", "default": 25},
+                "top_n":       {"type": "integer", "default": 10, "minimum": 1},
+            },
+        },
+        handler=handle_get_recent_votes,
+        task_kinds=["discover"],
+        cost_hint="cheap",
+    ),
+
+    # ── Deep-dive (planner-only) ──────────────────────────────────────────
+    ToolSpec(
+        name="deep_dive_meeting",
+        schema={
+            "type": "object",
+            "description": (
+                "Heavy analysis of a single meeting. mode='rerank' returns "
+                "top reranked pass-1/pass-2 chunks for focus_query. "
+                "mode='full' runs an LLM pass over the entire meeting "
+                "(approximately 5 LLM calls budget). Allocated only by the "
+                "planner — see §5.3.1."
+            ),
+            "properties": {
+                "meeting_id":  {"type": "string"},
+                "focus_query": {"type": "string"},
+                "mode": {
+                    "type":    "string",
+                    "enum":    ["rerank", "full"],
+                    "default": "rerank",
+                },
+            },
+            "required": ["meeting_id", "focus_query"],
+        },
+        handler=handle_deep_dive_meeting,
+        task_kinds=["deep_dive"],
+        cost_hint="expensive",
+        planner_only=True,
+    ),
+]
+
+
+__all__ = ["RESEARCH_TOOL_REGISTRY"]
