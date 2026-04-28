@@ -59,6 +59,10 @@
       "id": "begin",
       "imaginary": false,
       "label": "התחלה",
+      "position": {
+        "x": 720,
+        "y": -20
+      },
       "terminal": false,
       "type": "begin"
     },
@@ -85,6 +89,10 @@
       "id": "intent_classify",
       "imaginary": false,
       "label": "סיווג כוונה",
+      "position": {
+        "x": 540,
+        "y": -20
+      },
       "terminal": false,
       "type": "llm_call"
     },
@@ -111,6 +119,10 @@
       "id": "mode_select",
       "imaginary": false,
       "label": "בחר מצב מחקר",
+      "position": {
+        "x": 300,
+        "y": -20
+      },
       "terminal": false,
       "type": "user_input"
     },
@@ -137,6 +149,10 @@
       "id": "cost_gate",
       "imaginary": false,
       "label": "אישור עלות",
+      "position": {
+        "x": -20,
+        "y": 100
+      },
       "terminal": false,
       "type": "user_input"
     },
@@ -158,6 +174,10 @@
       "id": "research_subgraph",
       "imaginary": false,
       "label": "מחקר מעמיק",
+      "position": {
+        "x": 300,
+        "y": 100
+      },
       "terminal": false,
       "type": "subgraph"
     },
@@ -175,6 +195,10 @@
       "id": "format_answer",
       "imaginary": false,
       "label": "עיצוב תשובה",
+      "position": {
+        "x": 300,
+        "y": 240
+      },
       "terminal": true,
       "type": "llm_call"
     },
@@ -187,16 +211,12 @@
       "id": "user_input_deep_dive",
       "imaginary": false,
       "label": "צלול לפרוטוקולים",
+      "position": {
+        "x": 300,
+        "y": -140
+      },
       "terminal": true,
       "type": "user_input"
-    },
-    {
-      "data": {},
-      "id": "end",
-      "imaginary": true,
-      "label": "סיום",
-      "terminal": true,
-      "type": "begin"
     }
   ],
   "version": 3
