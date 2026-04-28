@@ -10,7 +10,14 @@ import json
 
 from agent.llm.base import DoneEvent, LLMBackend, ThinkingEvent, TokenEvent, ToolCallsEvent
 from agent.llm.google import GoogleBackend
-from utils.tools import TOOLS, dispatch
+from agent.research_agent.tools import RESEARCH_TOOL_REGISTRY
+from agent.tools import call_for_machine_runner, list_tools_for_machine_runner
+
+TOOLS = list_tools_for_machine_runner(RESEARCH_TOOL_REGISTRY)
+
+
+def dispatch(name: str, args: dict) -> str:
+    return call_for_machine_runner(RESEARCH_TOOL_REGISTRY, name, args)
 
 
 def run_agent_loop(
