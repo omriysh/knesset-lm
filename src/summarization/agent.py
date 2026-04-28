@@ -9,7 +9,7 @@ dispatching Knesset tool calls along the way.
 import json
 
 from agent.llm.base import DoneEvent, LLMBackend, ThinkingEvent, TokenEvent, ToolCallsEvent
-from agent.llm.gemini import GeminiBackend
+from agent.llm.google import GoogleBackend
 from utils.tools import TOOLS, dispatch
 
 
@@ -29,7 +29,7 @@ def run_agent_loop(
     - Max tool round limit → forces a final answer
     """
     if backend is None:
-        backend = GeminiBackend()
+        backend = GoogleBackend()
 
     total_tokens      = 0
     tool_call_count   = 0

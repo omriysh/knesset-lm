@@ -33,7 +33,9 @@ class ToolCallsEvent:
 
 @dataclass
 class DoneEvent:
-    pass
+    # Set by GoogleBackend when the cloud call failed and we transparently
+    # served the response from the local llama-server fallback instead.
+    cloud_failed_used_local: bool = False
 
 
 LLMEvent = TokenEvent | ThinkingEvent | ToolCallsEvent | DoneEvent

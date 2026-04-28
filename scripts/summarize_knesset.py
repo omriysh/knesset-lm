@@ -34,7 +34,7 @@ from utils.knesset_db import (
     SESSION_TYPE_CLASSIFIED,
 )
 from summarization.pipeline import summarize_meeting, save_summary
-from agent.llm.gemini import GeminiBackend
+from agent.llm.google import GoogleBackend
 from config import transcriptions_dir, summaries_dir, NOT_PROTOCOL
 
 _WIN_UNSAFE = re.compile(r'[\\/:*?"<>|]')
@@ -55,7 +55,7 @@ def _session_filename(date_iso: str, session_id: int) -> str:
     return f"00_00_0000_{session_id}"
 
 
-def _summarize_with_retry(proto_path: Path, backend: GeminiBackend, quiet: bool = False) -> str | None:
+def _summarize_with_retry(proto_path: Path, backend: GoogleBackend, quiet: bool = False) -> str | None:
     """
     Call summarize_meeting with retry logic.
     Returns summary text, NOT_PROTOCOL, None (too long), or "" (all retries failed).
@@ -79,7 +79,7 @@ def _summarize_with_retry(proto_path: Path, backend: GeminiBackend, quiet: bool 
 async def _run_parallel_summaries(
     pending:  list[tuple[Path, Path]],
     parallel: int,
-    backend:  GeminiBackend,
+    backend:  GoogleBackend,
 ) -> list[tuple[Path, Path, str | None]]:
     """
     Run _summarize_with_retry for each (proto_path, summ_path) pair using up to
@@ -142,7 +142,7 @@ def _process_committee(
     dry_run: bool,
     force_summarize: bool,
     parallel: int = 1,
-    backend: GeminiBackend | None = None,
+    backend: GoogleBackend | None = None,
 ) -> dict:
     """
     Download and summarize all sessions for one committee.
@@ -288,7 +288,7 @@ def main() -> None:
                     help="Committee names to skip (substring match)")
     args = ap.parse_args()
 
-    backend = GeminiBackend(args.model)
+    backend = GoogleBackend(args.model)
     tqdm.write(f"Model: {args.model}")
     tqdm.write(f"Fetching committee list for Knesset {args.knesset} …")
     committees = get_all_committees(args.knesset)

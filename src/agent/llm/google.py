@@ -1,10 +1,21 @@
 """
-gemini.py
+google.py
 
-GeminiBackend — LLMBackend implementation for Google's Gemini API.
+GoogleBackend — LLMBackend implementation for Google's Gemini / Gemma cloud
+models via the google.genai SDK.
 
-Uses google.genai SDK (google-genai package) with gemini-2.5-flash-lite.
-API key read from GEMINI_API_KEY env var.
+Auth: reads API key from `os.environ.get(config.GOOGLE_API_KEY_ENV)` first,
+then falls back to `os.environ.get("GEMINI_API_KEY", "")` for backwards
+compat with environments still using the old variable name.
+
+Retry / fallback policy (see plan-and-execute design §11):
+  - HTTP 429:  one retry with 2 s wait, then fall back.
+  - HTTP 5xx / connection errors: 3 retries with 2 s / 5 s / 15 s backoff,
+                                  then fall back.
+  - Fallback: if `config.GOOGLE_API_FALLBACK_TO_LOCAL` is True, delegate
+              `stream()` to `LlamaServerBackend` and mark the final
+              `DoneEvent.cloud_failed_used_local = True`.
+              Otherwise re-raise the last exception.
 """
 
 from __future__ import annotations
@@ -14,6 +25,7 @@ import os
 import time
 from typing import Generator
 
+import requests
 from google import genai
 from google.genai import types
 
@@ -104,13 +116,46 @@ _CTX_SIZE: dict[str, int] = {
 _CTX_SIZE_DEFAULT = 500_000
 
 
-class GeminiBackend:
-    """LLMBackend for Google Gemini API / Gemma via google.genai SDK."""
+def _extract_status_code(exc: Exception) -> int | None:
+    """
+    Best-effort extraction of an HTTP status code from a google.genai or
+    requests-style exception. Returns None when no code is available
+    (e.g. plain connection error).
+    """
+    for attr in ("status_code", "code", "http_status"):
+        val = getattr(exc, attr, None)
+        if isinstance(val, int):
+            return val
+    response = getattr(exc, "response", None)
+    if response is not None:
+        val = getattr(response, "status_code", None)
+        if isinstance(val, int):
+            return val
+    # google.genai sometimes embeds {"error": {"code": 429}} in str(exc)
+    msg = str(exc)
+    for code in (429, 500, 502, 503, 504):
+        if f" {code}" in msg or f"code: {code}" in msg or f"code={code}" in msg:
+            return code
+    return None
+
+
+def _is_connection_error(exc: Exception) -> bool:
+    """True for transport-level errors that warrant retry like a 5xx."""
+    return isinstance(exc, (
+        requests.ConnectionError,
+        requests.Timeout,
+        ConnectionError,
+        TimeoutError,
+    ))
+
+
+class GoogleBackend:
+    """LLMBackend for Google Gemini / Gemma cloud models via google.genai SDK."""
 
     MODEL             = "gemini-2.5-flash-lite"
     supports_thinking = False
     TEMPERATURE       = 1.0
-    _log_prefix       = "gemini"
+    _log_prefix       = "google"
 
     @property
     def max_chunk_chars(self) -> int:
@@ -123,7 +168,8 @@ class GeminiBackend:
         timeout:    int        = 300,
         max_tokens: int        = config.MAX_TOKENS,
     ):
-        api_key          = api_key or os.environ.get("GEMINI_API_KEY", "")
+        env_key = os.environ.get(config.GOOGLE_API_KEY_ENV) or os.environ.get("GEMINI_API_KEY", "")
+        api_key          = api_key or env_key
         self._model      = model or self.MODEL
         self.ctx_size    = _CTX_SIZE.get(self._model, _CTX_SIZE_DEFAULT)
         self._client     = genai.Client(api_key=api_key)
@@ -165,6 +211,86 @@ class GeminiBackend:
         temperature: float | None      = None,
         max_tokens:  int               = config.MAX_TOKENS,
     ) -> Generator[LLMEvent, None, None]:
+        """
+        Stream one completion from Google's API with retry + local fallback.
+
+        Retries are applied around the *initial connection* to the API. If a
+        stream is interrupted mid-flight after tokens have already been
+        yielded, we do not retry — the partial output has already been
+        consumed downstream.
+        """
+        last_exc: Exception | None = None
+
+        # Backoff schedule: index 0 = first retry wait, etc.
+        # 429 path uses [2.0]; 5xx/connection path uses [2.0, 5.0, 15.0].
+        # We try the request once before any sleeps.
+        for attempt in range(4):  # 1 initial + up to 3 retries
+            try:
+                yield from self._stream_once(
+                    messages    = messages,
+                    tools       = tools,
+                    temperature = temperature,
+                    max_tokens  = max_tokens,
+                )
+                return
+            except Exception as exc:  # noqa: BLE001 — categorize below
+                last_exc = exc
+                status   = _extract_status_code(exc)
+
+                if status == 429:
+                    # 429: at most one retry, 2 s wait, then fall back.
+                    if attempt >= 1:
+                        break
+                    print(f"[{self._log_prefix}] 429 quota — retrying in 2.0s", flush=True)
+                    time.sleep(2.0)
+                    continue
+
+                if (status is not None and 500 <= status < 600) or _is_connection_error(exc):
+                    # 5xx / connection: up to 3 retries with 2 / 5 / 15 s backoff.
+                    backoff = (2.0, 5.0, 15.0)
+                    if attempt >= 3:
+                        break
+                    wait = backoff[attempt]
+                    label = f"{status}" if status is not None else type(exc).__name__
+                    print(
+                        f"[{self._log_prefix}] {label} — retrying in {wait:.0f}s "
+                        f"(attempt {attempt + 1}/3)",
+                        flush=True,
+                    )
+                    time.sleep(wait)
+                    continue
+
+                # Anything else: don't retry.
+                raise
+
+        # Retries exhausted — fall back or re-raise.
+        if config.GOOGLE_API_FALLBACK_TO_LOCAL:
+            print(
+                f"[{self._log_prefix}] retries exhausted ({type(last_exc).__name__}: "
+                f"{last_exc}); falling back to llama-server",
+                flush=True,
+            )
+            yield from self._stream_local_fallback(
+                messages    = messages,
+                tools       = tools,
+                temperature = temperature,
+                max_tokens  = max_tokens,
+            )
+            return
+
+        assert last_exc is not None
+        raise last_exc
+
+    # ── Internal helpers ──────────────────────────────────────────────────────
+
+    def _stream_once(
+        self,
+        messages:    list[dict],
+        tools:       list[dict] | None,
+        temperature: float | None,
+        max_tokens:  int,
+    ) -> Generator[LLMEvent, None, None]:
+        """One attempt at the Google API stream, no retry logic."""
         contents, system_text = _convert_messages(messages)
 
         gen_config = types.GenerateContentConfig(
@@ -223,3 +349,25 @@ class GeminiBackend:
         if tc_list:
             yield ToolCallsEvent(tc_list)
         yield DoneEvent()
+
+    def _stream_local_fallback(
+        self,
+        messages:    list[dict],
+        tools:       list[dict] | None,
+        temperature: float | None,
+        max_tokens:  int,
+    ) -> Generator[LLMEvent, None, None]:
+        """Delegate to LlamaServerBackend and mark the final DoneEvent."""
+        # Imported lazily to avoid a hard dependency at module load.
+        from agent.llm.llama_server import LlamaServerBackend
+
+        local = LlamaServerBackend()
+        for event in local.stream(
+            messages    = messages,
+            tools       = tools,
+            temperature = temperature,
+            max_tokens  = max_tokens,
+        ):
+            if isinstance(event, DoneEvent):
+                event.cloud_failed_used_local = True
+            yield event
