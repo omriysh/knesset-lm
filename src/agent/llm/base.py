@@ -52,6 +52,8 @@ class LLMBackend(Protocol):
     """
 
     supports_thinking: bool
+    ctx_size:          int   # model context window in tokens
+    max_chunk_chars:   int   # max chars per transcript chunk for summarization
 
     def stream(
         self,

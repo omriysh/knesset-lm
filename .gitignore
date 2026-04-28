@@ -9,3 +9,8 @@ sessions/
 
 # Query log
 web/query_log.jsonl
+
+# Temporary / experimental scripts and batch state
+temp_*.py
+exp_*.py
+batch_state_*.json

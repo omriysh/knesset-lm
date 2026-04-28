@@ -43,6 +43,11 @@ class LlamaServerBackend:
     _log_prefix:       str   = "llama_server"
     TEMPERATURE:       float = 0.7
     TOP_K:             int   = 40
+    ctx_size:          int   = 40_000
+
+    @property
+    def max_chunk_chars(self) -> int:
+        return max((self.ctx_size - config._RESERVED_TOKENS) * config.CHARS_PER_TOK, 1000)
 
     def __init__(
         self,
