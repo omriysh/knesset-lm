@@ -365,7 +365,7 @@ def get_all_parties(knesset_num: int = 25) -> list[dict]:
     return result
 
 
-def get_mk_by_name(name: str, knesset_num: int = 25) -> list[dict]:
+def _search_mks_by_name(name: str, knesset_num: int = 25) -> list[dict]:
     """
     Search for MKs by name (Hebrew, partial, or altname).
     Returns a list of MK dicts.
@@ -402,7 +402,7 @@ def get_all_committees(knesset_num: int = 25) -> list[dict]:
     return committees
 
 
-def get_committee_by_name(name: str, knesset_num: int = 25) -> list[dict]:
+def _search_committees_by_name(name: str, knesset_num: int = 25) -> list[dict]:
     """
     Search for Knesset committees by name (Hebrew, partial match) and Knesset number.
     Uses the /committees_kns_committee/list endpoint.
@@ -424,7 +424,7 @@ def get_committee_by_name(name: str, knesset_num: int = 25) -> list[dict]:
     ]
 
 
-def get_active_committee_members(
+def _get_active_committee_members_by_id(
     committee_id: int,
     knesset_num: int = 25,
     current_only: bool = True,
@@ -473,7 +473,7 @@ def get_mk_profile(name: str, knesset_num: int = 25) -> dict | None:
     Look up an MK by name and return their full profile.
     Returns None if not found. If multiple match, returns the first with a flag.
     """
-    matches = get_mk_by_name(name, knesset_num)
+    matches = _search_mks_by_name(name, knesset_num)
     if not matches:
         return None
     result = matches[0]
@@ -483,7 +483,7 @@ def get_mk_profile(name: str, knesset_num: int = 25) -> dict | None:
     return result
 
 
-def get_law_or_bill_by_name(
+def _resolve_bill_by_name(
     name_part: str,
     knesset_num: int | None = None,
 ) -> dict | None:
@@ -509,7 +509,7 @@ def get_law_or_bill_by_name(
     return None
     
 
-def get_bill_documents(bill_id: int) -> list[dict]:
+def _get_bill_documents(bill_id: int) -> list[dict]:
     """
     Return document metadata for a bill: title, type, and corrected URL.
     Sorted by usefulness (latest reading first).
@@ -544,14 +544,14 @@ def get_bill_documents(bill_id: int) -> list[dict]:
     ]
 
 
-def get_bill_text(bill_id: int, max_chars: int = 8000) -> dict | None:
+def _get_bill_text_by_id(bill_id: int, max_chars: int = 8000) -> dict | None:
     """
     Fetch the most relevant document for a bill and extract its text.
     Tries documents in priority order until one succeeds.
     Returns {bill_id, doc_id, group, url, text} or None if all fail.
     max_chars limits the returned text to avoid overwhelming the context window.
     """
-    docs = get_bill_documents(bill_id)
+    docs = _get_bill_documents(bill_id)
     if not docs:
         return None
 
@@ -581,7 +581,7 @@ def get_bill_text(bill_id: int, max_chars: int = 8000) -> dict | None:
     return None
 
 
-def get_bill_details(bill_id: int) -> dict | None:
+def _get_bill_details_by_id(bill_id: int) -> dict | None:
     # Request 1: bill + status only (no nested expand)
     url = (
         f"{OFFICIAL_KNESSET_NEW_API}/KNS_Bill({bill_id})"
@@ -621,30 +621,42 @@ def get_bill_details(bill_id: int) -> dict | None:
         "publication_date": bill.get("PublicationDate"),
         "last_updated":     bill.get("LastUpdatedDate"),
         "initiators":       initiators,
-        "documents":        get_bill_documents(bill_id),
+        "documents":        _get_bill_documents(bill_id),
     }
 
 
-def get_bill_details_by_name(bill_name: str) -> dict | None:
-    bill = get_law_or_bill_by_name(bill_name)
+def get_bill_details(bill_name: str, knesset_num: int | None = None) -> dict | None:
+    """
+    Look up a bill by name and return its full details.
+    Single public name-first form.
+    """
+    bill = _resolve_bill_by_name(bill_name, knesset_num)
     if not bill:
         return None
-    return get_bill_details(bill["bill_id"])
+    return _get_bill_details_by_id(bill["bill_id"])
 
 
-def get_bill_text_by_name(bill_name: str, knesset_num: int = 25, max_chars: int = 8000) -> dict | None:
-    bill = get_law_or_bill_by_name(bill_name, knesset_num)
+def get_bill_text(bill_name: str, knesset_num: int = 25, max_chars: int = 8000) -> dict | None:
+    """
+    Look up a bill by name, fetch its document, and return extracted text.
+    Single public name-first form.
+    """
+    bill = _resolve_bill_by_name(bill_name, knesset_num)
     if not bill:
         return None
-    return get_bill_text(bill["bill_id"], max_chars)
+    return _get_bill_text_by_id(bill["bill_id"], max_chars)
 
 
-def get_active_committee_members_by_name(name: str, knesset_num: int = 25) -> list[dict]:
-    committees = get_committee_by_name(name, knesset_num)
+def get_committee_members(name: str, knesset_num: int = 25) -> list[dict]:
+    """
+    Look up a committee by name and return its active members.
+    Single public name-first form.
+    """
+    committees = _search_committees_by_name(name, knesset_num)
     if not committees:
         return []
     committee = committees[0]  # take the best match
-    return get_active_committee_members(committee["CommitteeID"], knesset_num)
+    return _get_active_committee_members_by_id(committee["CommitteeID"], knesset_num)
 
 
 # ── Committee sessions ────────────────────────────────────────────────────────
@@ -693,9 +705,9 @@ def get_committee_sessions(committee_id: int, knesset_num: int = 25) -> list[dic
     ]
 
 
-def get_committee_sessions_by_name(name: str, knesset_num: int = 25) -> list[dict]:
+def _get_committee_sessions_by_name(name: str, knesset_num: int = 25) -> list[dict]:
     """Resolve committee by name, then return its sessions."""
-    committees = get_committee_by_name(name, knesset_num)
+    committees = _search_committees_by_name(name, knesset_num)
     if not committees:
         return []
     return get_committee_sessions(committees[0]["CommitteeID"], knesset_num)
@@ -747,7 +759,7 @@ def _extract_doc_text(doc_bytes: bytes) -> str:
         except Exception: pass
 
 
-def get_session_documents(session_id: int) -> list[dict]:
+def _get_session_documents(session_id: int) -> list[dict]:
     """Return document metadata for a session from KNS_DocumentCommitteeSession."""
     r = _retry_get(
         f"{OFFICIAL_KNESSET_NEW_API}/KNS_DocumentCommitteeSession",
@@ -768,14 +780,14 @@ def get_session_documents(session_id: int) -> list[dict]:
     ]
 
 
-def get_session_protocol_text(session_id: int, max_chars: int | None = None) -> dict | None:
+def _get_session_protocol_text(session_id: int, max_chars: int | None = None) -> dict | None:
     """
     Download and extract the protocol document for a session.
     Only considers documents whose name contains 'פרוטוקול' or 'protocol' —
     background documents (bills, appendices) are excluded.
     Returns {session_id, doc_id, name, url, text} or None.
     """
-    docs = get_session_documents(session_id)
+    docs = _get_session_documents(session_id)
     candidates = [
         d for d in docs
         if d["name"] and any(p in d["name"] for p in _PROTOCOL_NAME_SUBSTRINGS)
@@ -816,18 +828,18 @@ def get_session_transcript(session_id: int) -> dict | None:
       {"full_text": "...", "source_url": "..."}  — raw text, from OData document
       None                                       — no transcript available
     """
-    speeches = scrape_oknesset_transcript(session_id)
+    speeches = _scrape_oknesset_transcript(session_id)
     if speeches:
         return {"speeches": speeches}
 
-    result = get_session_protocol_text(session_id)
+    result = _get_session_protocol_text(session_id)
     if result and result.get("text"):
         return {"full_text": result["text"], "source_url": result["url"]}
 
     return None
 
 
-def scrape_oknesset_transcript(session_id: int) -> list[dict] | None:
+def _scrape_oknesset_transcript(session_id: int) -> list[dict] | None:
     """
     Scrape the speech-by-speech transcript from oknesset.org.
     URL: https://oknesset.org/meetings/{s[0]}/{s[1]}/{session_id}.html

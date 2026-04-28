@@ -98,3 +98,70 @@ def transcriptions_dir(knesset_num: int = 25) -> Path:
 def summaries_dir(knesset_num: int = 25) -> Path:
     """Root directory for generated summary files for a given Knesset."""
     return DATA_DIR / "summaries" / str(knesset_num)
+
+
+# ── Plan-execute agent ───────────────────────────────────────────────────────
+
+# Models (cloud)
+GOOGLE_API_KEY_ENV   = "GOOGLE_API_KEY"
+PLANNER_MODEL        = "gemini-2.5-flash-lite"
+CRITIC_PRE_MODEL     = "gemma-3-27b-it"
+CRITIC_POST_MODEL    = "gemini-2.5-flash-lite"
+SYNTHESIZER_MODEL    = "gemini-2.5-flash-lite"
+EXECUTOR_MODEL_LIGHT = "gemma-3-12b-it"
+EXECUTOR_MODEL_HEAVY = "gemma-3-27b-it"   # gemma, not gemini — see §1.2
+INTENT_MODEL         = "local"            # always llama-server
+
+# Fallback
+GOOGLE_API_FALLBACK_TO_LOCAL = True
+
+# Caps (hit-cap = abort)
+RESEARCH_MAX_LLM_TOKENS         = 1_000_000
+RESEARCH_MAX_TOOL_CALLS         = 50
+RESEARCH_MAX_REPLANS            = 3
+RESEARCH_MAX_PLAN_STEPS_V1      = 8
+RESEARCH_MAX_DEEP_DIVES_PER_PLAN = 3       # validator caps plan deep-dives
+DEEP_DIVE_CALLS_PER_STEP        = 2        # tool-call cap inside a deep-dive step
+EVIDENCE_MAX_ENTRIES            = 200
+EVIDENCE_MAX_BYTES_PER_STEP     = 500 * 1024
+EVIDENCE_MAX_BYTES_TOTAL        = 8 * 1024 * 1024
+
+# Cost heuristic (Python, not LLM — see §4.1.1)
+COST_HINT_SECONDS = {"cheap": 5, "medium": 30, "expensive": 120}
+
+# Timing
+RESEARCH_LONG_LATENCY_THRESHOLD_SECONDS = 600   # cost-gate trigger
+RESEARCH_PER_STEP_TIMEOUT_SECONDS       = 300
+RESEARCH_PER_TOOL_TIMEOUT_SECONDS       = 90
+
+# Concurrency
+RESEARCH_DAG_MAX_WORKERS         = 4
+RESEARCH_DEEP_DIVE_MAX_PARALLEL  = 1
+
+# BM25 / morphology
+BM25_DIR             = DATA_DIR / "bm25"
+USE_DICTABERT_LEMMA  = False
+DICTABERT_MODEL      = "dicta-il/dictabert-seg"
+DICTABERT_DEVICE     = "cuda"   # used only when USE_DICTABERT_LEMMA=True
+
+# Retrieval
+RRF_K                              = 60
+SEARCH_TOPICS_DEFAULT_TOP_K        = 500
+SEARCH_TOPICS_MAX_TOP_K            = 2000
+SEARCH_PROTOCOLS_DEFAULT_TOP_K     = 50
+SEARCH_PROTOCOLS_MAX_TOP_K         = 200
+HYBRID_FIRST_STAGE_TOP_K           = 1000   # per-signal cap before RRF
+KEYWORD_RERANK_TOP_K               = 200    # cosine rerank window when sort=relevance
+NAME_RESOLUTION_AUTO_THRESHOLD     = 0.35
+
+# Bill text
+BILL_TEXT_DEFAULT_MAX_CHARS  = 1000
+BILL_TEXT_MIN_MAX_CHARS      = 200
+BILL_TEXT_MAX_MAX_CHARS      = 8000
+
+# Embedding device for query path. Flip to "cpu" when the local model
+# running on llama-server is large enough to leave no VRAM headroom.
+EMBED_DEVICE_FOR_QUERY = "cuda"
+
+# Sessions on disk (evidence overflow)
+SESSIONS_DIR = DATA_DIR / "sessions"
