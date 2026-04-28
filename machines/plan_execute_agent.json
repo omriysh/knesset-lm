@@ -1,0 +1,200 @@
+{
+  "version": 3,
+  "id": "plan_execute_agent_v1",
+  "name": "Plan-Execute Research Agent",
+  "global_rules": "ענה בעברית. היה מדויק ותמציתי. אל תמציא מידע שאינו מופיע במקורות.",
+  "nodes": [
+    {
+      "id": "begin",
+      "type": "begin",
+      "label": "התחלה",
+      "imaginary": false,
+      "terminal": false,
+      "data": {}
+    },
+    {
+      "id": "intent_classify",
+      "type": "llm_call",
+      "label": "סיווג כוונה",
+      "imaginary": false,
+      "terminal": false,
+      "data": {
+        "system_prompt": "You triage user questions for the Knesset research assistant.\n\nClassify the user's most recent message into one of three classes and return ONE JSON object with a single key \"intent\":\n\n  - \"research\"          — a substantive question about the Israeli Knesset (MKs, parties, committees, bills, votes, opinions expressed in protocols). The downstream agent will gather evidence and produce a sourced answer.\n  - \"deep_dive_request\" — the user explicitly asks to BROWSE protocols themselves (look at meetings, search inside one, see who said what in a specific session).\n  - \"irrelevant\"        — not about Israeli Knesset / politics.\n\nDo not explain. Do not output prose. Do not output additional keys.",
+        "input_template": "{{question}}",
+        "output_format": {
+          "type": "json",
+          "fields": [
+            {
+              "var": "intent",
+              "label": "intent",
+              "required": true
+            }
+          ]
+        },
+        "stage": "router",
+        "rag": "",
+        "model": "",
+        "temperature": 0.1,
+        "max_tokens": 64
+      }
+    },
+    {
+      "id": "mode_select",
+      "type": "user_input",
+      "label": "בחר מצב מחקר",
+      "imaginary": false,
+      "terminal": false,
+      "data": {
+        "ui": "option_select",
+        "prompt_he": "איך נתקדם?",
+        "output_var": "research_mode",
+        "preselect_var": "",
+        "multi_select": false,
+        "options": [
+          {
+            "value": "summarize",
+            "label": "סכם עבורי",
+            "description": "מחקר אוטומטי מעמיק — סוכן אוסף ראיות ומנתח"
+          },
+          {
+            "value": "deep_dive",
+            "label": "צלול לפרוטוקולים",
+            "description": "עיון עצמי, חיפוש חופשי ושאלות ממוקדות על הישיבות"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cost_gate",
+      "type": "user_input",
+      "label": "אישור עלות",
+      "imaginary": false,
+      "terminal": false,
+      "data": {
+        "ui": "option_select",
+        "prompt_he": "המחקר המתוכנן הוא יקר יחסית ({{estimated_minutes}} דקות בקירוב, {{step_count}} שלבים). האם להמשיך?",
+        "output_var": "approve",
+        "preselect_var": "",
+        "multi_select": false,
+        "options": [
+          {
+            "value": true,
+            "label": "כן, המשך",
+            "description": "הרץ את המחקר המלא"
+          },
+          {
+            "value": false,
+            "label": "לא, בטל",
+            "description": "בטל את המחקר"
+          }
+        ]
+      }
+    },
+    {
+      "id": "research_subgraph",
+      "type": "subgraph",
+      "label": "מחקר מעמיק",
+      "imaginary": false,
+      "terminal": false,
+      "data": {
+        "implementation": "research",
+        "input": {
+          "question": "question",
+          "intent_hint": "intent"
+        },
+        "output_vars": ["final_answer", "footnotes"],
+        "hooks": {
+          "cost_estimate_required": "cost_gate"
+        }
+      }
+    },
+    {
+      "id": "format_answer",
+      "type": "llm_call",
+      "label": "עיצוב תשובה",
+      "imaginary": false,
+      "terminal": true,
+      "data": {
+        "system_prompt": "אתה עוזר מומחה לניתוח פעולתה של הכנסת הישראלית.\nקיבלת תשובה מסוכן מחקר. תפקידך לנסח אותה מחדש בצורה ברורה, תמציתית ונגישה למשתמש.\n\nכללים:\n- ענה בעברית.\n- שמור על כל הציטוטים, התאריכים ושמות הוועדות המופיעים בתשובה המקורית.\n- אל תמציא מידע שאינו מופיע בתשובה.\n- אם התשובה מסמנת שהשאלה אינה רלוונטית לכנסת — ציין זאת בנימוס בשורה קצרה.",
+        "input_template": "{{final_answer}}",
+        "output_format": null,
+        "stage": "reviewer",
+        "rag": "",
+        "model": "",
+        "temperature": 0.7,
+        "max_tokens": 4096
+      }
+    },
+    {
+      "id": "user_input_deep_dive",
+      "type": "user_input",
+      "label": "צלול לפרוטוקולים",
+      "imaginary": false,
+      "terminal": true,
+      "data": {
+        "ui": "deep_dive",
+        "prompt_he": "צוללים לפרוטוקולים…",
+        "output_var": "selected_meetings"
+      }
+    },
+    {
+      "id": "end",
+      "type": "begin",
+      "label": "סיום",
+      "imaginary": true,
+      "terminal": true,
+      "data": {}
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_begin_intent",
+      "source": "begin",
+      "target": "intent_classify",
+      "type": "transition",
+      "condition": ""
+    },
+    {
+      "id": "e_intent_research",
+      "source": "intent_classify",
+      "target": "mode_select",
+      "type": "transition",
+      "condition": "intent == 'research'"
+    },
+    {
+      "id": "e_intent_irrelevant",
+      "source": "intent_classify",
+      "target": "format_answer",
+      "type": "transition",
+      "condition": "intent == 'irrelevant'"
+    },
+    {
+      "id": "e_intent_deep_dive",
+      "source": "intent_classify",
+      "target": "user_input_deep_dive",
+      "type": "transition",
+      "condition": "intent == 'deep_dive_request'"
+    },
+    {
+      "id": "e_mode_summarize",
+      "source": "mode_select",
+      "target": "research_subgraph",
+      "type": "transition",
+      "condition": "research_mode == 'summarize'"
+    },
+    {
+      "id": "e_mode_deep_dive",
+      "source": "mode_select",
+      "target": "user_input_deep_dive",
+      "type": "transition",
+      "condition": "research_mode == 'deep_dive'"
+    },
+    {
+      "id": "e_subgraph_format",
+      "source": "research_subgraph",
+      "target": "format_answer",
+      "type": "transition",
+      "condition": ""
+    }
+  ]
+}

@@ -38,7 +38,44 @@ from agent.context import Context, evaluate_condition
 from agent.llm.base import DoneEvent, LLMBackend, ThinkingEvent, TokenEvent, ToolCallsEvent
 from agent.machine import StateMachine
 from agent.parsers import get_loop_control, parse_output
+from agent.research_agent.agent import ResearchAgent
+from agent.subgraph.base import SubgraphEvent
+from agent.subgraph.hooks import HookRouter, parse_hook_config
 from utils.meeting import register_meeting_paths
+
+
+# ── Subgraph implementation registry ──────────────────────────────────────────
+#
+# Maps the ``data.implementation`` string on a ``subgraph`` node to the
+# concrete :class:`SubgraphAgent` subclass that knows how to run it.  Every
+# entry must obey the contract in :mod:`agent.subgraph.base` (a ``run(inputs)``
+# generator that yields :class:`SubgraphEvent` objects).
+#
+# Adding a new subgraph implementation means:
+#   1. write the SubgraphAgent subclass (see ``ResearchAgent`` for the
+#      canonical pattern),
+#   2. register it here under a stable string key, and
+#   3. update the outer state-machine JSON to point ``data.implementation``
+#      at that key.
+_SUBGRAPH_REGISTRY: dict[str, type] = {
+    "research": ResearchAgent,
+    # future: "browse": BrowseAgent, "fact_check": FactCheckAgent, ...
+}
+
+
+def _safe_jsonable(value: object) -> object:
+    """Best-effort coercion to a JSON-serialisable structure.
+
+    The runner emits subgraph payloads over SSE, which means the consumer
+    (the web layer) will eventually ``json.dumps`` them.  Subgraph payloads
+    may contain dataclasses, sets, or other non-JSON types — round-tripping
+    through ``json.loads(json.dumps(..., default=str))`` flattens those into
+    strings without raising.
+    """
+    try:
+        return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+    except Exception:
+        return repr(value)
 
 
 # ── Tool registry builder ─────────────────────────────────────────────────────
@@ -248,7 +285,7 @@ class MachineRunner:
                 tgt_id   = edge["target"]
                 tgt_node = self.machine.get_node(tgt_id)
                 if (tgt_node.get("imaginary")
-                        or tgt_node.get("type") not in ("llm_call", "user_input")
+                        or tgt_node.get("type") not in ("llm_call", "user_input", "subgraph")
                         or tgt_id in completed):
                     continue
                 if not evaluate_condition(edge.get("condition", ""), ctx):
@@ -282,6 +319,26 @@ class MachineRunner:
                     top_k=top_k, top_n=top_n,
                 )
                 return  # BFS ends; caller resumes via run_stream(resume=...)
+
+            # ── subgraph node — delegate to a SubgraphAgent ───────────────
+            if node_type == "subgraph":
+                yield from self._run_subgraph_node(node, node_id, loop_idx, ctx)
+                completed.add(node_id)
+                # Fire outgoing transitions exactly like an llm_call would.
+                for edge in self.machine.outgoing_transitions(node_id):
+                    tgt_id   = edge["target"]
+                    tgt_node = self.machine.get_node(tgt_id)
+                    if (tgt_node.get("imaginary")
+                            or tgt_node.get("type") not in ("llm_call", "user_input", "subgraph")
+                            or tgt_id in completed):
+                        continue
+                    if not evaluate_condition(edge.get("condition", ""), ctx):
+                        continue
+                    fired_to.setdefault(tgt_id, set()).add(node_id)
+                    if tgt_id not in enqueued:
+                        queue.append(tgt_id)
+                        enqueued.add(tgt_id)
+                continue
 
             data         = node.get("data", {})
             node_prompt  = data.get("system_prompt", "")
@@ -427,7 +484,7 @@ class MachineRunner:
                 tgt_node = self.machine.get_node(tgt_id)
 
                 if (tgt_node.get("imaginary")
-                        or tgt_node.get("type") not in ("llm_call", "user_input")
+                        or tgt_node.get("type") not in ("llm_call", "user_input", "subgraph")
                         or tgt_id in completed):
                     continue
 
@@ -589,6 +646,155 @@ class MachineRunner:
 
         yield ("status", f"ממתין לקלט משתמש: {node.get('label', '')}…")
         yield ("user_input_required", {**ui_event, "checkpoint": checkpoint})
+
+    # ── Subgraph node dispatch ────────────────────────────────────────────────
+
+    def _run_subgraph_node(
+        self,
+        node:     dict,
+        node_id:  str,
+        loop_idx: int,
+        ctx:      Context,
+    ) -> Generator:
+        """Execute a ``subgraph`` node by delegating to a :class:`SubgraphAgent`.
+
+        Streams every yielded :class:`SubgraphEvent` back through the SSE
+        channel as a generic ``subgraph_event`` so the UI / caller can render
+        progress without engine-side knowledge of the subgraph's domain.
+
+        Hook-routing semantics (per design §3.2.2):
+          * ``kind="hook"`` events are passed through :class:`HookRouter`
+            against ``data.hooks``. A wired hook would normally cause the
+            runner to suspend the subgraph and dispatch the target node;
+            for v1 the unwired-default path is taken (the subgraph applies
+            its own default behaviour by continuing the generator), and the
+            event is still surfaced over SSE so the UI can react.
+          * ``kind="done"``  → write declared ``output_vars`` from
+                                ``event.payload`` back to the context.
+          * ``kind="error"`` → surface as an SSE ``status`` line and stop
+                                the subgraph stream.
+        """
+        data           = node.get("data") or {}
+        impl_key       = data.get("implementation", "")
+        input_mapping  = data.get("input") or {}
+        output_vars    = data.get("output_vars") or []
+        hooks          = parse_hook_config(data.get("hooks"))
+        label          = node.get("label", "")
+        stage          = data.get("stage", "")
+
+        agent_cls = _SUBGRAPH_REGISTRY.get(impl_key)
+        if agent_cls is None:
+            yield ("status",
+                   f"שגיאת תת-גרף: implementation לא מוכר: {impl_key!r}")
+            yield ("node_result", {
+                "label":   label,
+                "stage":   stage,
+                "loop":    loop_idx,
+                "content": f"unknown subgraph implementation: {impl_key!r}",
+                "error":   "unknown_subgraph_impl",
+            })
+            return
+
+        # Build the subgraph's input dict from the outer context using the
+        # ``data.input`` mapping.  Per design §3.2.2 the mapping is
+        # ``{context_var: subgraph_input_key}`` — the *value* is the key the
+        # subgraph expects, the *key* is where to read it from in ctx.
+        inputs: dict = {}
+        for ctx_var, sub_key in input_mapping.items():
+            if not isinstance(sub_key, str) or not sub_key:
+                continue
+            inputs[sub_key] = ctx.get(ctx_var)
+
+        yield ("status", f"מפעיל תת-גרף ({impl_key}): {label}…")
+        yield ("node_start", {
+            "label":  label,
+            "stage":  stage,
+            "loop":   loop_idx,
+            "subgraph": {
+                "implementation": impl_key,
+                "inputs":         _safe_jsonable(inputs),
+                "hooks":          dict(hooks),
+            },
+        })
+
+        agent     = agent_cls()
+        router    = HookRouter(hooks)
+        gen       = agent.run(inputs)
+        last_done_payload: dict | None = None
+        error_msg: str | None          = None
+
+        try:
+            for event in gen:
+                # Always relay the raw event over SSE first so the UI sees it.
+                yield ("subgraph_event", {
+                    "kind":    event.kind,
+                    "name":    event.name,
+                    "payload": _safe_jsonable(event.payload),
+                })
+
+                route = router.route(event)
+
+                if route.action == "done":
+                    last_done_payload = event.payload or {}
+                    break
+                if route.action == "error":
+                    error_msg = str((event.payload or {}).get("error") or
+                                    event.name or "subgraph_error")
+                    break
+                if route.action == "route":
+                    # Wired hook → outer-SM routing would kick in here.
+                    # v1 surfaces the event but lets the subgraph continue
+                    # with its default behaviour; full pause-and-resume
+                    # routing across the outer SM is Phase 6b territory.
+                    yield ("status",
+                           f"hook ‎'{event.name}' → "
+                           f"{route.target_node} (לא מוטמע ב-v1, נמשיך עם ברירת המחדל)")
+                    continue
+                if route.action == "unwired_hook":
+                    # Subgraph yielded a hook the outer SM didn't wire — the
+                    # subgraph's own default applies.  Nothing to do here.
+                    continue
+                # action == "progress"  → already relayed above
+        except Exception as exc:  # noqa: BLE001 — surface to SSE
+            error_msg = f"{type(exc).__name__}: {exc}"
+
+        if error_msg is not None:
+            yield ("status", f"שגיאה בתת-גרף ({impl_key}): {error_msg}")
+            yield ("node_result", {
+                "label":   label,
+                "stage":   stage,
+                "loop":    loop_idx,
+                "content": "",
+                "error":   error_msg,
+            })
+            return
+
+        # Success → write declared output_vars from the done payload.
+        payload = last_done_payload or {}
+        for var in output_vars:
+            if var in payload:
+                ctx.set(var, payload[var])
+
+        # Surface the final answer through the same channels the legacy
+        # llm_call path uses, so existing reviewers / "final answer" code
+        # continues to see it in ctx.
+        final_text = ""
+        if isinstance(payload.get("final_answer"), str):
+            final_text = payload["final_answer"]
+
+        ctx.set_node_output(node_id, label, final_text)
+
+        yield ("node_result", {
+            "label":   label,
+            "stage":   stage,
+            "loop":    loop_idx,
+            "content": final_text,
+            "subgraph": {
+                "implementation": impl_key,
+                "output_vars":    list(output_vars),
+                "outputs":        _safe_jsonable(payload),
+            },
+        })
 
     # ── Node executor (agentic tool loop) ─────────────────────────────────────
 

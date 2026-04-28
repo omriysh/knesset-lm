@@ -13,7 +13,7 @@ Machine JSON schema (version 2 / 3)
   "nodes": [
     {
       "id":        str,
-      "type":      "begin" | "llm_call" | "tool" | "user_input",
+      "type":      "begin" | "llm_call" | "tool" | "user_input" | "subgraph",
       "label":     str,
       "imaginary": bool,  # skipped by the engine
       "terminal":  bool,  # no auto-transition continues after this node
@@ -35,6 +35,11 @@ Machine JSON schema (version 2 / 3)
         "prompt_he":       str,          # Hebrew prompt shown to the user
         "output_var":      str,          # context var name where user response is stored
         "multi_select":    bool,         # option_select only — allow multiple selections
+        # subgraph fields (Phase 6a):
+        "implementation":  str,          # key into runner._SUBGRAPH_REGISTRY (e.g. "research")
+        "input":           dict,         # {context_var: subgraph_input_key}
+        "output_vars":     list,         # context vars to write back from the "done" event
+        "hooks":           dict | list,  # optional: maps subgraph event names to sibling node ids
       }
     }
   ],
@@ -59,6 +64,27 @@ from pathlib import Path
 from typing import Any
 
 _SUPPORTED_VERSIONS = {2, 3}
+
+# Node types the engine knows how to dispatch.  ``subgraph`` was added in
+# Phase 6a (plan-and-execute) — see design §3.1 / §3.2.  Older machine
+# JSONs that pre-date the addition still validate because the set is a
+# strict superset of the legacy types.
+SUPPORTED_NODE_TYPES: set[str] = {
+    "begin",
+    "llm_call",
+    "tool",
+    "user_input",
+    "subgraph",
+}
+
+# Required ``data`` keys for a ``subgraph`` node, per design §3.2.2.
+# ``hooks`` is optional (a subgraph with no wired hooks runs with
+# default behaviour for every event) and therefore not enforced here.
+_SUBGRAPH_REQUIRED_DATA_FIELDS: tuple[str, ...] = (
+    "implementation",
+    "input",
+    "output_vars",
+)
 
 
 class StateMachine:
@@ -108,6 +134,48 @@ class StateMachine:
                 if nid and nid not in self._nodes:
                     errors.append(
                         f"Edge {edge.get('id')!r}: {key} node {nid!r} does not exist"
+                    )
+
+        # Node type + per-type field validation.  Unknown types are warned
+        # rather than hard-errored so a future designer revision that
+        # introduces a new type can still load on an older engine in
+        # read-only mode.
+        for nid, node in self._nodes.items():
+            ntype = node.get("type")
+            if ntype is None:
+                errors.append(f"Node {nid!r}: missing 'type' field")
+                continue
+            if ntype not in SUPPORTED_NODE_TYPES:
+                warnings.warn(
+                    f"Node {nid!r}: unknown type {ntype!r} "
+                    f"(supported: {sorted(SUPPORTED_NODE_TYPES)})",
+                    stacklevel=3,
+                )
+                continue
+            if ntype == "subgraph":
+                data = node.get("data") or {}
+                for field_name in _SUBGRAPH_REQUIRED_DATA_FIELDS:
+                    if field_name not in data:
+                        errors.append(
+                            f"Node {nid!r} (subgraph): missing required "
+                            f"data field {field_name!r}"
+                        )
+                if "input" in data and not isinstance(data["input"], dict):
+                    errors.append(
+                        f"Node {nid!r} (subgraph): data.input must be a dict "
+                        f"of {{context_var: subgraph_input_key}}"
+                    )
+                if "output_vars" in data and not isinstance(
+                    data["output_vars"], list
+                ):
+                    errors.append(
+                        f"Node {nid!r} (subgraph): data.output_vars must be a list"
+                    )
+                if "implementation" in data and not isinstance(
+                    data["implementation"], str
+                ):
+                    errors.append(
+                        f"Node {nid!r} (subgraph): data.implementation must be a string"
                     )
 
         if errors:

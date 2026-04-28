@@ -314,6 +314,13 @@ async def query(req: QueryRequest, request: Request):
                     yield _sse("thinking_token", {"text": ev_data})
                 elif ev_type == "node_result":
                     yield _sse("node_result",    ev_data)
+                elif ev_type == "subgraph_event":
+                    yield _sse("subgraph_event", {
+                        "type":    "subgraph_event",
+                        "kind":    ev_data.get("kind"),
+                        "name":    ev_data.get("name"),
+                        "payload": ev_data.get("payload", {}),
+                    })
                 elif ev_type == "done":
                     yield _sse("done",           {})
                 elif ev_type == "error":
@@ -421,6 +428,14 @@ async def research_start(req: ResearchStartRequest, request: Request):
 
                 elif ev_type == "node_result":
                     yield _sse("node_result", ev_data)
+
+                elif ev_type == "subgraph_event":
+                    yield _sse("subgraph_event", {
+                        "type":    "subgraph_event",
+                        "kind":    ev_data.get("kind"),
+                        "name":    ev_data.get("name"),
+                        "payload": ev_data.get("payload", {}),
+                    })
 
                 elif ev_type == "user_input_required":
                     # ev_data contains the full payload including "checkpoint"
@@ -646,6 +661,14 @@ async def research_respond(
 
                 elif ev_type == "node_result":
                     yield _sse("node_result", ev_data)
+
+                elif ev_type == "subgraph_event":
+                    yield _sse("subgraph_event", {
+                        "type":    "subgraph_event",
+                        "kind":    ev_data.get("kind"),
+                        "name":    ev_data.get("name"),
+                        "payload": ev_data.get("payload", {}),
+                    })
 
                 elif ev_type == "user_input_required":
                     new_checkpoint = ev_data.get("checkpoint", {})
