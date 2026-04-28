@@ -861,3 +861,169 @@ def scrape_oknesset_transcript(session_id: int) -> list[dict] | None:
                 speeches.append({"speaker": speaker, "text_he": text_he})
 
     return speeches if speeches else None
+
+
+# ── Voting data ───────────────────────────────────────────────────────────────
+
+def _fetch_votes_metadata(vote_ids: list[int]) -> dict[int, dict]:
+    """Batch-fetch KNS_PlenumVote records. Returns dict keyed by vote Id."""
+    if not vote_ids:
+        return {}
+    filter_expr = " or ".join(f"Id eq {vid}" for vid in vote_ids)
+    r = requests.get(
+        f"{OFFICIAL_KNESSET_NEW_API}/KNS_PlenumVote",
+        params={"$filter": filter_expr},
+        timeout=TIMEOUT,
+    )
+    r.raise_for_status()
+    return {v["Id"]: v for v in r.json().get("value", [])}
+
+
+def _format_vote_with_result(vote_meta: dict, result_desc: str) -> dict:
+    return {
+        "vote_id":          vote_meta.get("Id"),
+        "vote_title":       vote_meta.get("VoteTitle"),
+        "vote_subject":     vote_meta.get("VoteSubject"),
+        "vote_datetime":    vote_meta.get("VoteDateTime"),
+        "vote_method":      vote_meta.get("VoteMethodDesc"),
+        "is_no_confidence": vote_meta.get("IsNoConfidenceInGov"),
+        "result":           result_desc,
+    }
+
+
+def _mk_name_filter(mk: dict) -> str:
+    """
+    Build an OData filter string to match KNS_PlenumVoteResult rows for an MK.
+    Uses LastName from voting results (= mk_individual_name from oknesset).
+    Adds FirstName clause when available for disambiguation.
+    """
+    last  = (mk.get("mk_individual_name") or "").strip().replace("'", "''")
+    first = (mk.get("mk_individual_first_name") or "").strip().replace("'", "''")
+    if first:
+        return f"LastName eq '{last}' and FirstName eq '{first}'"
+    return f"LastName eq '{last}'"
+
+
+def get_mk_votes(mk_name: str, knesset_num: int = 25, top_n: int = 20) -> list[dict]:
+    """
+    Return the most recent `top_n` plenum votes for a named MK with their result.
+    Each entry: vote_id, vote_title, vote_subject, vote_datetime, vote_method, result.
+    Returns [] if the MK is not found or has no voting record.
+    """
+    mk = get_mk_profile(mk_name, knesset_num)
+    if not mk:
+        return []
+
+    r = requests.get(
+        f"{OFFICIAL_KNESSET_NEW_API}/KNS_PlenumVoteResult",
+        params={
+            "$filter":  _mk_name_filter(mk),
+            "$top":     top_n,
+            "$orderby": "Id desc",
+        },
+        timeout=TIMEOUT,
+    )
+    r.raise_for_status()
+    results = r.json().get("value", [])
+
+    vote_ids = list({row["VoteID"] for row in results if row.get("VoteID")})
+    votes_by_id = _fetch_votes_metadata(vote_ids)
+
+    return [
+        _format_vote_with_result(votes_by_id[row["VoteID"]], row.get("ResultDesc", ""))
+        for row in results
+        if row.get("VoteID") in votes_by_id
+    ]
+
+
+def get_votes_on_topic(topic: str, top_n: int = 20) -> list[dict]:
+    """
+    Search plenum votes whose title or subject contains `topic`.
+    Returns up to `top_n` most recent matches.
+    Each entry: vote_id, vote_title, vote_subject, vote_datetime, vote_method, is_no_confidence.
+    """
+    safe = topic.replace("'", "''")
+    filter_expr = f"contains(VoteTitle,'{safe}') or contains(VoteSubject,'{safe}')"
+    r = requests.get(
+        f"{OFFICIAL_KNESSET_NEW_API}/KNS_PlenumVote",
+        params={"$filter": filter_expr, "$top": top_n, "$orderby": "Id desc"},
+        timeout=TIMEOUT,
+    )
+    r.raise_for_status()
+    return [
+        {
+            "vote_id":          v["Id"],
+            "vote_title":       v.get("VoteTitle"),
+            "vote_subject":     v.get("VoteSubject"),
+            "vote_datetime":    v.get("VoteDateTime"),
+            "vote_method":      v.get("VoteMethodDesc"),
+            "is_no_confidence": v.get("IsNoConfidenceInGov"),
+        }
+        for v in r.json().get("value", [])
+    ]
+
+
+def get_votes_on_topic_by_mk(
+    topic: str,
+    mk_name: str,
+    knesset_num: int = 25,
+    top_n: int = 20,
+) -> list[dict]:
+    """
+    Search plenum votes on a topic and show how a specific MK voted on each.
+    Combines get_votes_on_topic + per-MK result lookup.
+    Each entry: vote_id, vote_title, vote_subject, vote_datetime, vote_method, result.
+    """
+    votes = get_votes_on_topic(topic, top_n=top_n)
+    if not votes:
+        return []
+
+    mk = get_mk_profile(mk_name, knesset_num)
+    if not mk:
+        return []
+
+    vote_ids = [v["vote_id"] for v in votes]
+    votes_by_id = {v["vote_id"]: v for v in votes}
+
+    id_filter = " or ".join(f"VoteID eq {vid}" for vid in vote_ids)
+    r = requests.get(
+        f"{OFFICIAL_KNESSET_NEW_API}/KNS_PlenumVoteResult",
+        params={"$filter": f"{_mk_name_filter(mk)} and ({id_filter})"},
+        timeout=TIMEOUT,
+    )
+    r.raise_for_status()
+
+    result_by_vote: dict[int, str] = {
+        row["VoteID"]: row.get("ResultDesc", "")
+        for row in r.json().get("value", [])
+        if row.get("VoteID")
+    }
+
+    return [
+        {**v, "result": result_by_vote.get(v["vote_id"], "לא הצביע")}
+        for v in votes
+    ]
+
+
+def get_recent_votes(top_n: int = 10) -> list[dict]:
+    """
+    Return the `top_n` most recent plenum votes (no MK filter).
+    Each entry: vote_id, vote_title, vote_subject, vote_datetime, vote_method, is_no_confidence.
+    """
+    r = requests.get(
+        f"{OFFICIAL_KNESSET_NEW_API}/KNS_PlenumVote",
+        params={"$orderby": "Id desc", "$top": top_n},
+        timeout=TIMEOUT,
+    )
+    r.raise_for_status()
+    return [
+        {
+            "vote_id":          v["Id"],
+            "vote_title":       v.get("VoteTitle"),
+            "vote_subject":     v.get("VoteSubject"),
+            "vote_datetime":    v.get("VoteDateTime"),
+            "vote_method":      v.get("VoteMethodDesc"),
+            "is_no_confidence": v.get("IsNoConfidenceInGov"),
+        }
+        for v in r.json().get("value", [])
+    ]
