@@ -51,7 +51,7 @@ from utils.knesset_db import (
     get_committee_sessions,
     get_session_transcript,
     SESSION_TYPE_CLASSIFIED,
-    get_active_committee_members_by_name,
+    get_committee_members,
 )
 from utils.meeting import (
     load_meeting, build_transcript_text, chunk_transcript, extract_attendance,
@@ -268,7 +268,7 @@ def _build_requests_for_entries(
 
         committee = entry["committee"]
         if committee not in members_cache:
-            members_cache[committee] = get_active_committee_members_by_name(committee, knesset_num)
+            members_cache[committee] = get_committee_members(committee, knesset_num)
         members = members_cache[committee]
 
         raw_names  = extract_attendance(meeting)
