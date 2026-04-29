@@ -38,14 +38,14 @@ from pathlib import Path
 from typing import Any, Callable, Generator
 
 import config
-from agent.llm.base import DoneEvent, TokenEvent, ToolCallsEvent
+from agent.llm.base import DoneEvent, ThinkingEvent, TokenEvent, ToolCallsEvent
 from agent.plan_execute.budget import BudgetExceeded, BudgetTracker, estimate_plan_seconds
 from agent.plan_execute.concurrency import DAGExecutor
 from agent.plan_execute.critics import CriticResult, critic_post, critic_pre
 from agent.plan_execute.executor import execute_step
 from agent.plan_execute.plan import PLAN_JSON_SCHEMA, Plan, Step
 from agent.plan_execute.scratchpad import Scratchpad
-from agent.plan_execute.synthesizer import synthesize
+from agent.plan_execute.synthesizer import synthesize as _synthesize_sync  # kept for external callers
 from agent.plan_execute.tools import (
     EXPAND_TOOL_SCHEMA,
     list_tools_for_executor,
@@ -210,6 +210,26 @@ class _LLMBridge:
                     "content": (out[-1].get("content") or "") + hint,
                 }
         return out
+
+    def stream_raw(
+        self,
+        *,
+        model: str,
+        prompt: str | list[dict] | None = None,
+        messages: list[dict] | None = None,
+        response_format: dict | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ):
+        """Like __call__ but returns a raw LLMEvent generator for streaming."""
+        backend = self._backend_for(model)
+        msgs = self._build_messages(prompt, messages, response_format)
+        kwargs: dict[str, Any] = {"messages": msgs}
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
+        return backend.stream(**kwargs)
 
     def _backend_for(self, model: str):
         """Return (and cache) the right backend instance for ``model``.
@@ -450,7 +470,9 @@ class PlanExecuteAgent(SubgraphAgent):
             payload={"query": query, "version": 1},
         )
 
-        plan = self._call_planner(query=query, registry=registry, replan_hint="")
+        plan = yield from self._call_planner_gen(
+            query=query, registry=registry, replan_hint="", phase="planner",
+        )
         if plan is None or not plan.steps:
             yield SubgraphEvent(
                 kind="error",
@@ -461,7 +483,14 @@ class PlanExecuteAgent(SubgraphAgent):
         self._plan = plan
 
         # ─── Critic-pre on v1 ───────────────────────────────────────────
+        yield SubgraphEvent(kind="llm_start", name="critic_pre",
+                            payload={"phase": "critic_pre",
+                                     "prompt": {"user": "בדיקת תקינות תוכנית החקר"}})
+        _t0_cp = time.monotonic()
         cp = critic_pre(plan, self._llm)
+        yield SubgraphEvent(kind="llm_done", name="critic_pre",
+                            payload={"content": json.dumps(cp.to_dict(), ensure_ascii=False),
+                                     "elapsed_ms": int((time.monotonic() - _t0_cp) * 1000)})
         if cp.verdict in ("revise", "replan"):
             yield SubgraphEvent(
                 kind="progress",
@@ -469,8 +498,9 @@ class PlanExecuteAgent(SubgraphAgent):
                 payload={"reason": cp.reason},
             )
             self._budget.charge_replan()
-            plan = self._call_planner(
-                query=query, registry=registry, replan_hint=cp.reason
+            plan = yield from self._call_planner_gen(
+                query=query, registry=registry, replan_hint=cp.reason,
+                phase="planner_replan",
             )
             if plan is None or not plan.steps:
                 yield SubgraphEvent(
@@ -482,7 +512,14 @@ class PlanExecuteAgent(SubgraphAgent):
             self._plan = plan
 
         # ─── Validator ──────────────────────────────────────────────────
+        yield SubgraphEvent(kind="llm_start", name="validator",
+                            payload={"phase": "validator",
+                                     "prompt": {"user": "אימות תוכנית החקר"}})
+        _t0_vr = time.monotonic()
         vr = validate_plan(plan, registry, self._llm)
+        yield SubgraphEvent(kind="llm_done", name="validator",
+                            payload={"content": "; ".join(vr.issues) if not vr.ok else "תוכנית תקינה",
+                                     "elapsed_ms": int((time.monotonic() - _t0_vr) * 1000)})
         replan_attempts = 0
         while not vr.ok and replan_attempts < int(getattr(config, "RESEARCH_MAX_REPLANS", 3)):
             yield SubgraphEvent(
@@ -492,10 +529,11 @@ class PlanExecuteAgent(SubgraphAgent):
             )
             self._budget.charge_replan()
             replan_attempts += 1
-            plan = self._call_planner(
+            plan = yield from self._call_planner_gen(
                 query=query,
                 registry=registry,
                 replan_hint="; ".join(vr.issues),
+                phase="planner_replan",
             )
             if plan is None or not plan.steps:
                 yield SubgraphEvent(
@@ -505,7 +543,14 @@ class PlanExecuteAgent(SubgraphAgent):
                 )
                 return
             self._plan = plan
+            yield SubgraphEvent(kind="llm_start", name="validator",
+                                payload={"phase": "validator",
+                                         "prompt": {"user": "אימות תוכנית החקר"}})
+            _t0_vr = time.monotonic()
             vr = validate_plan(plan, registry, self._llm)
+            yield SubgraphEvent(kind="llm_done", name="validator",
+                                payload={"content": "; ".join(vr.issues) if not vr.ok else "תוכנית תקינה",
+                                         "elapsed_ms": int((time.monotonic() - _t0_vr) * 1000)})
 
         if not vr.ok:
             yield SubgraphEvent(
@@ -577,7 +622,14 @@ class PlanExecuteAgent(SubgraphAgent):
                 name="critic_post_started",
                 payload={"plan_version": plan.version},
             )
+            yield SubgraphEvent(kind="llm_start", name="critic_post",
+                                payload={"phase": "critic_post",
+                                         "prompt": {"user": "בדיקת ספיקות הראיות שנאספו"}})
+            _t0_cpost = time.monotonic()
             cpost: CriticResult = critic_post(plan, self._store, self._llm)
+            yield SubgraphEvent(kind="llm_done", name="critic_post",
+                                payload={"content": json.dumps(cpost.to_dict(), ensure_ascii=False),
+                                         "elapsed_ms": int((time.monotonic() - _t0_cpost) * 1000)})
 
             if cpost.verdict != "replan":
                 break
@@ -606,11 +658,12 @@ class PlanExecuteAgent(SubgraphAgent):
                 name="replanning",
                 payload={"reason": cpost.reason, "replan_attempt": post_replans + 1},
             )
-            new_plan = self._call_planner(
+            new_plan = yield from self._call_planner_gen(
                 query=query,
                 registry=registry,
                 replan_hint=cpost.reason,
                 prior_plan=plan,
+                phase="planner_replan",
             )
             if new_plan is None or not new_plan.steps:
                 # Couldn't extend — synthesize what we have.
@@ -635,7 +688,7 @@ class PlanExecuteAgent(SubgraphAgent):
             name="synthesizing",
             payload={"plan_version": plan.version},
         )
-        final_answer = synthesize(query, plan, self._store, self._llm)
+        final_answer = yield from self._synthesize_gen(query, plan, self._store)
 
         footnotes = self._collect_footnotes()
 
@@ -659,23 +712,18 @@ class PlanExecuteAgent(SubgraphAgent):
         if not steps:
             return
 
-        # The worker function: build a Scratchpad, call execute_step,
-        # return the envelope. The DAGExecutor handles dep-waiting + the
-        # deep-dive single-slot lane.
+        steps_by_id: dict[str, Step] = {s.id: s for s in steps}
+
         def _worker(step: Step) -> ToolEnvelope:
             envelope = self._dispatch_step(step, registry)
             return envelope
 
-        # Run the DAG and collect results in completion order.
         with DAGExecutor() as dag:
             for step in steps:
                 dag.submit(step, _worker)
-            # Drain results synchronously; surface step_completed hooks as
-            # SubgraphEvents on the way out.
             for step_id, result in dag.results():
+                step_obj = steps_by_id.get(step_id)
                 if isinstance(result, BaseException):
-                    # Worker raised — translate to an error envelope and
-                    # store it so the post-critic can react.
                     error_env = ToolEnvelope(
                         summary=f"step {step_id} failed: {result!r}",
                         full="",
@@ -684,8 +732,14 @@ class PlanExecuteAgent(SubgraphAgent):
                         error="dag_worker_exception",
                     )
                     entry_id = self._add_evidence(step_id, "internal:error", error_env)
+                    step_summary = str(result)[:120]
                 else:
                     entry_id = self._add_evidence(step_id, _tool_name_from_envelope(result), result)
+                    step_summary = (
+                        result.envelope.summary[:120]
+                        if hasattr(result, "envelope") and result.envelope.summary
+                        else ""
+                    )
 
                 yield SubgraphEvent(
                     kind="hook",
@@ -693,6 +747,9 @@ class PlanExecuteAgent(SubgraphAgent):
                     payload={
                         "step_id":      step_id,
                         "evidence_ids": [entry_id] if entry_id else [],
+                        "step_task":    (step_obj.task[:80] if step_obj else ""),
+                        "step_kind":    (step_obj.task_kind if step_obj else ""),
+                        "summary":      step_summary,
                     },
                 )
 
@@ -799,15 +856,16 @@ class PlanExecuteAgent(SubgraphAgent):
 
     # ── Planner LLM call ───────────────────────────────────────────────
 
-    def _call_planner(
+    def _call_planner_gen(
         self,
         *,
         query: str,
         registry: ToolRegistry,
         replan_hint: str = "",
         prior_plan: Plan | None = None,
-    ) -> Plan | None:
-        """Invoke the planner LLM and parse the resulting JSON into a Plan."""
+        phase: str = "planner",
+    ) -> Generator[SubgraphEvent, Any, "Plan | None"]:
+        """Stream the planner LLM, yielding SubgraphEvents, and return a Plan."""
         prompt = self._render_prompt(
             "planner",
             "planner.md",
@@ -826,20 +884,118 @@ class PlanExecuteAgent(SubgraphAgent):
             },
         )
 
+        yield SubgraphEvent(
+            kind="llm_start", name=phase,
+            payload={"phase": phase, "prompt": {"user": query}},
+        )
+
+        text_parts: list[str] = []
+        t0 = time.monotonic()
         try:
-            raw = self._llm(
+            for ev in self._llm.stream_raw(
                 model=config.PLANNER_MODEL,
                 prompt=prompt,
                 response_format={"type": "json_object"},
-            )
-        except Exception:  # noqa: BLE001 — return None and let caller emit error
+            ):
+                if isinstance(ev, ThinkingEvent):
+                    yield SubgraphEvent(kind="llm_thinking", name=phase,
+                                        payload={"text": ev.text})
+                elif isinstance(ev, TokenEvent):
+                    text_parts.append(ev.text)
+                    yield SubgraphEvent(kind="llm_token", name=phase,
+                                        payload={"text": ev.text})
+                elif isinstance(ev, DoneEvent):
+                    break
+        except Exception as exc:  # noqa: BLE001
+            elapsed = int((time.monotonic() - t0) * 1000)
+            yield SubgraphEvent(kind="llm_done", name=phase,
+                                payload={"content": "", "elapsed_ms": elapsed,
+                                         "error": str(exc)})
             return None
 
-        parsed = _parse_plan_json(raw)
+        content = "".join(text_parts)
+        elapsed = int((time.monotonic() - t0) * 1000)
+        yield SubgraphEvent(kind="llm_done", name=phase,
+                            payload={"content": content[:2000], "elapsed_ms": elapsed})
+
+        parsed = _parse_plan_json(content)
         if not isinstance(parsed, dict):
             return None
         new_version = (prior_plan.version + 1) if prior_plan is not None else 1
         return _make_plan_from_dict(parsed, version=new_version)
+
+    def _synthesize_gen(
+        self,
+        query: str,
+        plan: Plan,
+        store,
+    ) -> Generator[SubgraphEvent, Any, str]:
+        """Stream the synthesizer LLM, yielding SubgraphEvents, and return the answer."""
+        from pathlib import Path as _Path
+        _prompts_dir = _Path(__file__).parent / "prompts"
+        template = (_prompts_dir / "synthesizer.md").read_text(encoding="utf-8")
+
+        goal = (plan.goal if plan and plan.goal else query) or ""
+        plan_json = json.dumps(plan.to_dict() if plan else {}, ensure_ascii=False, indent=2)
+
+        view: list[dict] = []
+        expanded: list[dict] = []
+        if store is not None:
+            for entry in store.iter():
+                env = entry.envelope
+                view.append({
+                    "id": entry.id, "tool_name": entry.tool_name,
+                    "step_id": entry.step_id, "summary": env.summary or "",
+                    "metadata": env.metadata or {}, "provenance": env.provenance or {},
+                    "truncated": bool(env.truncated), "error": env.error,
+                })
+            for entry in store.iter():
+                if entry.envelope.error:
+                    continue
+                ev_entry = store.get(entry.id)
+                full = ev_entry.envelope.full if ev_entry else ""
+                expanded.append({"id": entry.id, "full": full or ""})
+                if len(expanded) >= 5:
+                    break
+
+        prompt = template.format(
+            goal=goal,
+            plan=plan_json,
+            evidence_view=json.dumps(view, ensure_ascii=False, indent=2),
+            expanded_payloads=json.dumps(expanded, ensure_ascii=False, indent=2),
+        )
+
+        phase = "synthesizer"
+        yield SubgraphEvent(
+            kind="llm_start", name=phase,
+            payload={"phase": phase, "prompt": {"user": query}},
+        )
+
+        text_parts: list[str] = []
+        t0 = time.monotonic()
+        try:
+            for ev in self._llm.stream_raw(model=config.SYNTHESIZER_MODEL, prompt=prompt):
+                if isinstance(ev, ThinkingEvent):
+                    yield SubgraphEvent(kind="llm_thinking", name=phase,
+                                        payload={"text": ev.text})
+                elif isinstance(ev, TokenEvent):
+                    text_parts.append(ev.text)
+                    yield SubgraphEvent(kind="llm_token", name=phase,
+                                        payload={"text": ev.text})
+                elif isinstance(ev, DoneEvent):
+                    break
+        except Exception as exc:  # noqa: BLE001
+            elapsed = int((time.monotonic() - t0) * 1000)
+            yield SubgraphEvent(kind="llm_done", name=phase,
+                                payload={"content": "", "elapsed_ms": elapsed,
+                                         "error": str(exc)})
+            return f"שגיאה בסינתזה: {exc}"
+
+        content = "".join(text_parts)
+        elapsed = int((time.monotonic() - t0) * 1000)
+        yield SubgraphEvent(kind="llm_done", name=phase,
+                            payload={"content": content[:500], "elapsed_ms": elapsed})
+        return content
 
     def _summary_view_dict(self) -> list[dict]:
         if self._store is None:

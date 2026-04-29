@@ -414,6 +414,16 @@ details[open] > .sub-summary::before { transform: rotate(90deg); }
 .stage-dot.factual  { background: #765600; }
 .stage-dot.reviewer { background: #b02500; }
 .stage-dot.tool     { background: #5b5c5a; }
+.stage-dot.research { background: #6b3fa0; }
+
+.subgraph-inner-stages {
+  padding: 4px 0 0 12px;
+  border-right: 2px solid #e4e2dc;
+  margin-top: 6px;
+}
+.subgraph-inner-stages .stage-card {
+  margin-bottom: 4px;
+}
 
 .stage-name {
   flex: 1;

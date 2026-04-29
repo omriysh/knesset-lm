@@ -94,10 +94,12 @@ async function startQuery() {
   const statusEl   = appendStatus('');      // appears first (above)
   const stagesEl   = appendStagesCard();    // appears below, collapsed
   _wireStatusToggle(statusEl, stagesEl);
-  let   agentEl    = null;                  // agent response card (created on first token)
-  let   rawAnswer  = '';
-  let   curEvent   = '';
-  let   buf        = '';
+  let   agentEl           = null;
+  let   rawAnswer         = '';
+  let   subgraphContainer = null;
+  let   subgraphPhase     = null;
+  let   curEvent          = '';
+  let   buf               = '';
 
   try {
     const res = await fetch('/api/research/start', {
@@ -124,7 +126,13 @@ async function startQuery() {
         } else if (line.startsWith('data: ')) {
           let data;
           try { data = JSON.parse(line.slice(6)); } catch { continue; }
-          handleEvent(curEvent, data, { stagesEl, statusEl, get agentEl() { return agentEl; }, set agentEl(v) { agentEl = v; }, get rawAnswer() { return rawAnswer; }, set rawAnswer(v) { rawAnswer = v; } });
+          handleEvent(curEvent, data, {
+            stagesEl, statusEl,
+            get agentEl()           { return agentEl; },           set agentEl(v)           { agentEl = v; },
+            get rawAnswer()         { return rawAnswer; },         set rawAnswer(v)         { rawAnswer = v; },
+            get subgraphContainer() { return subgraphContainer; }, set subgraphContainer(v) { subgraphContainer = v; },
+            get subgraphPhase()     { return subgraphPhase; },     set subgraphPhase(v)     { subgraphPhase = v; },
+          });
         }
       }
     }
@@ -163,7 +171,11 @@ function handleEvent(ev, data, refs) {
       break;
 
     case 'node_start':
-      addLiveStageCard(refs.stagesEl, data);
+      if (data.subgraph) {
+        refs.subgraphContainer = addSubgraphWrapperCard(refs.stagesEl, data);
+      } else {
+        addLiveStageCard(refs.stagesEl, data);
+      }
       break;
 
     case 'thinking_token':
@@ -171,9 +183,100 @@ function handleEvent(ev, data, refs) {
       break;
 
     case 'node_result':
-      finaliseLiveCard(refs.stagesEl);
-      addCompletedStageCard(refs.stagesEl, data);
+      if (data.subgraph) {
+        finaliseSubgraphCard(refs.subgraphContainer);
+        refs.subgraphContainer = null;
+        refs.subgraphPhase     = null;
+      } else {
+        finaliseLiveCard(refs.stagesEl);
+        addCompletedStageCard(refs.stagesEl, data);
+      }
       break;
+
+    case 'subgraph_event': {
+      const sg_kind    = data.kind    || '';
+      const sg_name    = data.name    || '';
+      const sg_payload = data.payload || {};
+
+      if (sg_kind === 'llm_start') {
+        refs.subgraphPhase = {
+          label:       _subgraphPhaseLabel(sg_name || sg_payload.phase),
+          stage:       'research',
+          thinking:    '',
+          content:     '',
+          prompt:      sg_payload.prompt || {},
+          tools:       [],
+          toolResults: [],
+        };
+        if (refs.subgraphContainer) {
+          addLiveStageCard(refs.subgraphContainer, {
+            label:  refs.subgraphPhase.label,
+            stage:  refs.subgraphPhase.stage,
+            loop:   0,
+            prompt: refs.subgraphPhase.prompt,
+          });
+        }
+
+      } else if (sg_kind === 'llm_thinking') {
+        if (refs.subgraphPhase) refs.subgraphPhase.thinking += sg_payload.text || '';
+        if (refs.subgraphContainer) appendLiveThinking(refs.subgraphContainer, sg_payload.text || '');
+
+      } else if (sg_kind === 'llm_token') {
+        if (refs.subgraphPhase) refs.subgraphPhase.content += sg_payload.text || '';
+        if (refs.subgraphContainer) appendLiveOutput(refs.subgraphContainer, sg_payload.text || '');
+
+      } else if (sg_kind === 'llm_done') {
+        if (refs.subgraphContainer && refs.subgraphPhase) {
+          const ph = refs.subgraphPhase;
+          finaliseLiveCard(refs.subgraphContainer);
+          addCompletedStageCard(refs.subgraphContainer, {
+            label:        ph.label,
+            stage:        ph.stage,
+            loop:         0,
+            content:      sg_payload.content || ph.content || '',
+            thinking:     ph.thinking,
+            tools:        ph.tools,
+            tool_results: ph.toolResults,
+            prompt:       ph.prompt,
+            elapsed_ms:   sg_payload.elapsed_ms || 0,
+            llm_ms:       sg_payload.elapsed_ms || 0,
+          });
+        }
+        refs.subgraphPhase = null;
+
+      } else if (sg_kind === 'progress') {
+        const _PROGRESS_MSGS = {
+          planning_started:         'מתכנן שלבי חקר...',
+          executing:                'מבצע שלבי חקר...',
+          synthesizing:             'מסכם ממצאים...',
+          replanning:               'מתכנן מחדש...',
+          critic_pre_revise:        'מתקן תוכנית...',
+          validator_revise:         'מאמת תוכנית...',
+          critic_post_started:      'בודק תוצאות...',
+          critic_post_replan_capped:'מסכם למרות תוצאות חלקיות...',
+        };
+        const msg = _PROGRESS_MSGS[sg_name];
+        if (msg) setStatusMsg(refs.statusEl, msg);
+
+      } else if (sg_kind === 'hook' && sg_name === 'step_completed') {
+        const task = sg_payload.step_task ? `: ${sg_payload.step_task.slice(0, 40)}` : '';
+        setStatusMsg(refs.statusEl, `שלב הושלם${task}`);
+
+      } else if (sg_kind === 'done') {
+        if (refs.subgraphContainer) finaliseSubgraphCard(refs.subgraphContainer);
+        refs.subgraphContainer = null;
+        refs.subgraphPhase     = null;
+
+      } else if (sg_kind === 'error') {
+        if (refs.subgraphContainer) {
+          finaliseLiveCard(refs.subgraphContainer);
+          finaliseSubgraphCard(refs.subgraphContainer);
+        }
+        refs.subgraphContainer = null;
+        refs.subgraphPhase     = null;
+      }
+      break;
+    }
 
     case 'token': {
       refs.rawAnswer += data.text || '';
@@ -255,13 +358,15 @@ async function submitResponse(outputVar, value) {
   running = true;
   submitBtn.disabled = true;
 
-  const statusEl  = appendStatus('ממשיך...');
-  const stagesEl  = appendStagesCard();
+  const statusEl          = appendStatus('ממשיך...');
+  const stagesEl          = appendStagesCard();
   _wireStatusToggle(statusEl, stagesEl);
-  let   agentEl   = null;
-  let   rawAnswer = '';
-  let   curEvent  = '';
-  let   buf       = '';
+  let   agentEl           = null;
+  let   rawAnswer         = '';
+  let   subgraphContainer = null;
+  let   subgraphPhase     = null;
+  let   curEvent          = '';
+  let   buf               = '';
 
   try {
     const res = await fetch(`/api/research/${sessionId}/respond`, {
@@ -288,7 +393,13 @@ async function submitResponse(outputVar, value) {
         } else if (line.startsWith('data: ')) {
           let data;
           try { data = JSON.parse(line.slice(6)); } catch { continue; }
-          handleEvent(curEvent, data, { stagesEl, statusEl, get agentEl() { return agentEl; }, set agentEl(v) { agentEl = v; }, get rawAnswer() { return rawAnswer; }, set rawAnswer(v) { rawAnswer = v; } });
+          handleEvent(curEvent, data, {
+            stagesEl, statusEl,
+            get agentEl()           { return agentEl; },           set agentEl(v)           { agentEl = v; },
+            get rawAnswer()         { return rawAnswer; },         set rawAnswer(v)         { rawAnswer = v; },
+            get subgraphContainer() { return subgraphContainer; }, set subgraphContainer(v) { subgraphContainer = v; },
+            get subgraphPhase()     { return subgraphPhase; },     set subgraphPhase(v)     { subgraphPhase = v; },
+          });
         }
       }
     }
@@ -505,6 +616,81 @@ function addCompletedStageCard(stagesEl, data) {
 
   stagesEl.appendChild(card);
   scrollToBottom();
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   SUBGRAPH (RESEARCH AGENT) RENDERING HELPERS
+═══════════════════════════════════════════════════════════════════ */
+
+function _subgraphPhaseLabel(phase) {
+  const labels = {
+    'planner':          'מתכנן שלבי חקר',
+    'planner_replan':   'מתכנן מחדש',
+    'critic_pre':       'ביקורת תוכנית',
+    'validator':        'אימות תוכנית',
+    'critic_post':      'ביקורת תוצאות',
+    'synthesizer':      'מסכם ממצאים',
+  };
+  if (phase && phase.startsWith('executor/')) {
+    return `ביצוע: ${phase.slice(9, 49)}`;
+  }
+  return labels[phase] || phase || 'שלב';
+}
+
+function addSubgraphWrapperCard(stagesEl, nodeStart) {
+  finaliseLiveCard(stagesEl);
+  const label    = nodeStart.label || 'מחקר מעמיק';
+  const loop     = nodeStart.loop  || 0;
+  const loopHtml = loop > 0 ? `<span class="stage-loop-badge">סבב ${loop + 1}</span>` : '';
+
+  const card = document.createElement('div');
+  card.className = 'stage-card subgraph-card live-stage-card';
+  card.innerHTML =
+    `<div class="stage-header open" onclick="toggleStageCard(this)">` +
+      `<span class="stage-arrow">▶</span>` +
+      `<span class="stage-dot research"></span>` +
+      `<span class="stage-name">${esc(label)}</span>` +
+      `<span class="stage-meta"><span class="live-thinking-dot"></span>${loopHtml}</span>` +
+    `</div>` +
+    `<div class="stage-body visible">` +
+      `<div class="subgraph-inner-stages"></div>` +
+    `</div>`;
+
+  stagesEl.appendChild(card);
+  scrollToBottom();
+  return card.querySelector('.subgraph-inner-stages');
+}
+
+function finaliseSubgraphCard(subgraphContainer) {
+  if (!subgraphContainer) return;
+  const card = subgraphContainer.closest('.subgraph-card');
+  if (!card) return;
+  card.classList.remove('live-stage-card');
+  const dot = card.querySelector('.live-thinking-dot');
+  if (dot) dot.remove();
+  const header = card.querySelector('.stage-header');
+  if (header) header.classList.remove('open');
+}
+
+function appendLiveOutput(stagesEl, text) {
+  const live = stagesEl && stagesEl.querySelector('.live-stage-card');
+  if (!live) return;
+  let pre = live.querySelector('.live-output-text');
+  if (!pre) {
+    const body = live.querySelector('.stage-body');
+    if (!body) return;
+    const det = document.createElement('details');
+    det.className = 'sub-details open';
+    det.innerHTML =
+      `<summary class="sub-summary">פלט…</summary>` +
+      `<div class="sub-details-body"><pre class="prompt-text live-output-text"></pre></div>`;
+    body.appendChild(det);
+    pre = live.querySelector('.live-output-text');
+  }
+  if (pre) {
+    pre.textContent += text;
+    pre.scrollTop = pre.scrollHeight;
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════
