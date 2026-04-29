@@ -236,7 +236,7 @@ class _LLMBridge:
 
         Routing rules (per design §10 model registry):
           * "local" → llama-server (used by INTENT_MODEL).
-          * "gemma-3-*" / "gemini-*" → GoogleBackend (cloud).
+          * "gemma-4-*" / "gemini-*" → GoogleBackend (cloud).
           * anything else → GoogleBackend by default.
 
         On `model == "local"` we skip the cloud entirely. Otherwise we
@@ -886,7 +886,7 @@ class PlanExecuteAgent(SubgraphAgent):
 
         yield SubgraphEvent(
             kind="llm_start", name=phase,
-            payload={"phase": phase, "prompt": {"user": query}},
+            payload={"phase": phase, "prompt": {"user": prompt[:4000]}},
         )
 
         text_parts: list[str] = []
@@ -968,7 +968,7 @@ class PlanExecuteAgent(SubgraphAgent):
         phase = "synthesizer"
         yield SubgraphEvent(
             kind="llm_start", name=phase,
-            payload={"phase": phase, "prompt": {"user": query}},
+            payload={"phase": phase, "prompt": {"user": prompt[:4000]}},
         )
 
         text_parts: list[str] = []

@@ -60,25 +60,25 @@ def main() -> None:
     args = ap.parse_args()
 
     # ── Translate args → environment variables ────────────────────────────────
-    env = os.environ.copy()
-
+    # uvicorn.run() runs in-process, so app.py reads os.environ directly.
+    # Must mutate os.environ before the call — a copied dict has no effect.
     if args.cuda:
-        env["KNESSET_CUDA"] = "1"
+        os.environ["KNESSET_CUDA"] = "1"
     if args.quantize:
-        env["KNESSET_QUANTIZE"] = args.quantize
+        os.environ["KNESSET_QUANTIZE"] = args.quantize
     if args.embed_model:
-        env["KNESSET_EMBED_MODEL"] = args.embed_model
+        os.environ["KNESSET_EMBED_MODEL"] = args.embed_model
     if args.db:
-        env["KNESSET_CHROMA_DIR"] = str(args.db.resolve())
+        os.environ["KNESSET_CHROMA_DIR"] = str(args.db.resolve())
     if args.machine:
-        env["KNESSET_MACHINE_PATH"] = str(args.machine.resolve())
+        os.environ["KNESSET_MACHINE_PATH"] = str(args.machine.resolve())
     if args.llama_server:
-        env["KNESSET_LLAMA_SERVER"] = args.llama_server
+        os.environ["KNESSET_LLAMA_SERVER"] = args.llama_server
     if args.top_k is not None:
-        env["KNESSET_TOP_K"] = str(args.top_k)
+        os.environ["KNESSET_TOP_K"] = str(args.top_k)
     if args.top_n is not None:
-        env["KNESSET_TOP_N"] = str(args.top_n)
-    env["KNESSET_PORT"] = str(args.port)
+        os.environ["KNESSET_TOP_N"] = str(args.top_n)
+    os.environ["KNESSET_PORT"] = str(args.port)
 
     # ── Launch uvicorn ────────────────────────────────────────────────────────
     try:

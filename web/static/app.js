@@ -210,10 +210,11 @@ function handleEvent(ev, data, refs) {
         };
         if (refs.subgraphContainer) {
           addLiveStageCard(refs.subgraphContainer, {
-            label:  refs.subgraphPhase.label,
-            stage:  refs.subgraphPhase.stage,
-            loop:   0,
-            prompt: refs.subgraphPhase.prompt,
+            label:      refs.subgraphPhase.label,
+            stage:      refs.subgraphPhase.stage,
+            loop:       0,
+            prompt:     refs.subgraphPhase.prompt,
+            openPrompt: true,
           });
         }
 
@@ -522,9 +523,10 @@ function scrollToBottom() {
 function addLiveStageCard(stagesEl, nodeStart) {
   finaliseLiveCard(stagesEl); // clear any stale live card
 
-  const label    = nodeStart.label || 'שלב';
-  const stage    = nodeStart.stage || 'unknown';
-  const loop     = nodeStart.loop  || 0;
+  const label      = nodeStart.label      || 'שלב';
+  const stage      = nodeStart.stage      || 'unknown';
+  const loop       = nodeStart.loop       || 0;
+  const openPrompt = nodeStart.openPrompt || false;
   const loopHtml = loop > 0 ? `<span class="stage-loop-badge">סבב ${loop + 1}</span>` : '';
 
   const card = document.createElement('div');
@@ -537,7 +539,7 @@ function addLiveStageCard(stagesEl, nodeStart) {
       `<span class="stage-meta"><span class="live-thinking-dot"></span>${loopHtml}</span>` +
     `</div>` +
     `<div class="stage-body visible">` +
-      renderPromptHtml(nodeStart.prompt || {}) +
+      renderPromptHtml(nodeStart.prompt || {}, openPrompt) +
       `<details class="sub-details open">` +
         `<summary class="sub-summary thinking-summary">תהליך עבודה…</summary>` +
         `<div class="sub-details-body"><pre class="prompt-text thinking-text"></pre></div>` +
@@ -832,14 +834,15 @@ function toggleStageCard(header) {
   header.nextElementSibling.classList.toggle('visible');
 }
 
-function renderPromptHtml(p) {
+function renderPromptHtml(p, open = false) {
   const sys  = p.system || '';
   const user = p.user   || '';
+  const openAttr = open ? ' open' : '';
   return (
-    `<details class="sub-details">` +
+    `<details class="sub-details"${openAttr}>` +
     `<summary class="sub-summary">פרומפט</summary>` +
     `<div class="sub-details-body">` +
-    `<div class="prompt-block"><div class="prompt-role">מערכת</div><pre class="prompt-text">${esc(sys)}</pre></div>` +
+    (sys ? `<div class="prompt-block"><div class="prompt-role">מערכת</div><pre class="prompt-text">${esc(sys)}</pre></div>` : '') +
     `<div class="prompt-block"><div class="prompt-role">משתמש</div><pre class="prompt-text">${esc(user)}</pre></div>` +
     `</div></details>`
   );

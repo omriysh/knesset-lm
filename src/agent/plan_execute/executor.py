@@ -80,7 +80,7 @@ RECORD_EVIDENCE_SCHEMA: dict = {
                 "decision":     {"type": "string",
                                  "enum": ["produced", "skip", "abort_step"]},
                 "summary":      {"type": "string"},
-                "ref_evidence": {"type": ["string", "null"]},
+                "ref_evidence": {"type": "string"},
             },
             "required": ["decision", "summary"],
         },
@@ -219,11 +219,10 @@ def _charge(budget_tracker: Any, kind: str, amount: int = 1) -> bool:
     if method is None:
         return True
     try:
-        if kind == "tokens":
-            return bool(method(amount))
-        return bool(method())
-    except Exception:  # noqa: BLE001 — never let budget bookkeeping crash a step
-        return True
+        result = method(amount) if kind == "tokens" else method()
+        return result is None or bool(result)
+    except Exception:
+        return False
 
 
 def _abort_envelope(reason: str, tool_name: str = "", error_kind: str = "abort_step") -> ToolEnvelope:
@@ -275,6 +274,7 @@ def execute_step(
         A :class:`ToolEnvelope`. ``error`` is set when the step aborted
         (cap hit, no result, planner_only violation, etc.).
     """
+    # import pdb; pdb.set_trace()
     if step is None:
         return _abort_envelope("execute_step called with None step")
 
@@ -425,6 +425,7 @@ def execute_step(
         + "Tool result envelope (summary view):\n"
         + json.dumps({
             "tool_name":  tool_name,
+            "full":       envelope.full or "",
             "summary":    envelope.summary or "",
             "metadata":   envelope.metadata or {},
             "provenance": envelope.provenance or {},

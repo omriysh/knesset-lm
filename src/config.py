@@ -105,11 +105,11 @@ def summaries_dir(knesset_num: int = 25) -> Path:
 # Models (cloud)
 GOOGLE_API_KEY_ENV   = "GOOGLE_API_KEY"
 PLANNER_MODEL        = "gemini-2.5-flash-lite"
-CRITIC_PRE_MODEL     = "gemma-3-27b-it"
+CRITIC_PRE_MODEL     = "gemma-4-31b-it"
 CRITIC_POST_MODEL    = "gemini-2.5-flash-lite"
 SYNTHESIZER_MODEL    = "gemini-2.5-flash-lite"
-EXECUTOR_MODEL_LIGHT = "gemma-3-12b-it"
-EXECUTOR_MODEL_HEAVY = "gemma-3-27b-it"   # gemma, not gemini — see §1.2
+EXECUTOR_MODEL_LIGHT = "gemma-4-26b-a4b-it"
+EXECUTOR_MODEL_HEAVY = "gemma-4-31b-it"   # gemma, not gemini — see §1.2
 INTENT_MODEL         = "local"            # always llama-server
 
 # Fallback
