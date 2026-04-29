@@ -262,6 +262,19 @@ function handleEvent(ev, data, refs) {
       } else if (sg_kind === 'hook' && sg_name === 'step_completed') {
         const task = sg_payload.step_task ? `: ${sg_payload.step_task.slice(0, 40)}` : '';
         setStatusMsg(refs.statusEl, `שלב הושלם${task}`);
+        if (refs.subgraphContainer) {
+          const stepTask  = sg_payload.step_task || 'שלב';
+          const toolName  = sg_payload.tool_name || '';
+          const hasError  = !!(sg_payload.error && sg_payload.error !== 'skip');
+          const fullResult = sg_payload.full || '';
+          addCompletedStageCard(refs.subgraphContainer, {
+            label:        `ביצוע: ${stepTask.slice(0, 60)}`,
+            stage:        hasError ? 'reviewer' : 'tool',
+            content:      sg_payload.summary || '',
+            tools:        toolName ? [toolName] : [],
+            tool_results: fullResult ? [{ name: toolName || 'תוצאה מלאה', result: fullResult }] : [],
+          });
+        }
 
       } else if (sg_kind === 'done') {
         if (refs.subgraphContainer) finaliseSubgraphCard(refs.subgraphContainer);
@@ -867,11 +880,12 @@ function renderToolResultHtml(tr) {
   const timeStr   = elapsedMs != null
     ? ` <span class="tool-time">${(elapsedMs / 1000).toFixed(1)}s</span>`
     : '';
+  const hasArgs = Object.keys(args).length > 0;
   return (
     `<details class="sub-details">` +
     `<summary class="sub-summary"><span class="tool-summary-label">${esc(name)}</span>${timeStr}</summary>` +
     `<div class="sub-details-body">` +
-    `<div class="prompt-block"><div class="prompt-role">ארגומנטים</div><pre class="prompt-text">${esc(argsStr)}</pre></div>` +
+    (hasArgs ? `<div class="prompt-block"><div class="prompt-role">ארגומנטים</div><pre class="prompt-text">${esc(argsStr)}</pre></div>` : '') +
     `<div class="prompt-block"><div class="prompt-role">תוצאה</div><pre class="prompt-text">${esc(result)}</pre></div>` +
     `</div></details>`
   );

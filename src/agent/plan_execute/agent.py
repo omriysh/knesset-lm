@@ -731,15 +731,17 @@ class PlanExecuteAgent(SubgraphAgent):
                         provenance={"step_id": step_id},
                         error="dag_worker_exception",
                     )
-                    entry_id = self._add_evidence(step_id, "internal:error", error_env)
-                    step_summary = str(result)[:120]
+                    entry_id  = self._add_evidence(step_id, "internal:error", error_env)
+                    tool_name = ""
+                    step_summary = str(result)
+                    step_full    = ""
+                    step_error   = "dag_worker_exception"
                 else:
-                    entry_id = self._add_evidence(step_id, _tool_name_from_envelope(result), result)
-                    step_summary = (
-                        result.envelope.summary[:120]
-                        if hasattr(result, "envelope") and result.envelope.summary
-                        else ""
-                    )
+                    tool_name = _tool_name_from_envelope(result)
+                    entry_id  = self._add_evidence(step_id, tool_name, result)
+                    step_summary = result.summary or ""
+                    step_full    = (result.full or "")[:8000]
+                    step_error   = result.error
 
                 yield SubgraphEvent(
                     kind="hook",
@@ -747,9 +749,12 @@ class PlanExecuteAgent(SubgraphAgent):
                     payload={
                         "step_id":      step_id,
                         "evidence_ids": [entry_id] if entry_id else [],
-                        "step_task":    (step_obj.task[:80] if step_obj else ""),
+                        "step_task":    (step_obj.task if step_obj else ""),
                         "step_kind":    (step_obj.task_kind if step_obj else ""),
                         "summary":      step_summary,
+                        "full":         step_full,
+                        "tool_name":    tool_name,
+                        "error":        step_error,
                     },
                 )
 
