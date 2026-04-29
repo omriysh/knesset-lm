@@ -23,7 +23,7 @@ def _make_step(**kwargs) -> Step:
         allowed_tools=("find_mk",),
         args_hint={"query": "נתניהו"},
         deps=(),
-        replan_after=False,
+        abandon_on_failure=False,
         expected_evidence="MK record for Netanyahu",
         cost_hint="cheap",
     )
@@ -59,7 +59,7 @@ class TestStepRoundtrip:
             allowed_tools=("deep_dive_meeting",),
             args_hint={"meeting_id": "42", "focus_query": "welfare"},
             deps=("s1", "s2"),
-            replan_after=True,
+            abandon_on_failure=True,
             expected_evidence="Key speeches about welfare",
             cost_hint="expensive",
         )
@@ -71,7 +71,7 @@ class TestStepRoundtrip:
         d = s.to_dict()
         assert isinstance(d["allowed_tools"], list)
         assert isinstance(d["deps"], list)
-        assert isinstance(d["replan_after"], bool)
+        assert isinstance(d["abandon_on_failure"], bool)
 
     def test_step_from_dict_converts_tuples(self):
         d = {

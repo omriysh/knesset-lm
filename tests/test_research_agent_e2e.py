@@ -43,7 +43,7 @@ _VALID_PLAN_JSON = json.dumps({
             "allowed_tools": ["find_mk"],
             "args_hint": {"query": "דיכטר"},
             "deps": [],
-            "replan_after": False,
+            "abandon_on_failure": False,
             "expected_evidence": "MK profile for Dichter",
             "cost_hint": "cheap",
         }

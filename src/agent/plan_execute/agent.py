@@ -46,11 +46,7 @@ from agent.plan_execute.executor import execute_step
 from agent.plan_execute.plan import PLAN_JSON_SCHEMA, Plan, Step
 from agent.plan_execute.scratchpad import Scratchpad
 from agent.plan_execute.synthesizer import synthesize as _synthesize_sync  # kept for external callers
-from agent.plan_execute.tools import (
-    EXPAND_TOOL_SCHEMA,
-    list_tools_for_executor,
-    list_tools_for_planner,
-)
+from agent.plan_execute.tools import list_tools_for_planner
 from agent.plan_execute.validator import ValidationResult, validate_plan
 from agent.subgraph.base import SubgraphAgent, SubgraphEvent
 from agent.subgraph.evidence import (
@@ -708,15 +704,18 @@ class PlanExecuteAgent(SubgraphAgent):
     ) -> Generator[SubgraphEvent, Any, None]:
         """Run *steps* through the DAGExecutor, push envelopes into store,
         emit step_completed hook per step.
+
+        If a step with ``abandon_on_failure=True`` fails, remaining queued
+        steps are cancelled and a ``plan_abandoned`` progress event is emitted.
         """
         if not steps:
             return
 
         steps_by_id: dict[str, Step] = {s.id: s for s in steps}
+        abandon_triggered = False
 
         def _worker(step: Step) -> ToolEnvelope:
-            envelope = self._dispatch_step(step, registry)
-            return envelope
+            return self._dispatch_step(step, registry)
 
         with DAGExecutor() as dag:
             for step in steps:
@@ -724,24 +723,43 @@ class PlanExecuteAgent(SubgraphAgent):
             for step_id, result in dag.results():
                 step_obj = steps_by_id.get(step_id)
                 if isinstance(result, BaseException):
+                    reason = str(result)
+                    error_kind = "abandoned" if "cancelled" in reason.lower() else "dag_worker_exception"
                     error_env = ToolEnvelope(
-                        summary=f"step {step_id} failed: {result!r}",
+                        summary=f"step {step_id} failed: {reason[:120]}",
                         full="",
                         metadata={"kind": "error", "source": "dag_executor", "count": 0},
                         provenance={"step_id": step_id},
-                        error="dag_worker_exception",
+                        error=error_kind,
                     )
-                    entry_id  = self._add_evidence(step_id, "internal:error", error_env)
-                    tool_name = ""
-                    step_summary = str(result)
+                    entry_id     = self._add_evidence(step_id, "internal:error", error_env)
+                    tool_name    = ""
+                    step_summary = reason[:200]
                     step_full    = ""
-                    step_error   = "dag_worker_exception"
+                    step_error   = error_kind
+                    if (
+                        not abandon_triggered
+                        and step_obj is not None
+                        and step_obj.abandon_on_failure
+                        and error_kind != "abandoned"
+                    ):
+                        abandon_triggered = True
+                        dag.cancel_all()
                 else:
-                    tool_name = _tool_name_from_envelope(result)
-                    entry_id  = self._add_evidence(step_id, tool_name, result)
+                    tool_name    = _tool_name_from_envelope(result)
+                    entry_id     = self._add_evidence(step_id, tool_name, result)
                     step_summary = result.summary or ""
                     step_full    = (result.full or "")[:8000]
                     step_error   = result.error
+                    if (
+                        not abandon_triggered
+                        and step_obj is not None
+                        and step_obj.abandon_on_failure
+                        and step_error
+                        and step_error not in ("skip",)
+                    ):
+                        abandon_triggered = True
+                        dag.cancel_all()
 
                 yield SubgraphEvent(
                     kind="hook",
@@ -758,61 +776,22 @@ class PlanExecuteAgent(SubgraphAgent):
                     },
                 )
 
-    def _dispatch_step(self, step: Step, registry: ToolRegistry) -> ToolEnvelope:
-        """Run one step through ``execute_step`` with the right wiring.
+        if abandon_triggered:
+            yield SubgraphEvent(
+                kind="progress",
+                name="plan_abandoned",
+                payload={"reason": "step with abandon_on_failure=True failed"},
+            )
 
-        The ``expand`` pseudo-tool branch is intercepted here: when the
-        executor LLM picks ``expand(evidence_id=...)``, we read the full
-        payload from the EvidenceStore and surface it as a fresh envelope
-        whose ``full`` carries the rehydrated payload, so the executor's
-        second turn can summarise it.
-        """
-        envelope = execute_step(
+    def _dispatch_step(self, step: Step, registry: ToolRegistry) -> ToolEnvelope:
+        """Run one step through ``execute_step`` with the right wiring."""
+        return execute_step(
             step=step,
             registry=registry,
             store=self._store,
             llm_call=self._llm,
             budget_tracker=self._budget,
         )
-
-        # If the executor invoked `expand`, the envelope's metadata says so.
-        # Phase 5 contract: the agent itself dispatches expand by reading
-        # from the store and substituting the full payload.
-        if (
-            isinstance(envelope.metadata, dict)
-            and envelope.metadata.get("kind") == "expand"
-        ):
-            ev_id = envelope.metadata.get("evidence_id") or envelope.provenance.get("evidence_id")
-            if isinstance(ev_id, str) and self._store is not None:
-                rehydrated = self._dispatch_expand(ev_id)
-                # Replace the envelope's body with the rehydrated payload;
-                # keep the executor LLM's summary so the evidence entry
-                # stays meaningful.
-                envelope = ToolEnvelope(
-                    summary=envelope.summary,
-                    full=rehydrated,
-                    metadata={
-                        "kind":       "expand",
-                        "source":     "evidence_store",
-                        "evidence_id": ev_id,
-                    },
-                    provenance={"evidence_id": ev_id, "step_id": step.id},
-                )
-        return envelope
-
-    def _dispatch_expand(self, evidence_id: str) -> str:
-        """Implementation of the ``expand`` pseudo-tool dispatch.
-
-        Reads the entry from the EvidenceStore (transparently rehydrating
-        spilled payloads from disk) and returns the ``full`` field as a
-        string. Returns an empty string when the entry is missing.
-        """
-        if self._store is None:
-            return ""
-        entry = self._store.get(evidence_id)
-        if entry is None:
-            return ""
-        return entry.envelope.full or ""
 
     # ── Evidence helpers ────────────────────────────────────────────────
 
@@ -891,7 +870,7 @@ class PlanExecuteAgent(SubgraphAgent):
 
         yield SubgraphEvent(
             kind="llm_start", name=phase,
-            payload={"phase": phase, "prompt": {"user": prompt[:4000]}},
+            payload={"phase": phase, "prompt": {"user": prompt}},
         )
 
         text_parts: list[str] = []
@@ -973,7 +952,7 @@ class PlanExecuteAgent(SubgraphAgent):
         phase = "synthesizer"
         yield SubgraphEvent(
             kind="llm_start", name=phase,
-            payload={"phase": phase, "prompt": {"user": prompt[:4000]}},
+            payload={"phase": phase, "prompt": {"user": prompt}},
         )
 
         text_parts: list[str] = []

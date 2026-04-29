@@ -10,15 +10,16 @@ Your job:
 Rules:
 - Prefer broad → narrow. Start with discovery / search steps to obtain IDs,
   then fetch / deep-dive.
-- DO NOT plan more than {max_steps_v1} steps in version 1 of a plan. Use
-  `replan_after` to defer further planning to after evidence is in hand.
+- DO NOT plan more than {max_steps_v1} steps in version 1 of a plan.
 - If two steps are independent, list them with `deps: []` and they will run
   in parallel.
 - `deep_dive_meeting` is YOUR tool to assign, not the executor's. Use it
   sparingly (no more than {max_deep_dives} calls per plan) for the most
   evidence-dense items.
-- Set `replan_after: true` on a step if you genuinely cannot plan past it
-  without seeing its result.
+- Set `abandon_on_failure: true` on a step whose failure should abort the
+  entire current plan and trigger a replan. Use this for critical fetches
+  where downstream steps are useless without the result (e.g. resolving an
+  MK ID that every other step depends on).
 - Set every step's `cost_hint` honestly (`cheap` | `medium` | `expensive`).
   A Python budget estimator aggregates these; do NOT emit a
   `cost_estimate_seconds` field yourself.

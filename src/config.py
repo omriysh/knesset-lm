@@ -104,7 +104,7 @@ def summaries_dir(knesset_num: int = 25) -> Path:
 
 # Models (cloud)
 GOOGLE_API_KEY_ENV   = "GOOGLE_API_KEY"
-PLANNER_MODEL        = "gemini-2.5-flash-lite"
+PLANNER_MODEL        = "gemini-3.1-flash-lite-preview"
 CRITIC_PRE_MODEL     = "gemma-4-31b-it"
 CRITIC_POST_MODEL    = "gemini-2.5-flash-lite"
 SYNTHESIZER_MODEL    = "gemini-2.5-flash-lite"
@@ -121,7 +121,8 @@ RESEARCH_MAX_TOOL_CALLS         = 50
 RESEARCH_MAX_REPLANS            = 3
 RESEARCH_MAX_PLAN_STEPS_V1      = 8
 RESEARCH_MAX_DEEP_DIVES_PER_PLAN = 3       # validator caps plan deep-dives
-DEEP_DIVE_CALLS_PER_STEP        = 2        # tool-call cap inside a deep-dive step
+DEEP_DIVE_CALLS_PER_STEP        = 2        # kept for backward compat
+MAX_TOOL_CALLS_PER_STEP         = 20       # max tool calls per executor step
 EVIDENCE_MAX_ENTRIES            = 200
 EVIDENCE_MAX_BYTES_PER_STEP     = 500 * 1024
 EVIDENCE_MAX_BYTES_TOTAL        = 8 * 1024 * 1024

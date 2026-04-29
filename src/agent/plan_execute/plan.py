@@ -43,7 +43,7 @@ class Step:
     allowed_tools: tuple[str, ...] = ()           # whitelist; executor enforces
     args_hint: dict | None = None                 # optional pre-fill for executor
     deps: tuple[str, ...] = ()                    # ids of prerequisite steps
-    replan_after: bool = False                    # planner-marked checkpoint
+    abandon_on_failure: bool = False               # abort plan if this step fails
     expected_evidence: str | None = None          # post-critic input
     cost_hint: str = "cheap"                      # "cheap" | "medium" | "expensive"
 
@@ -55,7 +55,7 @@ class Step:
             "allowed_tools": list(self.allowed_tools),
             "args_hint": dict(self.args_hint) if self.args_hint is not None else None,
             "deps": list(self.deps),
-            "replan_after": bool(self.replan_after),
+            "abandon_on_failure": bool(self.abandon_on_failure),
             "expected_evidence": self.expected_evidence,
             "cost_hint": self.cost_hint,
         }
@@ -70,7 +70,7 @@ class Step:
             allowed_tools=tuple(d.get("allowed_tools") or ()),
             args_hint=dict(args_hint) if args_hint is not None else None,
             deps=tuple(d.get("deps") or ()),
-            replan_after=bool(d.get("replan_after", False)),
+            abandon_on_failure=bool(d.get("abandon_on_failure", d.get("replan_after", False))),
             expected_evidence=d.get("expected_evidence"),
             cost_hint=d.get("cost_hint", "cheap"),
         )
@@ -198,9 +198,10 @@ PLAN_JSON_SCHEMA: dict = {
                         "items": {"type": "string"},
                         "description": "IDs of prerequisite steps.",
                     },
-                    "replan_after": {
+                    "abandon_on_failure": {
                         "type": "boolean",
                         "default": False,
+                        "description": "If true and this step fails, abort the current plan and replan.",
                     },
                     "expected_evidence": {
                         "type": ["string", "null"],
