@@ -32,13 +32,11 @@ from __future__ import annotations
 import json
 import os
 import re
-import time
 import traceback
 from pathlib import Path
 from typing import Any, Callable, Generator
 
 import config
-from agent.llm.base import DoneEvent, ThinkingEvent, TokenEvent, ToolCallsEvent
 from agent.plan_execute.budget import BudgetExceeded, BudgetTracker, estimate_plan_seconds
 from agent.plan_execute.concurrency import DAGExecutor
 from agent.plan_execute.critics import CriticResult, critic_post, critic_pre
@@ -55,6 +53,7 @@ from agent.subgraph.evidence import (
     EvidenceStore,
     ToolEnvelope,
 )
+from agent.subgraph.llm_bridge import LLMBridge
 from utils.tools import ToolRegistry
 
 
@@ -71,188 +70,7 @@ def _load_generic_prompt(name: str) -> str:
     return (_GENERIC_PROMPTS_DIR / name).read_text(encoding="utf-8")
 
 
-# ---------------------------------------------------------------------------
-# LLM adapter — turn an LLMBackend.stream() into the synchronous llm_call
-# shape the validator/critics/executor/synthesizer expect.
-# ---------------------------------------------------------------------------
-
-
-def _drain_stream(stream) -> tuple[str, list[dict]]:
-    """Consume an LLMBackend.stream() generator and return (text, tool_calls).
-
-    Tool calls are returned in OpenAI-style shape:
-        {"id": str, "type": "function",
-         "function": {"name": str, "arguments": "<json string>"}}
-    """
-    text_parts: list[str] = []
-    tool_calls: list[dict] = []
-    for ev in stream:
-        if isinstance(ev, TokenEvent):
-            text_parts.append(ev.text)
-        elif isinstance(ev, ToolCallsEvent):
-            tool_calls = list(ev.calls or [])
-        elif isinstance(ev, DoneEvent):
-            break
-        # ThinkingEvent: ignored for non-streaming consumers.
-    return ("".join(text_parts), tool_calls)
-
-
-def _normalize_tool_calls_for_executor(tcs: list[dict]) -> list[dict]:
-    """Pre-parse OpenAI-style stringified arguments for executor.parse paths.
-
-    ``executor._normalise_tool_call`` already handles the same shape; this
-    helper is a no-op pass-through for now and exists so future LLM tweaks
-    can land in one place.
-    """
-    return tcs
-
-
-class _LLMBridge:
-    """Wraps an LLMBackend factory into the plain ``llm_call`` callable that
-    Phase 4 sub-modules already speak.
-
-    Why a class rather than a closure: each model name maps to its own
-    backend instance (Gemini-side caches its client; local-side uses the
-    same llama-server URL). We lazily build the right backend per model and
-    hold it for re-use within one agent run.
-
-    Construction does NOT require any network or API key — the underlying
-    backend constructors only fail when the user actually attempts a call.
-    """
-
-    def __init__(self, fallback_to_local: bool = True):
-        self._fallback_to_local = bool(fallback_to_local)
-        self._cache: dict[tuple[str, str], Any] = {}
-
-    # -- public --------------------------------------------------------------
-
-    def __call__(
-        self,
-        *,
-        model: str,
-        prompt: str | list[dict] | None = None,
-        messages: list[dict] | None = None,
-        tools: list[dict] | None = None,
-        response_format: dict | None = None,
-        temperature: float | None = None,
-        max_tokens: int | None = None,
-    ) -> dict:
-        """Call ``model`` with ``prompt`` (or messages) and return either a
-        plain text string (for response_format=None paths) or a dict with
-        ``tool_calls`` and ``content`` (for tool-using paths).
-
-        The signature is a superset of every Phase 4 sub-module's expected
-        ``llm_call``: synthesizer passes only ``model`` + ``prompt``;
-        critics pass ``response_format``; executor passes ``tools``.
-        """
-        backend = self._backend_for(model)
-        msgs = self._build_messages(prompt, messages, response_format)
-
-        kwargs: dict[str, Any] = {"messages": msgs}
-        if tools:
-            kwargs["tools"] = tools
-        if temperature is not None:
-            kwargs["temperature"] = temperature
-        if max_tokens is not None:
-            kwargs["max_tokens"] = max_tokens
-
-        try:
-            text, tool_calls = _drain_stream(backend.stream(**kwargs))
-        except Exception as exc:  # noqa: BLE001 — surface as a structured response
-            # The downstream consumers (critics / executor) wrap this back
-            # into their own error envelopes; raising here would break the
-            # outer SubgraphEvent contract.
-            raise RuntimeError(f"llm_call({model!r}) failed: {exc}") from exc
-
-        # Tool-using path: keep the OpenAI-style shape the executor expects.
-        if tools:
-            return {
-                "content": text,
-                "tool_calls": _normalize_tool_calls_for_executor(tool_calls),
-            }
-
-        # JSON-response_format path: return raw text; the consumer parses.
-        # critic_pre / critic_post / validator helper LLM all do their own
-        # ```json``` fence stripping + json.loads.
-        return text
-
-    # -- internal ------------------------------------------------------------
-
-    def _build_messages(
-        self,
-        prompt: str | list[dict] | None,
-        messages: list[dict] | None,
-        response_format: dict | None,
-    ) -> list[dict]:
-        if messages is not None:
-            out = list(messages)
-        elif isinstance(prompt, list):
-            out = list(prompt)
-        elif isinstance(prompt, str):
-            out = [{"role": "user", "content": prompt}]
-        else:
-            out = []
-
-        # Hint to the model when the consumer asked for a JSON object.
-        if response_format and response_format.get("type") == "json_object":
-            # If the last message is the user's, append a one-line nudge so
-            # models that don't honour response_format still get the message.
-            if out and out[-1].get("role") == "user":
-                hint = (
-                    "\n\nReply with ONE JSON object (no markdown fences, no prose)."
-                )
-                out[-1] = {
-                    "role": out[-1].get("role"),
-                    "content": (out[-1].get("content") or "") + hint,
-                }
-        return out
-
-    def stream_raw(
-        self,
-        *,
-        model: str,
-        prompt: str | list[dict] | None = None,
-        messages: list[dict] | None = None,
-        response_format: dict | None = None,
-        temperature: float | None = None,
-        max_tokens: int | None = None,
-    ):
-        """Like __call__ but returns a raw LLMEvent generator for streaming."""
-        backend = self._backend_for(model)
-        msgs = self._build_messages(prompt, messages, response_format)
-        kwargs: dict[str, Any] = {"messages": msgs}
-        if temperature is not None:
-            kwargs["temperature"] = temperature
-        if max_tokens is not None:
-            kwargs["max_tokens"] = max_tokens
-        return backend.stream(**kwargs)
-
-    def _backend_for(self, model: str):
-        """Return (and cache) the right backend instance for ``model``.
-
-        Routing rules (per design §10 model registry):
-          * "local" → llama-server (used by INTENT_MODEL).
-          * "gemma-4-*" / "gemini-*" → GoogleBackend (cloud).
-          * anything else → GoogleBackend by default.
-
-        On `model == "local"` we skip the cloud entirely. Otherwise we
-        instantiate ``GoogleBackend(model=...)``; that backend has its own
-        retry-and-fall-back-to-local logic (see google.py).
-        """
-        kind = "local" if model == "local" else "google"
-        cache_key = (kind, model)
-        if cache_key in self._cache:
-            return self._cache[cache_key]
-
-        if kind == "local":
-            from agent.llm.gemma import GemmaLlamaBackend
-            backend = GemmaLlamaBackend()
-        else:
-            from agent.llm.google import GoogleBackend
-            backend = GoogleBackend(model=model)
-
-        self._cache[cache_key] = backend
-        return backend
+# _LLMBridge has moved to agent/subgraph/llm_bridge.py as LLMBridge.
 
 
 # ---------------------------------------------------------------------------
@@ -348,14 +166,14 @@ class PlanExecuteAgent(SubgraphAgent):
 
     # ── Construction ────────────────────────────────────────────────────
 
-    def __init__(self, *, llm_bridge: _LLMBridge | None = None):
+    def __init__(self, *, llm_bridge: LLMBridge | None = None):
         # Lazily-resolved fields — populated inside :meth:`run`.
         self._plan: Plan | None = None
         self._store: EvidenceStore | None = None
         self._budget: BudgetTracker | None = None
 
         self._inputs: dict | None = None
-        self._llm: _LLMBridge = llm_bridge or _LLMBridge(
+        self._llm: LLMBridge = llm_bridge or LLMBridge(
             fallback_to_local=getattr(config, "GOOGLE_API_FALLBACK_TO_LOCAL", True)
         )
 
@@ -479,14 +297,8 @@ class PlanExecuteAgent(SubgraphAgent):
         self._plan = plan
 
         # ─── Critic-pre on v1 ───────────────────────────────────────────
-        yield SubgraphEvent(kind="llm_start", name="critic_pre",
-                            payload={"phase": "critic_pre",
-                                     "prompt": {"user": "בדיקת תקינות תוכנית החקר"}})
-        _t0_cp = time.monotonic()
-        cp = critic_pre(plan, self._llm)
-        yield SubgraphEvent(kind="llm_done", name="critic_pre",
-                            payload={"content": json.dumps(cp.to_dict(), ensure_ascii=False),
-                                     "elapsed_ms": int((time.monotonic() - _t0_cp) * 1000)})
+        cp = critic_pre(plan, self._phased_llm("critic_pre"))
+        yield from self._llm.drain_events()
         if cp.verdict in ("revise", "replan"):
             yield SubgraphEvent(
                 kind="progress",
@@ -508,14 +320,8 @@ class PlanExecuteAgent(SubgraphAgent):
             self._plan = plan
 
         # ─── Validator ──────────────────────────────────────────────────
-        yield SubgraphEvent(kind="llm_start", name="validator",
-                            payload={"phase": "validator",
-                                     "prompt": {"user": "אימות תוכנית החקר"}})
-        _t0_vr = time.monotonic()
-        vr = validate_plan(plan, registry, self._llm)
-        yield SubgraphEvent(kind="llm_done", name="validator",
-                            payload={"content": "; ".join(vr.issues) if not vr.ok else "תוכנית תקינה",
-                                     "elapsed_ms": int((time.monotonic() - _t0_vr) * 1000)})
+        vr = validate_plan(plan, registry, self._phased_llm("validator"))
+        yield from self._llm.drain_events()
         replan_attempts = 0
         while not vr.ok and replan_attempts < int(getattr(config, "RESEARCH_MAX_REPLANS", 3)):
             yield SubgraphEvent(
@@ -539,14 +345,8 @@ class PlanExecuteAgent(SubgraphAgent):
                 )
                 return
             self._plan = plan
-            yield SubgraphEvent(kind="llm_start", name="validator",
-                                payload={"phase": "validator",
-                                         "prompt": {"user": "אימות תוכנית החקר"}})
-            _t0_vr = time.monotonic()
-            vr = validate_plan(plan, registry, self._llm)
-            yield SubgraphEvent(kind="llm_done", name="validator",
-                                payload={"content": "; ".join(vr.issues) if not vr.ok else "תוכנית תקינה",
-                                         "elapsed_ms": int((time.monotonic() - _t0_vr) * 1000)})
+            vr = validate_plan(plan, registry, self._phased_llm("validator"))
+            yield from self._llm.drain_events()
 
         if not vr.ok:
             yield SubgraphEvent(
@@ -618,14 +418,8 @@ class PlanExecuteAgent(SubgraphAgent):
                 name="critic_post_started",
                 payload={"plan_version": plan.version},
             )
-            yield SubgraphEvent(kind="llm_start", name="critic_post",
-                                payload={"phase": "critic_post",
-                                         "prompt": {"user": "בדיקת ספיקות הראיות שנאספו"}})
-            _t0_cpost = time.monotonic()
-            cpost: CriticResult = critic_post(plan, self._store, self._llm)
-            yield SubgraphEvent(kind="llm_done", name="critic_post",
-                                payload={"content": json.dumps(cpost.to_dict(), ensure_ascii=False),
-                                         "elapsed_ms": int((time.monotonic() - _t0_cpost) * 1000)})
+            cpost: CriticResult = critic_post(plan, self._store, self._phased_llm("critic_post"))
+            yield from self._llm.drain_events()
 
             if cpost.verdict != "replan":
                 break
@@ -714,7 +508,7 @@ class PlanExecuteAgent(SubgraphAgent):
         steps_by_id: dict[str, Step] = {s.id: s for s in steps}
         abandon_triggered = False
 
-        def _worker(step: Step) -> ToolEnvelope:
+        def _worker(step: Step) -> tuple[ToolEnvelope, list[SubgraphEvent]]:
             return self._dispatch_step(step, registry)
 
         with DAGExecutor() as dag:
@@ -737,6 +531,7 @@ class PlanExecuteAgent(SubgraphAgent):
                     step_summary = reason[:200]
                     step_full    = ""
                     step_error   = error_kind
+                    llm_events: list[SubgraphEvent] = []
                     if (
                         not abandon_triggered
                         and step_obj is not None
@@ -746,11 +541,12 @@ class PlanExecuteAgent(SubgraphAgent):
                         abandon_triggered = True
                         dag.cancel_all()
                 else:
-                    tool_name    = _tool_name_from_envelope(result)
-                    entry_id     = self._add_evidence(step_id, tool_name, result)
-                    step_summary = result.summary or ""
-                    step_full    = (result.full or "")[:8000]
-                    step_error   = result.error
+                    envelope, llm_events = result
+                    tool_name    = _tool_name_from_envelope(envelope)
+                    entry_id     = self._add_evidence(step_id, tool_name, envelope)
+                    step_summary = envelope.summary or ""
+                    step_full    = (envelope.full or "")[:8000]
+                    step_error   = envelope.error
                     if (
                         not abandon_triggered
                         and step_obj is not None
@@ -760,6 +556,10 @@ class PlanExecuteAgent(SubgraphAgent):
                     ):
                         abandon_triggered = True
                         dag.cancel_all()
+
+                # Yield executor LLM events (llm_start/llm_done) collected
+                # from the worker thread by LLMBridge.drain_events().
+                yield from llm_events
 
                 yield SubgraphEvent(
                     kind="hook",
@@ -783,15 +583,34 @@ class PlanExecuteAgent(SubgraphAgent):
                 payload={"reason": "step with abandon_on_failure=True failed"},
             )
 
-    def _dispatch_step(self, step: Step, registry: ToolRegistry) -> ToolEnvelope:
-        """Run one step through ``execute_step`` with the right wiring."""
-        return execute_step(
+    def _dispatch_step(
+        self, step: Step, registry: ToolRegistry
+    ) -> tuple[ToolEnvelope, list[SubgraphEvent]]:
+        """Run one step and return (envelope, llm_events).
+
+        llm_events are the llm_start/llm_done pairs emitted by LLMBridge
+        during the executor's worker-thread LLM calls; the caller yields
+        them on the main thread after the step completes.
+        """
+        envelope = execute_step(
             step=step,
             registry=registry,
             store=self._store,
             llm_call=self._llm,
             budget_tracker=self._budget,
         )
+        events = self._llm.drain_events()
+        return envelope, events
+
+    def _phased_llm(self, phase: str) -> Callable:
+        """Return a wrapper around self._llm that injects phase= by default."""
+        llm = self._llm
+
+        def _call(**kwargs):
+            kwargs.setdefault("phase", phase)
+            return llm(**kwargs)
+
+        return _call
 
     # ── Evidence helpers ────────────────────────────────────────────────
 
@@ -868,41 +687,24 @@ class PlanExecuteAgent(SubgraphAgent):
             },
         )
 
-        yield SubgraphEvent(
-            kind="llm_start", name=phase,
-            payload={"phase": phase, "prompt": {"user": prompt}},
-        )
-
         text_parts: list[str] = []
-        t0 = time.monotonic()
-        try:
-            for ev in self._llm.stream_raw(
-                model=config.PLANNER_MODEL,
-                prompt=prompt,
-                response_format={"type": "json_object"},
-            ):
-                if isinstance(ev, ThinkingEvent):
-                    yield SubgraphEvent(kind="llm_thinking", name=phase,
-                                        payload={"text": ev.text})
-                elif isinstance(ev, TokenEvent):
-                    text_parts.append(ev.text)
-                    yield SubgraphEvent(kind="llm_token", name=phase,
-                                        payload={"text": ev.text})
-                elif isinstance(ev, DoneEvent):
-                    break
-        except Exception as exc:  # noqa: BLE001
-            elapsed = int((time.monotonic() - t0) * 1000)
-            yield SubgraphEvent(kind="llm_done", name=phase,
-                                payload={"content": "", "elapsed_ms": elapsed,
-                                         "error": str(exc)})
+        error_seen = False
+        for sg_ev in self._llm.stream(
+            model=config.PLANNER_MODEL,
+            prompt=prompt,
+            response_format={"type": "json_object"},
+            phase=phase,
+        ):
+            if sg_ev.kind == "llm_token":
+                text_parts.append(sg_ev.payload.get("text", ""))
+            elif sg_ev.kind == "llm_done" and sg_ev.payload.get("error"):
+                error_seen = True
+            yield sg_ev
+
+        if error_seen:
             return None
 
-        content = "".join(text_parts)
-        elapsed = int((time.monotonic() - t0) * 1000)
-        yield SubgraphEvent(kind="llm_done", name=phase,
-                            payload={"content": content[:2000], "elapsed_ms": elapsed})
-
-        parsed = _parse_plan_json(content)
+        parsed = _parse_plan_json("".join(text_parts))
         if not isinstance(parsed, dict):
             return None
         new_version = (prior_plan.version + 1) if prior_plan is not None else 1
@@ -950,36 +752,22 @@ class PlanExecuteAgent(SubgraphAgent):
         )
 
         phase = "synthesizer"
-        yield SubgraphEvent(
-            kind="llm_start", name=phase,
-            payload={"phase": phase, "prompt": {"user": prompt}},
-        )
-
         text_parts: list[str] = []
-        t0 = time.monotonic()
-        try:
-            for ev in self._llm.stream_raw(model=config.SYNTHESIZER_MODEL, prompt=prompt):
-                if isinstance(ev, ThinkingEvent):
-                    yield SubgraphEvent(kind="llm_thinking", name=phase,
-                                        payload={"text": ev.text})
-                elif isinstance(ev, TokenEvent):
-                    text_parts.append(ev.text)
-                    yield SubgraphEvent(kind="llm_token", name=phase,
-                                        payload={"text": ev.text})
-                elif isinstance(ev, DoneEvent):
-                    break
-        except Exception as exc:  # noqa: BLE001
-            elapsed = int((time.monotonic() - t0) * 1000)
-            yield SubgraphEvent(kind="llm_done", name=phase,
-                                payload={"content": "", "elapsed_ms": elapsed,
-                                         "error": str(exc)})
-            return f"שגיאה בסינתזה: {exc}"
+        error_msg: str = ""
+        for sg_ev in self._llm.stream(
+            model=config.SYNTHESIZER_MODEL,
+            prompt=prompt,
+            phase=phase,
+        ):
+            if sg_ev.kind == "llm_token":
+                text_parts.append(sg_ev.payload.get("text", ""))
+            elif sg_ev.kind == "llm_done" and sg_ev.payload.get("error"):
+                error_msg = sg_ev.payload["error"]
+            yield sg_ev
 
-        content = "".join(text_parts)
-        elapsed = int((time.monotonic() - t0) * 1000)
-        yield SubgraphEvent(kind="llm_done", name=phase,
-                            payload={"content": content[:500], "elapsed_ms": elapsed})
-        return content
+        if error_msg:
+            return f"שגיאה בסינתזה: {error_msg}"
+        return "".join(text_parts)
 
     def _summary_view_dict(self) -> list[dict]:
         if self._store is None:

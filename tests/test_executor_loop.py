@@ -83,7 +83,7 @@ def _make_llm_call_tool_then_record(tool_name: str = "find_mk", args: dict = Non
     """
     call_count = [0]
 
-    def llm_call(*, model, prompt, tools=None, response_format=None, **kwargs):
+    def llm_call(*, model, prompt=None, tools=None, response_format=None, **kwargs):
         call_count[0] += 1
         if call_count[0] == 1:
             # Turn 1: emit a tool call
@@ -121,7 +121,7 @@ def _make_llm_call_tool_then_record(tool_name: str = "find_mk", args: dict = Non
 
 def _make_llm_call_skip():
     """Returns an llm_call that immediately skips (no tool call needed)."""
-    def llm_call(*, model, prompt, tools=None, response_format=None, **kwargs):
+    def llm_call(*, model, prompt=None, tools=None, response_format=None, **kwargs):
         return {
             "content": "",
             "tool_calls": [
@@ -142,7 +142,7 @@ def _make_llm_call_skip():
 
 def _make_llm_call_abort():
     """Returns an llm_call that aborts immediately."""
-    def llm_call(*, model, prompt, tools=None, response_format=None, **kwargs):
+    def llm_call(*, model, prompt=None, tools=None, response_format=None, **kwargs):
         return {
             "content": "",
             "tool_calls": [

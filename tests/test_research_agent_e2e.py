@@ -26,7 +26,8 @@ if not _bm25_db.exists():
 
 import config
 from agent.research_agent.agent import ResearchAgent
-from agent.plan_execute.agent import PlanExecuteAgent, _LLMBridge
+from agent.plan_execute.agent import PlanExecuteAgent
+from agent.subgraph.llm_bridge import LLMBridge
 from agent.subgraph.base import SubgraphEvent
 
 
@@ -57,19 +58,27 @@ _SYNTHESIZER_ANSWER = "אבי דיכטר תמך בשירות חוץ בנאומי
 
 
 def _make_mock_llm_bridge():
-    """Create a mock _LLMBridge that returns fixed responses per role.
+    """Create a mock LLMBridge that returns fixed responses per role."""
+    from collections import deque
+    from agent.subgraph.base import SubgraphEvent
 
-    The mock tracks call count to sequence the responses:
-      - Planner call → returns valid plan JSON
-      - Critic pre call → returns ok
-      - Validator helper call → returns ok
-      - Executor turn 1 → tool call for find_mk
-      - Executor turn 2 → record_evidence produced
-      - Critic post call → synthesize
-      - Synthesizer call → Hebrew answer text
-    """
+    _buf: deque = deque()
 
-    call_log = []
+    def _text_response(model: str, prompt: str | None) -> str:
+        prompt_text = prompt if isinstance(prompt, str) else ""
+        if model == config.PLANNER_MODEL or "plan_schema" in prompt_text:
+            return _VALID_PLAN_JSON
+        if model == config.CRITIC_PRE_MODEL or "critic" in prompt_text.lower():
+            if "evidence" in prompt_text.lower():
+                return _CRITIC_POST_SYNTHESIZE
+            return _CRITIC_PRE_OK
+        if model == config.CRITIC_POST_MODEL:
+            return _CRITIC_POST_SYNTHESIZE
+        if model == config.SYNTHESIZER_MODEL:
+            return _SYNTHESIZER_ANSWER
+        if model == getattr(config, "INTENT_MODEL", "local"):
+            return _VALIDATOR_OK
+        return _CRITIC_PRE_OK
 
     class MockLLMBridge:
         def __call__(
@@ -82,91 +91,62 @@ def _make_mock_llm_bridge():
             response_format: dict | None = None,
             temperature: float | None = None,
             max_tokens: int | None = None,
+            phase: str = "",
         ):
-            call_index = len(call_log)
-            call_log.append({"model": model, "has_tools": tools is not None})
+            phase_name = phase or model
+            prompt_text = prompt if isinstance(prompt, str) else ""
+            _buf.append(SubgraphEvent(kind="llm_start", name=phase_name,
+                                      payload={"phase": phase, "model": model,
+                                               "prompt": {"user": prompt_text[:100]}}))
 
-            # If tools are present → executor turn (tool call or record_evidence)
             if tools:
-                tool_names = [
-                    (t.get("function") or {}).get("name", "")
-                    for t in (tools or [])
-                ]
-                # If record_evidence is the ONLY tool available → turn 2
+                tool_names = [(t.get("function") or {}).get("name", "") for t in (tools or [])]
                 if tool_names == ["record_evidence"]:
-                    return {
+                    result = {
                         "content": "",
-                        "tool_calls": [
-                            {
-                                "function": {
-                                    "name": "record_evidence",
-                                    "arguments": json.dumps({
-                                        "decision": "produced",
-                                        "summary": "Found MK Dichter in BM25 index",
-                                        "ref_evidence": None,
-                                    }),
-                                }
-                            }
-                        ],
+                        "tool_calls": [{"function": {"name": "record_evidence",
+                                                     "arguments": json.dumps({"decision": "produced",
+                                                                              "summary": "Found MK Dichter"})}}],
                     }
                 else:
-                    # Turn 1 → emit a find_mk call if allowed
                     allowed = [n for n in tool_names if n not in ("record_evidence", "expand")]
                     tool_to_call = "find_mk" if "find_mk" in allowed else (allowed[0] if allowed else "record_evidence")
-
                     if tool_to_call == "record_evidence":
-                        return {
-                            "content": "",
-                            "tool_calls": [
-                                {
-                                    "function": {
-                                        "name": "record_evidence",
-                                        "arguments": json.dumps({
-                                            "decision": "produced",
-                                            "summary": "No tool available",
-                                        }),
-                                    }
-                                }
-                            ],
-                        }
+                        result = {"content": "", "tool_calls": [{"function": {"name": "record_evidence",
+                                                                               "arguments": json.dumps({"decision": "produced",
+                                                                                                        "summary": "No tool"})}}]}
+                    else:
+                        result = {"content": "", "tool_calls": [{"function": {"name": tool_to_call,
+                                                                               "arguments": json.dumps({"query": "דיכטר"})}}]}
+                content_preview = ""
+            else:
+                result = _text_response(model, prompt_text)
+                content_preview = (result or "")[:100]
 
-                    return {
-                        "content": "",
-                        "tool_calls": [
-                            {
-                                "function": {
-                                    "name": tool_to_call,
-                                    "arguments": json.dumps({"query": "דיכטר"}),
-                                }
-                            }
-                        ],
-                    }
+            _buf.append(SubgraphEvent(kind="llm_done", name=phase_name,
+                                      payload={"content": content_preview, "elapsed_ms": 1}))
+            return result
 
-            # No tools → text response
-            # response_format=json_object → planner / critic / validator
+        def stream(self, *, model: str, prompt=None, messages=None,
+                   response_format=None, temperature=None, max_tokens=None, phase: str = ""):
             prompt_text = prompt if isinstance(prompt, str) else ""
+            phase_name = phase or model
+            text = _text_response(model, prompt_text)
+            yield SubgraphEvent(kind="llm_start", name=phase_name,
+                                payload={"phase": phase, "model": model,
+                                         "prompt": {"user": prompt_text[:100]}})
+            yield SubgraphEvent(kind="llm_token", name=phase_name, payload={"text": text})
+            yield SubgraphEvent(kind="llm_done", name=phase_name,
+                                payload={"content": (text or "")[:100], "elapsed_ms": 1})
 
-            # Heuristic routing by model or prompt content
-            if model == config.PLANNER_MODEL or "plan_schema" in prompt_text:
-                return _VALID_PLAN_JSON
+        def drain_events(self):
+            out = []
+            while _buf:
+                out.append(_buf.popleft())
+            return out
 
-            if model == config.CRITIC_PRE_MODEL or "critic" in prompt_text.lower():
-                # critic_pre or critic_post
-                if "synthesize" in prompt_text.lower() or "evidence" in prompt_text.lower():
-                    return _CRITIC_POST_SYNTHESIZE
-                return _CRITIC_PRE_OK
-
-            if model == config.CRITIC_POST_MODEL:
-                return _CRITIC_POST_SYNTHESIZE
-
-            if model == config.SYNTHESIZER_MODEL or "synthesizer" in prompt_text.lower():
-                return _SYNTHESIZER_ANSWER
-
-            if model == getattr(config, "INTENT_MODEL", "local"):
-                return _VALIDATOR_OK
-
-            # Default: return ok json
-            return _CRITIC_PRE_OK
+        def stream_raw(self, **kwargs):
+            return iter([])
 
     return MockLLMBridge()
 
@@ -179,7 +159,7 @@ class TestResearchAgentE2E:
         mock_bridge = _make_mock_llm_bridge()
 
         agent = ResearchAgent(llm_bridge=mock_bridge)
-        events = list(agent.run({"query": query}))
+        events = list(agent.run({"question": query}))
         return events
 
     def test_q1_find_mk_yields_events(self):
@@ -241,7 +221,8 @@ class TestResearchAgentE2E:
 
     def test_subgraph_event_kinds_are_valid(self):
         """All event kinds must be one of the known values."""
-        valid_kinds = {"progress", "hook", "done", "error"}
+        valid_kinds = {"progress", "hook", "done", "error",
+                       "llm_start", "llm_token", "llm_thinking", "llm_done"}
         events = self._run_agent("מה דעתו של אבי דיכטר על שירות חוץ?")
         for ev in events:
             assert ev.kind in valid_kinds, (

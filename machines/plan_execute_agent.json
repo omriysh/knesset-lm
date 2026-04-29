@@ -8,13 +8,6 @@
       "type": "transition"
     },
     {
-      "condition": "intent == 'research'",
-      "id": "e_intent_research",
-      "source": "intent_classify",
-      "target": "mode_select",
-      "type": "transition"
-    },
-    {
       "condition": "intent == 'irrelevant'",
       "id": "e_intent_irrelevant",
       "source": "intent_classify",
@@ -48,6 +41,30 @@
       "source": "research_subgraph",
       "target": "format_answer",
       "type": "transition"
+    },
+    {
+      "id": "e_ced96c4f",
+      "source": "intent_classify",
+      "target": "llm_call_c82151e8",
+      "type": "transition",
+      "label": "",
+      "condition": "intent == 'research'"
+    },
+    {
+      "id": "e_bc7b01b6",
+      "source": "llm_call_c82151e8",
+      "target": "mode_select",
+      "type": "transition",
+      "label": "",
+      "condition": "protocol_deep_dive_relevance == \"yes\""
+    },
+    {
+      "id": "e_51f45256",
+      "source": "llm_call_c82151e8",
+      "target": "research_subgraph",
+      "type": "transition",
+      "label": "",
+      "condition": "protocol_deep_dive_relevance == \"no\""
     }
   ],
   "global_rules": "",
@@ -60,7 +77,7 @@
       "imaginary": false,
       "label": "התחלה",
       "position": {
-        "x": 720,
+        "x": 820,
         "y": -20
       },
       "terminal": false,
@@ -90,7 +107,7 @@
       "imaginary": false,
       "label": "סיווג כוונה",
       "position": {
-        "x": 540,
+        "x": 620,
         "y": -20
       },
       "terminal": false,
@@ -102,17 +119,16 @@
         "options": [
           {
             "description": "מחקר אוטומטי מעמיק — סוכן אוסף ראיות ומנתח",
-            "label": "סכם עבורי",
+            "label": "ענה אוטומטית",
             "value": "summarize"
           },
           {
-            "description": "עיון עצמי, חיפוש חופשי ושאלות ממוקדות על הישיבות",
-            "label": "צלול לפרוטוקולים",
+            "description": "עיון עצמי, חיפוש חופשי ושאלות ממוקדות על הישיבות הרלוונטיות ביותר",
+            "label": "קריאה עצמית בפרוטוקולים",
             "value": "deep_dive"
           }
         ],
         "output_var": "research_mode",
-        "preselect_var": "",
         "prompt_he": "איך נתקדם?",
         "ui": "option_select"
       },
@@ -120,7 +136,7 @@
       "imaginary": false,
       "label": "בחר מצב מחקר",
       "position": {
-        "x": 300,
+        "x": 220,
         "y": -20
       },
       "terminal": false,
@@ -150,7 +166,7 @@
       "imaginary": false,
       "label": "אישור עלות",
       "position": {
-        "x": -20,
+        "x": 120,
         "y": 100
       },
       "terminal": false,
@@ -175,7 +191,7 @@
       "imaginary": false,
       "label": "מחקר מעמיק",
       "position": {
-        "x": 300,
+        "x": 420,
         "y": 100
       },
       "terminal": false,
@@ -186,18 +202,18 @@
         "input_template": "{{final_answer}}",
         "max_tokens": 16384,
         "model": "",
-        "output_format": null,
         "rag": "",
         "stage": "reviewer",
-        "system_prompt": "אתה עוזר מומחה לניתוח פעולתה של הכנסת הישראלית.\nקיבלת תשובה מסוכן מחקר. תפקידך לנסח אותה מחדש בצורה ברורה, תמציתית ונגישה למשתמש.\n\nכללים:\n- ענה בעברית.\n- שמור על כל הציטוטים, התאריכים ושמות הוועדות המופיעים בתשובה המקורית.\n- אל תמציא מידע שאינו מופיע בתשובה.\n- אם התשובה מסמנת שהשאלה אינה רלוונטית לכנסת — ציין זאת בנימוס בשורה קצרה.",
-        "temperature": 0.7
+        "system_prompt": "אתה עוזר מומחה לניתוח פעולתה של הכנסת הישראלית.\nקיבלת תשובה מסוכן מחקר. תפקידך לנסח אותה מחדש בצורה ברורה, תמציתית ונגישה למשתמש.\n\nכללים:\n- ענה בעברית.\n- שמור על כל הציטוטים, התאריכים ושמות הוועדות המופיעים בתשובה המקורית.\n- אל תמציא מידע שאינו מופיע בתשובה.\n- אם התשובה מסמנת שהשאלה אינה רלוונטית לכנסת — ציין זאת בנימוס בשורה קצרה.\n- אם התשובה מציינת שאלות המשך מומלצות, השאר רק שאלות מהותיות שנוגעות בכנסת הישראלית. אתה רשאי לסנן שאלות טכניות, כמו \"מדוע כלי מסוים לא עבד?\" או \"כיצד ניתן לשלוף יותר טוב?\".",
+        "temperature": 0.7,
+        "notes": ""
       },
       "id": "format_answer",
       "imaginary": false,
       "label": "עיצוב תשובה",
       "position": {
-        "x": 300,
-        "y": 240
+        "x": 620,
+        "y": 100
       },
       "terminal": true,
       "type": "llm_call"
@@ -212,11 +228,42 @@
       "imaginary": false,
       "label": "צלול לפרוטוקולים",
       "position": {
-        "x": 300,
-        "y": -140
+        "x": 420,
+        "y": -120
       },
       "terminal": true,
       "type": "user_input"
+    },
+    {
+      "id": "llm_call_c82151e8",
+      "type": "llm_call",
+      "label": "רלוונטיות עומק בפרוטוקולים",
+      "position": {
+        "x": 420,
+        "y": -20
+      },
+      "data": {
+        "system_prompt": "You triage user questions for the Knesset research assistant.\n\nClassify the user's most recent message into one of two classes and return ONE JSON object with a single key \"protocol_deep_dive_relevance\":\n\n  - \"yes\"          — the question can benefit from diving into data from Knesset protocols.\n  - \"no\"           — the question does not benefit from diving into protocols. for example, a technical question about party associations.\n\nDo not explain. Do not output prose. Do not output additional keys.",
+        "model": "",
+        "temperature": 0.2,
+        "max_tokens": 16384,
+        "rag": "",
+        "input_template": "{{question}}",
+        "stage": "router",
+        "notes": "",
+        "output_format": {
+          "fields": [
+            {
+              "label": "protocol_deep_dive_relevance",
+              "required": true,
+              "var": "protocol_deep_dive_relevance"
+            }
+          ],
+          "type": "json"
+        }
+      },
+      "terminal": false,
+      "imaginary": false
     }
   ],
   "version": 3

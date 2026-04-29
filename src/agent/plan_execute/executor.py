@@ -260,6 +260,7 @@ def execute_step(
     store: EvidenceStore,
     llm_call: Callable,
     budget_tracker: Any = None,
+    phase_prefix: str = "executor",
 ) -> ToolEnvelope:
     """Run one step and return its final :class:`ToolEnvelope`.
 
@@ -311,11 +312,15 @@ def execute_step(
     model = _select_model(step)
     messages: list[dict] = [{"role": "user", "content": prompt}]
     collected: list[tuple[str, ToolEnvelope]] = []
+    _turn = 0
 
     # ─── Tool call loop ──────────────────────────────────────────────────
     while len(collected) < max_calls:
+        _turn += 1
+        _phase = f"{phase_prefix}:{step.id}:t{_turn}"
         try:
-            raw = llm_call(model=model, messages=messages, tools=tool_schemas_full)
+            raw = llm_call(model=model, messages=messages, tools=tool_schemas_full,
+                           phase=_phase)
         except Exception as exc:  # noqa: BLE001
             if not collected:
                 return _abort_envelope(
@@ -463,6 +468,7 @@ def execute_step(
             model=model,
             messages=messages_for_record,
             tools=[RECORD_EVIDENCE_SCHEMA],
+            phase=f"{phase_prefix}:{step.id}:record",
         )
     except Exception as exc:  # noqa: BLE001
         combined = _combine_envelopes(collected, step.id)
