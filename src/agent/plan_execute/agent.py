@@ -352,7 +352,7 @@ class PlanExecuteAgent(SubgraphAgent):
         """Drive the full pipeline. Yields SubgraphEvents.
 
         Inputs:
-          * ``query`` (required): the user's question.
+          * ``question`` (required): the user's question.
           * ``intent_hint`` (optional): free-form planner steering text.
 
         Yields, in order:
@@ -426,12 +426,12 @@ class PlanExecuteAgent(SubgraphAgent):
 
     def _run_inner(self, inputs: dict) -> Generator[SubgraphEvent, Any, None]:
         self._inputs = dict(inputs or {})
-        query = str(self._inputs.get("query") or "").strip()
+        query = str(self._inputs.get("question") or "").strip()
         if not query:
             yield SubgraphEvent(
                 kind="error",
                 name="missing_query",
-                payload={"error": "PlanExecuteAgent.run requires inputs['query']"},
+                payload={"error": "PlanExecuteAgent.run requires inputs['question']"},
             )
             return
 
