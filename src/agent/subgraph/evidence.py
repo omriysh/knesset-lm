@@ -253,6 +253,28 @@ class EvidenceStore:
             if entry is not None:
                 yield entry
 
+    def summary_view(self) -> list[dict]:
+        """Prompt-friendly summary of all entries — no full payloads.
+
+        Includes tool arguments (from provenance tool_calls) so the LLM can
+        see what was queried, but excludes full results and provenance details.
+        """
+        out: list[dict] = []
+        for entry in self.iter():
+            env = entry.envelope
+            prov = env.provenance if isinstance(env.provenance, dict) else {}
+            out.append({
+                "id":         entry.id,
+                "tool_name":  entry.tool_name,
+                "step_id":    entry.step_id,
+                "summary":    env.summary or "",
+                "tool_calls": prov.get("tool_calls") or [],
+                "metadata":   env.metadata or {},
+                "truncated":  bool(env.truncated),
+                "error":      env.error,
+            })
+        return out
+
     def __len__(self) -> int:
         return len(self._entries)
 

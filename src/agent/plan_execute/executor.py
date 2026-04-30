@@ -157,20 +157,7 @@ def _registry_by_name(registry: ToolRegistry) -> dict[str, ToolSpec]:
 
 
 def _summary_view(store: EvidenceStore | None) -> list[dict]:
-    if store is None:
-        return []
-    out: list[dict] = []
-    for entry in store.iter():
-        env = entry.envelope
-        out.append({
-            "id":         entry.id,
-            "tool_name":  entry.tool_name,
-            "step_id":    entry.step_id,
-            "summary":    env.summary or "",
-            "metadata":   env.metadata or {},
-            "provenance": env.provenance or {},
-        })
-    return out
+    return store.summary_view() if store is not None else []
 
 
 def _charge(budget_tracker: Any, kind: str, amount: int = 1) -> bool:

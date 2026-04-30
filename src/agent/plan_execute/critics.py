@@ -77,28 +77,7 @@ def _load_prompt(name: str) -> str:
 
 
 def _summary_view(store: EvidenceStore | None) -> list[dict]:
-    """Render the prompt-friendly summary view of the evidence store.
-
-    The store may not implement a dedicated ``get_summary_view`` helper
-    yet (Phase 4a/4b are written in parallel), so we walk ``iter()``
-    directly. Heavy ``full`` payloads are intentionally omitted.
-    """
-    if store is None:
-        return []
-    out: list[dict] = []
-    for entry in store.iter():
-        env = entry.envelope
-        out.append({
-            "id":          entry.id,
-            "tool_name":   entry.tool_name,
-            "step_id":     entry.step_id,
-            "summary":     env.summary or "",
-            "metadata":    env.metadata or {},
-            # "provenance":  env.provenance or {},
-            "truncated":   bool(env.truncated),
-            "error":       env.error,
-        })
-    return out
+    return store.summary_view() if store is not None else []
 
 
 # ---------------------------------------------------------------------------

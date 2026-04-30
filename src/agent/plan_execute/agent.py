@@ -796,20 +796,7 @@ class PlanExecuteAgent(SubgraphAgent):
         return "".join(text_parts)
 
     def _summary_view_dict(self) -> list[dict]:
-        if self._store is None:
-            return []
-        out: list[dict] = []
-        for entry in self._store.iter():
-            env = entry.envelope
-            out.append({
-                "id":         entry.id,
-                "tool_name":  entry.tool_name,
-                "step_id":    entry.step_id,
-                "summary":    env.summary or "",
-                "metadata":   env.metadata or {},
-                "provenance": env.provenance or {},
-            })
-        return out
+        return self._store.summary_view() if self._store is not None else []
 
     # ── Prompt rendering ────────────────────────────────────────────────
 
