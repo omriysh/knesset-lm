@@ -110,8 +110,8 @@ _CTX_SIZE: dict[str, int] = {
     "gemini-2.5-flash-lite": 500_000,
     "gemini-2.5-flash":      500_000,
     "gemini-2.5-pro":        500_000,
-    "gemma-4-31b-it":        15_000,
-    "gemma-4-12b-it":        15_000,
+    "gemma-4-31b-it":        25_000,
+    "gemma-4-12b-it":        25_000,
 }
 _CTX_SIZE_DEFAULT = 500_000
 
