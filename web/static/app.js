@@ -198,36 +198,52 @@ function handleEvent(ev, data, refs) {
       const sg_name    = data.name    || '';
       const sg_payload = data.payload || {};
 
+      const isExecutorPhase = sg_name.startsWith('executor:');
+
       if (sg_kind === 'llm_start') {
-        refs.subgraphPhase = {
-          label:       _subgraphPhaseLabel(sg_name || sg_payload.phase),
-          stage:       'research',
-          thinking:    '',
-          content:     '',
-          prompt:      sg_payload.prompt || {},
-          tools:       [],
-          toolResults: [],
-        };
-        if (refs.subgraphContainer) {
-          addLiveStageCard(refs.subgraphContainer, {
-            label:      refs.subgraphPhase.label,
-            stage:      refs.subgraphPhase.stage,
-            loop:       0,
-            prompt:     refs.subgraphPhase.prompt,
-            openPrompt: true,
-          });
+        if (isExecutorPhase) {
+          // All turns of the same step share one phase slot; don't create a card.
+          if (!refs.subgraphPhase || !refs.subgraphPhase._isExecutor) {
+            refs.subgraphPhase = { _isExecutor: true, thinking: '', content: '', prompt: sg_payload.prompt || {} };
+          }
+        } else {
+          refs.subgraphPhase = {
+            label:       _subgraphPhaseLabel(sg_name || sg_payload.phase),
+            stage:       'research',
+            thinking:    '',
+            content:     '',
+            prompt:      sg_payload.prompt || {},
+            tools:       [],
+            toolResults: [],
+          };
+          if (refs.subgraphContainer) {
+            addLiveStageCard(refs.subgraphContainer, {
+              label:      refs.subgraphPhase.label,
+              stage:      refs.subgraphPhase.stage,
+              loop:       0,
+              prompt:     refs.subgraphPhase.prompt,
+              openPrompt: true,
+            });
+          }
         }
 
       } else if (sg_kind === 'llm_thinking') {
         if (refs.subgraphPhase) refs.subgraphPhase.thinking += sg_payload.text || '';
-        if (refs.subgraphContainer) appendLiveThinking(refs.subgraphContainer, sg_payload.text || '');
+        // Show thinking in the live card only for non-executor phases
+        if (!isExecutorPhase && refs.subgraphContainer) {
+          appendLiveThinking(refs.subgraphContainer, sg_payload.text || '');
+        }
 
       } else if (sg_kind === 'llm_token') {
         if (refs.subgraphPhase) refs.subgraphPhase.content += sg_payload.text || '';
-        if (refs.subgraphContainer) appendLiveOutput(refs.subgraphContainer, sg_payload.text || '');
+        if (!isExecutorPhase && refs.subgraphContainer) {
+          appendLiveOutput(refs.subgraphContainer, sg_payload.text || '');
+        }
 
       } else if (sg_kind === 'llm_done') {
-        if (refs.subgraphContainer && refs.subgraphPhase) {
+        if (isExecutorPhase) {
+          // Accumulate; card is finalized by step_completed
+        } else if (refs.subgraphContainer && refs.subgraphPhase) {
           const ph = refs.subgraphPhase;
           finaliseLiveCard(refs.subgraphContainer);
           addCompletedStageCard(refs.subgraphContainer, {
@@ -242,8 +258,8 @@ function handleEvent(ev, data, refs) {
             elapsed_ms:   sg_payload.elapsed_ms || 0,
             llm_ms:       sg_payload.elapsed_ms || 0,
           });
+          refs.subgraphPhase = null;
         }
-        refs.subgraphPhase = null;
 
       } else if (sg_kind === 'progress') {
         const _PROGRESS_MSGS = {
@@ -260,19 +276,40 @@ function handleEvent(ev, data, refs) {
         if (msg) setStatusMsg(refs.statusEl, msg);
 
       } else if (sg_kind === 'hook' && sg_name === 'step_completed') {
+        // Save prompt before clearing phase
+        const executorPrompt = refs.subgraphPhase ? (refs.subgraphPhase.prompt || {}) : {};
+        refs.subgraphPhase = null;
         const task = sg_payload.step_task ? `: ${sg_payload.step_task.slice(0, 40)}` : '';
         setStatusMsg(refs.statusEl, `שלב הושלם${task}`);
         if (refs.subgraphContainer) {
-          const stepTask  = sg_payload.step_task || 'שלב';
-          const toolName  = sg_payload.tool_name || '';
-          const hasError  = !!(sg_payload.error && sg_payload.error !== 'skip');
-          const fullResult = sg_payload.full || '';
+          const stepTask        = sg_payload.step_task || 'שלב';
+          const toolName        = sg_payload.tool_name || '';
+          const hasError        = !!(sg_payload.error && sg_payload.error !== 'skip');
+          const fullResult      = sg_payload.full || '';
+          const toolCalls       = sg_payload.tool_calls || [];
+          const toolCallResults = sg_payload.tool_call_results || [];
+
+          let toolResults;
+          if (toolCallResults.length > 0) {
+            toolResults = toolCallResults.map(tc => ({ name: tc.name, args: tc.args || {}, result: tc.full || tc.summary || '' }));
+          } else if (toolCalls.length === 1) {
+            toolResults = [{ name: toolCalls[0].name || toolName || 'כלי', args: toolCalls[0].args || {}, result: fullResult }];
+          } else if (toolCalls.length > 1) {
+            toolResults = toolCalls.map(tc => ({ name: tc.name, args: tc.args || {}, result: '' }));
+            if (fullResult) toolResults.push({ name: 'תוצאה מלאה', args: {}, result: fullResult });
+          } else if (fullResult) {
+            toolResults = [{ name: toolName || 'תוצאה מלאה', args: {}, result: fullResult }];
+          } else {
+            toolResults = [];
+          }
+
           addCompletedStageCard(refs.subgraphContainer, {
             label:        `ביצוע: ${stepTask.slice(0, 60)}`,
             stage:        hasError ? 'reviewer' : 'tool',
             content:      sg_payload.summary || '',
             tools:        toolName ? [toolName] : [],
-            tool_results: fullResult ? [{ name: toolName || 'תוצאה מלאה', result: fullResult }] : [],
+            tool_results: toolResults,
+            prompt:       executorPrompt,
           });
         }
 
@@ -646,8 +683,10 @@ function _subgraphPhaseLabel(phase) {
     'critic_post':      'ביקורת תוצאות',
     'synthesizer':      'מסכם ממצאים',
   };
-  if (phase && phase.startsWith('executor/')) {
-    return `ביצוע: ${phase.slice(9, 49)}`;
+  if (phase && phase.startsWith('executor:')) {
+    const parts = phase.split(':');
+    const stepId = parts[1] || '';
+    return `ביצוע ${stepId}`;
   }
   return labels[phase] || phase || 'שלב';
 }
@@ -660,6 +699,7 @@ function addSubgraphWrapperCard(stagesEl, nodeStart) {
 
   const card = document.createElement('div');
   card.className = 'stage-card subgraph-card live-stage-card';
+  card.dataset.startTs = String(Date.now());
   card.innerHTML =
     `<div class="stage-header open" onclick="toggleStageCard(this)">` +
       `<span class="stage-arrow">▶</span>` +
@@ -685,6 +725,18 @@ function finaliseSubgraphCard(subgraphContainer) {
   if (dot) dot.remove();
   const header = card.querySelector('.stage-header');
   if (header) header.classList.remove('open');
+
+  const startTs = parseInt(card.dataset.startTs || '0', 10);
+  if (startTs) {
+    const elapsedMs = Date.now() - startTs;
+    const metaEl = card.querySelector('.stage-meta');
+    if (metaEl) {
+      const timeSpan = document.createElement('span');
+      timeSpan.className = 'stage-time';
+      timeSpan.textContent = (elapsedMs / 1000).toFixed(1) + 's';
+      metaEl.insertBefore(timeSpan, metaEl.firstChild);
+    }
+  }
 }
 
 function appendLiveOutput(stagesEl, text) {

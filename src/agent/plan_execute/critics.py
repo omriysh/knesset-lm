@@ -94,7 +94,7 @@ def _summary_view(store: EvidenceStore | None) -> list[dict]:
             "step_id":     entry.step_id,
             "summary":     env.summary or "",
             "metadata":    env.metadata or {},
-            "provenance":  env.provenance or {},
+            # "provenance":  env.provenance or {},
             "truncated":   bool(env.truncated),
             "error":       env.error,
         })

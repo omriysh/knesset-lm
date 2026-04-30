@@ -224,6 +224,12 @@ def _combine_envelopes(
         merged_prov.setdefault("step_id", step_id)
         merged_prov.setdefault("tool_name", name)
         merged_prov["tool_calls"] = tool_calls_prov
+        merged_prov["tool_call_results"] = [{
+            "name":    name,
+            "args":    call_args[0]["args"] if call_args else {},
+            "summary": env.summary or "",
+            "full":    env.full or "",
+        }]
         return ToolEnvelope(
             summary=env.summary,
             full=env.full,
@@ -249,10 +255,19 @@ def _combine_envelopes(
             "tool_names": [name for name, _ in collected],
         },
         provenance={
-            "step_id":    step_id,
-            "tool_names": [name for name, _ in collected],
-            "tool_name":  collected[-1][0] if collected else "",
-            "tool_calls": tool_calls_prov,
+            "step_id":          step_id,
+            "tool_names":       [name for name, _ in collected],
+            "tool_name":        collected[-1][0] if collected else "",
+            "tool_calls":       tool_calls_prov,
+            "tool_call_results": [
+                {
+                    "name":    tool_name,
+                    "args":    (call_args[i]["args"] if i < len(call_args) else {}),
+                    "summary": env.summary or "",
+                    "full":    env.full or "",
+                }
+                for i, (tool_name, env) in enumerate(collected)
+            ],
         },
         truncated=any(env.truncated for _, env in collected),
         error="partial_error" if has_error else None,

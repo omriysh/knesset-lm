@@ -531,7 +531,8 @@ class PlanExecuteAgent(SubgraphAgent):
                     step_summary    = reason[:200]
                     step_full       = ""
                     step_error      = error_kind
-                    step_tool_calls = []
+                    step_tool_calls        = []
+                    step_tool_call_results = []
                     llm_events: list[SubgraphEvent] = []
                     if (
                         not abandon_triggered
@@ -549,7 +550,8 @@ class PlanExecuteAgent(SubgraphAgent):
                     step_full    = (envelope.full or "")[:8000]
                     step_error   = envelope.error
                     prov = envelope.provenance if isinstance(envelope.provenance, dict) else {}
-                    step_tool_calls = prov.get("tool_calls") or []
+                    step_tool_calls        = prov.get("tool_calls") or []
+                    step_tool_call_results = prov.get("tool_call_results") or []
                     if (
                         not abandon_triggered
                         and step_obj is not None
@@ -575,8 +577,9 @@ class PlanExecuteAgent(SubgraphAgent):
                         "summary":      step_summary,
                         "full":         step_full,
                         "tool_name":    tool_name,
-                        "tool_calls":   step_tool_calls,
-                        "error":        step_error,
+                        "tool_calls":        step_tool_calls,
+                        "tool_call_results": step_tool_call_results,
+                        "error":             step_error,
                     },
                 )
 
