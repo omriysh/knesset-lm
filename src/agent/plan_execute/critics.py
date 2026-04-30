@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -117,7 +118,8 @@ def _parse_json(raw: object) -> Any:
         text = re.sub(r"\s*```$", "", text)
     try:
         return json.loads(text)
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        print(f"[critics] JSON parse failed: {exc}  text={text[:120]!r}", file=sys.stderr, flush=True)
         return None
 
 

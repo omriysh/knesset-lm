@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -94,7 +95,8 @@ def _parse_llm_response(raw: object) -> _LLMResponse:
             text = re.sub(r"\s*```$", "", text)
         try:
             data = json.loads(text)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            print(f"[executor] JSON parse failed on LLM response: {exc}  text={text[:120]!r}", file=sys.stderr, flush=True)
             return _LLMResponse(tool_calls=[], content=raw)
         return _parse_llm_response(data)
 
@@ -132,7 +134,8 @@ def _normalise_tool_call(tc: object) -> dict:
     if isinstance(args, str):
         try:
             args = json.loads(args)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            print(f"[executor] tool args JSON parse failed: {exc}  args={args[:120]!r}", file=sys.stderr, flush=True)
             args = {}
     if not isinstance(args, dict):
         args = {}
@@ -180,7 +183,8 @@ def _charge(budget_tracker: Any, kind: str, amount: int = 1) -> bool:
     try:
         result = method(amount) if kind == "tokens" else method()
         return result is None or bool(result)
-    except Exception:
+    except Exception as exc:
+        print(f"[executor] budget charge ({kind}) raised: {exc}", file=sys.stderr, flush=True)
         return False
 
 
@@ -204,17 +208,22 @@ def _find_tc_id(raw_tool_calls: list[dict], tool_name: str) -> str:
 
 
 def _combine_envelopes(
-    collected: list[tuple[str, ToolEnvelope]], step_id: str
+    collected: list[tuple[str, ToolEnvelope]],
+    step_id: str,
+    call_args: list[dict] | None = None,
 ) -> ToolEnvelope:
     """Merge one or more (tool_name, envelope) pairs into a single ToolEnvelope."""
     if not collected:
         return _abort_envelope("no envelopes to combine", error_kind="no_tool_call")
+
+    tool_calls_prov = list(call_args or [])
 
     if len(collected) == 1:
         name, env = collected[0]
         merged_prov = dict(env.provenance or {})
         merged_prov.setdefault("step_id", step_id)
         merged_prov.setdefault("tool_name", name)
+        merged_prov["tool_calls"] = tool_calls_prov
         return ToolEnvelope(
             summary=env.summary,
             full=env.full,
@@ -243,6 +252,7 @@ def _combine_envelopes(
             "step_id":    step_id,
             "tool_names": [name for name, _ in collected],
             "tool_name":  collected[-1][0] if collected else "",
+            "tool_calls": tool_calls_prov,
         },
         truncated=any(env.truncated for _, env in collected),
         error="partial_error" if has_error else None,
@@ -312,6 +322,7 @@ def execute_step(
     model = _select_model(step)
     messages: list[dict] = [{"role": "user", "content": prompt}]
     collected: list[tuple[str, ToolEnvelope]] = []
+    call_args: list[dict] = []   # [{name, args}] — tracked in parallel with collected
     _turn = 0
 
     # ─── Tool call loop ──────────────────────────────────────────────────
@@ -370,7 +381,7 @@ def execute_step(
                     return _abort_envelope(
                         "record_evidence(produced) called without any tool results"
                     )
-                combined = _combine_envelopes(collected, step.id)
+                combined = _combine_envelopes(collected, step.id, call_args)
                 return ToolEnvelope(
                     summary=summary or combined.summary,
                     full=combined.full,
@@ -436,6 +447,7 @@ def execute_step(
             envelope = dispatch(registry, tool_name, tool_args)
 
         collected.append((tool_name, envelope))
+        call_args.append({"name": tool_name, "args": dict(tool_args or {})})
 
         # Add tool result to messages (summary only — full stays in collected)
         tc_id = _find_tc_id(raw_tool_calls, tool_name)
@@ -471,7 +483,7 @@ def execute_step(
             phase=f"{phase_prefix}:{step.id}:record",
         )
     except Exception as exc:  # noqa: BLE001
-        combined = _combine_envelopes(collected, step.id)
+        combined = _combine_envelopes(collected, step.id, call_args)
         return ToolEnvelope(
             summary=combined.summary or f"executor LLM error on record turn: {exc}",
             full=combined.full,
@@ -483,7 +495,7 @@ def execute_step(
 
     second = _parse_llm_response(raw_second)
     record = _first_call_named(second.tool_calls, "record_evidence")
-    combined = _combine_envelopes(collected, step.id)
+    combined = _combine_envelopes(collected, step.id, call_args)
 
     if record is None:
         return ToolEnvelope(

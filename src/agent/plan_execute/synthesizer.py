@@ -13,6 +13,7 @@ without a real API key.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any, Callable
 
@@ -170,7 +171,8 @@ def _coerce_to_text(raw: object) -> str:
         # Last-ditch: serialise the dict.
         try:
             return json.dumps(raw, ensure_ascii=False)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            print(f"[synthesizer] json.dumps failed on LLM response: {exc}", file=sys.stderr, flush=True)
             return str(raw)
     return str(raw) if raw is not None else ""
 

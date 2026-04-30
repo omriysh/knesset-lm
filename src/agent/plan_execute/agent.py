@@ -101,8 +101,8 @@ def _make_plan_from_dict(d: dict, *, version: int = 1) -> Plan | None:
         return None
     try:
         plan = Plan.from_dict(d)
-    except Exception:  # noqa: BLE001 — we'll synthesise minimal plan below
-        # Fall through to manual construction.
+    except Exception as exc:  # noqa: BLE001 — we'll synthesise minimal plan below
+        print(f"[agent] Plan.from_dict failed ({type(exc).__name__}: {exc}); falling back to manual construction", flush=True)
         plan = None
     if plan is None:
         steps_in = d.get("steps") or []
@@ -110,7 +110,8 @@ def _make_plan_from_dict(d: dict, *, version: int = 1) -> Plan | None:
         for s in steps_in:
             try:
                 steps.append(Step.from_dict(s))
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
+                print(f"[agent] Step.from_dict failed, skipping step {s!r}: {exc}", flush=True)
                 continue
         plan = Plan(
             goal=str(d.get("goal") or ""),
@@ -465,9 +466,8 @@ class PlanExecuteAgent(SubgraphAgent):
                 break
             try:
                 plan.replan(delta)
-            except ValueError:
-                # Append-only contract violated by the planner — skip the
-                # replan rather than crash.
+            except ValueError as exc:
+                print(f"[agent] plan.replan append-only contract violated, aborting replan: {exc}", flush=True)
                 break
             self._plan = plan
             post_replans += 1
@@ -526,11 +526,12 @@ class PlanExecuteAgent(SubgraphAgent):
                         provenance={"step_id": step_id},
                         error=error_kind,
                     )
-                    entry_id     = self._add_evidence(step_id, "internal:error", error_env)
-                    tool_name    = ""
-                    step_summary = reason[:200]
-                    step_full    = ""
-                    step_error   = error_kind
+                    entry_id        = self._add_evidence(step_id, "internal:error", error_env)
+                    tool_name       = ""
+                    step_summary    = reason[:200]
+                    step_full       = ""
+                    step_error      = error_kind
+                    step_tool_calls = []
                     llm_events: list[SubgraphEvent] = []
                     if (
                         not abandon_triggered
@@ -547,6 +548,8 @@ class PlanExecuteAgent(SubgraphAgent):
                     step_summary = envelope.summary or ""
                     step_full    = (envelope.full or "")[:8000]
                     step_error   = envelope.error
+                    prov = envelope.provenance if isinstance(envelope.provenance, dict) else {}
+                    step_tool_calls = prov.get("tool_calls") or []
                     if (
                         not abandon_triggered
                         and step_obj is not None
@@ -572,6 +575,7 @@ class PlanExecuteAgent(SubgraphAgent):
                         "summary":      step_summary,
                         "full":         step_full,
                         "tool_name":    tool_name,
+                        "tool_calls":   step_tool_calls,
                         "error":        step_error,
                     },
                 )
