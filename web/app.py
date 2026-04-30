@@ -58,6 +58,31 @@ from agent.llm.gemma import GemmaLlamaBackend
 _TOOL_RESULT_CACHE: dict[str, str] = {}
 
 
+def _strip_footnote_fulls(ev_data: dict) -> dict:
+    """Strip `full` from footnotes in node_result subgraph outputs; cache each one.
+
+    Only mutates node_result events that carry subgraph outputs with footnotes.
+    All other events pass through unchanged.
+    """
+    subgraph = ev_data.get("subgraph")
+    if not subgraph:
+        return ev_data
+    outputs = subgraph.get("outputs") or {}
+    footnotes = outputs.get("footnotes")
+    if not isinstance(footnotes, list):
+        return ev_data
+    patched = []
+    for fn in footnotes:
+        full = fn.get("full") or ""
+        if full:
+            ref_id = uuid.uuid4().hex[:16]
+            _TOOL_RESULT_CACHE[ref_id] = full
+            patched.append({**fn, "full": "", "result_ref": ref_id})
+        else:
+            patched.append({**fn, "result_ref": None})
+    return {**ev_data, "subgraph": {**subgraph, "outputs": {**outputs, "footnotes": patched}}}
+
+
 def _strip_tool_result_fulls(ev_data: dict) -> dict:
     """Strip full text from step_completed tool_call_results; store in cache.
 
@@ -453,7 +478,7 @@ async def research_start(req: ResearchStartRequest, request: Request):
                     yield _sse("thinking_token", {"text": ev_data})
 
                 elif ev_type == "node_result":
-                    yield _sse("node_result", ev_data)
+                    yield _sse("node_result", _strip_footnote_fulls(ev_data))
 
                 elif ev_type == "subgraph_event":
                     stripped = _strip_tool_result_fulls(ev_data)
@@ -687,7 +712,7 @@ async def research_respond(
                     yield _sse("thinking_token", {"text": ev_data})
 
                 elif ev_type == "node_result":
-                    yield _sse("node_result", ev_data)
+                    yield _sse("node_result", _strip_footnote_fulls(ev_data))
 
                 elif ev_type == "subgraph_event":
                     stripped = _strip_tool_result_fulls(ev_data)

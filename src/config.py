@@ -162,6 +162,12 @@ BILL_TEXT_DEFAULT_MAX_CHARS  = 1000
 BILL_TEXT_MIN_MAX_CHARS      = 200
 BILL_TEXT_MAX_MAX_CHARS      = 8000
 
+# Tool result truncation
+# Max chars of `full` text sent to the executor LLM per tool result message.
+EXECUTOR_TOOL_RESULT_CHARS   = 4000
+# Max chars of `full` text included in the step_completed SSE event payload.
+AGENT_STEP_FULL_CHARS        = 8000
+
 # Embedding device for query path. Flip to "cpu" when the local model
 # running on llama-server is large enough to leave no VRAM headroom.
 EMBED_DEVICE_FOR_QUERY = "cuda"

@@ -566,7 +566,7 @@ class PlanExecuteAgent(SubgraphAgent):
                     if ev:
                         ev.set()
                     step_summary = envelope.summary or ""
-                    step_full    = (envelope.full or "")[:8000]
+                    step_full    = (envelope.full or "")[: config.AGENT_STEP_FULL_CHARS]
                     step_error   = envelope.error
                     prov = envelope.provenance if isinstance(envelope.provenance, dict) else {}
                     step_tool_calls        = prov.get("tool_calls") or []
@@ -676,6 +676,7 @@ class PlanExecuteAgent(SubgraphAgent):
                 "tool_name":  entry.tool_name,
                 "step_id":    entry.step_id,
                 "summary":    env.summary or "",
+                "full":       env.full or "",
                 "metadata":   env.metadata or {},
                 "provenance": env.provenance or {},
                 "truncated":  bool(env.truncated),

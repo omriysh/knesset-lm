@@ -1542,3 +1542,197 @@ body { font-size: 16px; }
   transition: background 0.15s;
 }
 #settings-close:hover { background: #e8e8e5; }
+
+/* ── Evidence citations ─────────────────────────────────────── */
+sup.ev-cite {
+  color: #6366f1;
+  font-size: 0.65em;
+  font-weight: 700;
+  cursor: default;
+  padding: 0 1px;
+  vertical-align: super;
+}
+
+.ev-sources {
+  border: 1px solid #e2e3df;
+  border-radius: 8px;
+  margin-top: 12px;
+  background: #f7f6f3;
+  overflow: hidden;
+}
+
+.ev-sources-summary {
+  cursor: pointer;
+  padding: 6px 12px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #5b5c5a;
+  letter-spacing: 0.03em;
+  user-select: none;
+  list-style: none;
+  direction: rtl;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ev-sources-summary::-webkit-details-marker { display: none; }
+.ev-sources-summary::before {
+  content: '▶';
+  font-size: 0.55rem;
+  transition: transform 0.15s;
+  display: inline-block;
+  flex-shrink: 0;
+}
+details.ev-sources[open] > .ev-sources-summary::before { transform: rotate(90deg); }
+.ev-sources-summary:hover { background: #e8e8e5; }
+
+.ev-sources-body {
+  border-top: 1px solid #e2e3df;
+  padding: 6px 12px 10px;
+}
+
+/* Static (no full content) and lazy (expandable) source rows */
+.ev-source-entry {
+  border-bottom: 1px solid #eeeeed;
+  font-size: 0.73rem;
+  direction: rtl;
+}
+.ev-source-entry:last-child { border-bottom: none; }
+
+/* Header row — shared by both <summary> and plain <div> wrappers */
+.ev-source-entry > summary.ev-source-header,
+.ev-source-entry > div.ev-source-header {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 5px 2px;
+}
+.ev-source-entry > summary.ev-source-header {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.ev-source-entry > summary.ev-source-header::-webkit-details-marker { display: none; }
+.ev-source-entry > summary.ev-source-header::before {
+  content: '▶';
+  font-size: 0.5rem;
+  color: #9ca3af;
+  transition: transform 0.12s;
+  display: inline-block;
+  flex-shrink: 0;
+  margin-left: 2px;
+}
+details.ev-source-entry[open] > summary.ev-source-header::before { transform: rotate(90deg); }
+.ev-source-entry > summary.ev-source-header:hover { background: #f3f4f6; }
+
+/* Full-content slot */
+.ev-source-full-slot {
+  padding: 8px;
+  background: #fafaf8;
+  border-top: 1px solid #eeeeec;
+}
+.ev-source-placeholder,
+.ev-source-loading,
+.ev-source-empty {
+  font-size: 0.68rem;
+  color: #9ca3af;
+  text-align: center;
+  padding: 4px 0;
+}
+.ev-source-error { font-size: 0.68rem; color: #ef4444; padding: 4px 0; }
+
+/* Evidence cards (list of tool results) */
+.ev-full-cards { display: flex; flex-direction: column; gap: 5px; }
+
+.ev-full-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 5px;
+  background: #fff;
+  overflow: hidden;
+  font-size: 0.7rem;
+  direction: rtl;
+}
+
+.ev-card-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 8px;
+  background: #f3f4f6;
+  border-bottom: 1px solid #e5e7eb;
+}
+.ev-card-label {
+  font-weight: 600;
+  color: #1f2937;
+}
+.ev-card-metas { display: flex; gap: 3px; flex-wrap: wrap; }
+.ev-card-meta-badge {
+  background: #e0e7ff;
+  color: #4338ca;
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-size: 0.63rem;
+  white-space: nowrap;
+}
+
+.ev-card-body { padding: 5px 8px; }
+.ev-card-text { color: #374151; line-height: 1.5; white-space: pre-wrap; }
+.ev-card-bullets { display: flex; flex-direction: column; gap: 2px; }
+.ev-card-bullet { color: #374151; line-height: 1.4; }
+.ev-card-more { color: #9ca3af; font-style: italic; }
+.ev-card-rest {
+  font-size: 0.61rem;
+  color: #6b7280;
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  overflow-x: auto;
+  max-height: 120px;
+}
+.ev-truncated-notice {
+  font-size: 0.67rem;
+  color: #9ca3af;
+  text-align: center;
+  padding: 4px 0;
+  font-style: italic;
+}
+.ev-full-json {
+  font-size: 0.63rem;
+  color: #374151;
+  white-space: pre-wrap;
+  overflow-x: auto;
+  padding: 6px 8px;
+  background: #f9fafb;
+  border-radius: 4px;
+  max-height: 300px;
+  margin: 0;
+}
+
+.ev-source-num {
+  font-weight: 700;
+  color: #6366f1;
+  flex-shrink: 0;
+  min-width: 22px;
+}
+
+.ev-source-tool {
+  font-family: monospace;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #374151;
+  flex-shrink: 0;
+}
+
+.ev-source-step {
+  font-size: 0.66rem;
+  color: #9ca3af;
+  flex-shrink: 0;
+}
+
+.ev-source-summary {
+  color: #4b5563;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

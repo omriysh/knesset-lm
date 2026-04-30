@@ -43,6 +43,44 @@ def _load_prompt(name: str) -> str:
     return _PROMPT_CACHE[name]
 
 
+def _truncate_tool_result(text: str, max_chars: int) -> str:
+    """Truncate a tool result string without corrupting JSON.
+
+    If the text fits, returns it unchanged.
+    If it's a JSON array, keeps as many items as fit within max_chars and
+    appends a truncation sentinel so the result stays valid JSON.
+    Otherwise truncates the string and appends a [TRUNCATED] marker.
+    """
+    if len(text) <= max_chars:
+        return text
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        parsed = None
+
+    if isinstance(parsed, list):
+        kept: list = []
+        sentinel_len = len('{"_truncated":true,"items_removed":99999}') + 2  # comma + item
+        budget = max_chars - 2 - sentinel_len  # reserve for [] and sentinel
+        running = 0
+        for item in parsed:
+            s = json.dumps(item, ensure_ascii=False)
+            comma = 2 if kept else 0  # ", " between items
+            if running + comma + len(s) <= budget:
+                kept.append(item)
+                running += comma + len(s)
+            else:
+                break
+        removed = len(parsed) - len(kept)
+        if removed > 0:
+            kept.append({"_truncated": True, "items_removed": removed})
+        return json.dumps(kept, ensure_ascii=False)
+
+    # Non-list JSON or plain text: safe string truncation
+    marker = " [TRUNCATED]"
+    return text[: max_chars - len(marker)] + marker
+
+
 # ---------------------------------------------------------------------------
 # record_evidence pseudo-tool schema
 # ---------------------------------------------------------------------------
@@ -458,7 +496,7 @@ def execute_step(
             "tool_call_id": tc_id,
             "content": json.dumps({
                 "summary":  envelope.summary or "",
-                "full":     (envelope.full or "")[:2000],
+                "full":     _truncate_tool_result(envelope.full or "", config.EXECUTOR_TOOL_RESULT_CHARS),
                 "error":    envelope.error,
             }, ensure_ascii=False),
         })

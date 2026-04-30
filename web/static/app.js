@@ -101,6 +101,7 @@ async function startQuery() {
   let   rawAnswer         = '';
   let   subgraphContainer = null;
   let   subgraphPhase     = null;
+  let   pendingFootnotes  = [];
   let   curEvent          = '';
   let   buf               = '';
 
@@ -131,10 +132,11 @@ async function startQuery() {
           try { data = JSON.parse(line.slice(6)); } catch { continue; }
           handleEvent(curEvent, data, {
             stagesEl, statusEl,
-            get agentEl()           { return agentEl; },           set agentEl(v)           { agentEl = v; },
-            get rawAnswer()         { return rawAnswer; },         set rawAnswer(v)         { rawAnswer = v; },
-            get subgraphContainer() { return subgraphContainer; }, set subgraphContainer(v) { subgraphContainer = v; },
-            get subgraphPhase()     { return subgraphPhase; },     set subgraphPhase(v)     { subgraphPhase = v; },
+            get agentEl()            { return agentEl; },            set agentEl(v)            { agentEl = v; },
+            get rawAnswer()          { return rawAnswer; },          set rawAnswer(v)          { rawAnswer = v; },
+            get subgraphContainer()  { return subgraphContainer; },  set subgraphContainer(v)  { subgraphContainer = v; },
+            get subgraphPhase()      { return subgraphPhase; },      set subgraphPhase(v)      { subgraphPhase = v; },
+            get pendingFootnotes()   { return pendingFootnotes; },   set pendingFootnotes(v)   { pendingFootnotes = v; },
           });
         }
       }
@@ -151,6 +153,11 @@ async function startQuery() {
         // Remove streaming cursor if present
         const cursor = agentEl.querySelector('.stream-cursor');
         if (cursor) cursor.remove();
+        // Inject inline citations + sources panel
+        if (pendingFootnotes.length > 0) {
+          _applyEvidenceCitations(body, pendingFootnotes);
+          agentEl.insertAdjacentHTML('beforeend', _buildSourcesHtml(pendingFootnotes, sessionId));
+        }
       }
     }
     setStatusMsg(statusEl, '');
@@ -187,6 +194,10 @@ function handleEvent(ev, data, refs) {
 
     case 'node_result':
       if (data.subgraph) {
+        const footnotes = data.subgraph?.outputs?.footnotes;
+        if (Array.isArray(footnotes) && footnotes.length > 0) {
+          refs.pendingFootnotes = footnotes;
+        }
         finaliseSubgraphCard(refs.subgraphContainer);
         refs.subgraphContainer = null;
         refs.subgraphPhase     = null;
@@ -424,6 +435,7 @@ async function submitResponse(outputVar, value) {
   let   rawAnswer         = '';
   let   subgraphContainer = null;
   let   subgraphPhase     = null;
+  let   pendingFootnotes  = [];
   let   curEvent          = '';
   let   buf               = '';
 
@@ -454,10 +466,11 @@ async function submitResponse(outputVar, value) {
           try { data = JSON.parse(line.slice(6)); } catch { continue; }
           handleEvent(curEvent, data, {
             stagesEl, statusEl,
-            get agentEl()           { return agentEl; },           set agentEl(v)           { agentEl = v; },
-            get rawAnswer()         { return rawAnswer; },         set rawAnswer(v)         { rawAnswer = v; },
-            get subgraphContainer() { return subgraphContainer; }, set subgraphContainer(v) { subgraphContainer = v; },
-            get subgraphPhase()     { return subgraphPhase; },     set subgraphPhase(v)     { subgraphPhase = v; },
+            get agentEl()            { return agentEl; },            set agentEl(v)            { agentEl = v; },
+            get rawAnswer()          { return rawAnswer; },          set rawAnswer(v)          { rawAnswer = v; },
+            get subgraphContainer()  { return subgraphContainer; },  set subgraphContainer(v)  { subgraphContainer = v; },
+            get subgraphPhase()      { return subgraphPhase; },      set subgraphPhase(v)      { subgraphPhase = v; },
+            get pendingFootnotes()   { return pendingFootnotes; },   set pendingFootnotes(v)   { pendingFootnotes = v; },
           });
         }
       }
@@ -472,6 +485,11 @@ async function submitResponse(outputVar, value) {
         body.innerHTML = marked.parse(rawAnswer);
         const cursor = agentEl.querySelector('.stream-cursor');
         if (cursor) cursor.remove();
+        // Inject inline citations + sources panel
+        if (pendingFootnotes.length > 0) {
+          _applyEvidenceCitations(body, pendingFootnotes);
+          agentEl.insertAdjacentHTML('beforeend', _buildSourcesHtml(pendingFootnotes, sessionId));
+        }
       }
     }
     setStatusMsg(statusEl, '');
@@ -1028,12 +1046,14 @@ function _updateToolResultTimer(el) {
 document.addEventListener('toggle', function(e) {
   const toggled = e.target;
 
-  // If a lazy panel opened and not yet loaded, fetch the result.
   if (toggled.classList && toggled.classList.contains('tool-result-lazy') && toggled.open) {
     _loadToolResult(toggled);
   }
+  if (toggled.classList && toggled.classList.contains('ev-source-lazy') && toggled.open) {
+    _loadEvidenceFull(toggled);
+  }
 
-  // Re-evaluate timer for every loaded lazy panel in the document.
+  // Re-evaluate unload timer for every loaded tool-result panel.
   document.querySelectorAll('.tool-result-lazy[data-loaded="1"]').forEach(_updateToolResultTimer);
 }, true); // capture phase — toggle doesn't bubble
 
@@ -1074,6 +1094,147 @@ function renderRetrievalHtml(r) {
     `<summary class="sub-summary">${label}</summary>` +
     `<div class="sub-details-body">${body}</div>` +
     `</details>`
+  );
+}
+
+/* ── Evidence citations ─────────────────────────────────────── */
+
+function _applyEvidenceCitations(bodyEl, footnotes) {
+  const idxMap = {};
+  footnotes.forEach((fn, i) => { idxMap[fn.id] = i + 1; });
+  bodyEl.innerHTML = bodyEl.innerHTML.replace(/\[ev_([0-9a-f]+)\]/g, (match, hex) => {
+    const evId = 'ev_' + hex;
+    const n = idxMap[evId];
+    if (!n) return match;
+    return `<sup class="ev-cite" title="${evId}">[${n}]</sup>`;
+  });
+}
+
+function _buildSourcesHtml(footnotes, sid) {
+  const entries = footnotes.map((fn, i) => {
+    const n        = i + 1;
+    const toolName = fn.tool_name  || '';
+    const stepId   = fn.step_id    || '';
+    const summary  = fn.summary    || '';
+    const ref      = fn.result_ref || '';
+    const header   = (
+      `<span class="ev-source-num">[${n}]</span>` +
+      `<span class="ev-source-tool">${esc(toolName)}</span>` +
+      `<span class="ev-source-step">${esc(stepId)}</span>` +
+      `<span class="ev-source-summary">${esc(summary)}</span>`
+    );
+    if (ref) {
+      return (
+        `<details class="ev-source-entry ev-source-lazy"` +
+        ` data-result-ref="${esc(ref)}" data-session-id="${esc(sid || '')}"` +
+        ` data-tool-name="${esc(toolName)}" data-loaded="0">` +
+        `<summary class="ev-source-header">${header}</summary>` +
+        `<div class="ev-source-full-slot"><div class="ev-source-placeholder">▼ לחץ להצגת מקור מלא</div></div>` +
+        `</details>`
+      );
+    }
+    return `<div class="ev-source-entry"><div class="ev-source-header">${header}</div></div>`;
+  }).join('');
+  return (
+    `<details class="ev-sources">` +
+    `<summary class="ev-sources-summary">מקורות (${footnotes.length})</summary>` +
+    `<div class="ev-sources-body">${entries}</div>` +
+    `</details>`
+  );
+}
+
+async function _loadEvidenceFull(el) {
+  if (el.dataset.loaded === '1' || el.dataset.loading === '1') return;
+  el.dataset.loading = '1';
+  const slot = el.querySelector('.ev-source-full-slot');
+  if (slot) slot.innerHTML = '<div class="ev-source-loading">טוען…</div>';
+  const ref  = el.dataset.resultRef;
+  const sid  = el.dataset.sessionId;
+  const tool = el.dataset.toolName || '';
+  try {
+    const resp = await fetch(`/api/research/${sid}/tool_result/${ref}`);
+    const json = await resp.json();
+    if (slot) slot.innerHTML = _renderEvidenceFull(json.full || '', tool);
+    el.dataset.loaded  = '1';
+    el.dataset.loading = '0';
+  } catch (err) {
+    if (slot) slot.innerHTML = `<div class="ev-source-error">שגיאה: ${esc(String(err))}</div>`;
+    el.dataset.loading = '0';
+  }
+}
+
+function _renderEvidenceFull(text, toolName) {
+  if (!text) return '<div class="ev-source-empty">אין תוכן</div>';
+  let data;
+  try { data = JSON.parse(text); } catch { return `<div class="ev-card-text">${esc(text)}</div>`; }
+  if (Array.isArray(data)) {
+    if (data.length === 0) return '<div class="ev-source-empty">אין תוצאות</div>';
+    const real      = data.filter(x => !(x && x._truncated));
+    const truncItem = data.find(x => x && x._truncated);
+    const cards     = real.map(item => _renderEvidenceCard(item)).join('');
+    const notice    = truncItem
+      ? `<div class="ev-truncated-notice">עוד ${truncItem.items_removed} פריטים לא הוצגו</div>`
+      : '';
+    return `<div class="ev-full-cards">${cards}${notice}</div>`;
+  }
+  if (typeof data === 'object' && data !== null) return _renderEvidenceCard(data);
+  return `<pre class="ev-full-json">${esc(JSON.stringify(data, null, 2))}</pre>`;
+}
+
+function _renderEvidenceCard(item) {
+  if (typeof item !== 'object' || item === null) {
+    return `<div class="ev-full-card"><pre class="ev-card-rest">${esc(String(item))}</pre></div>`;
+  }
+  const LABELS  = ['label', 'committee_name', 'committee', 'name', 'title', 'mk_name'];
+  const METAS   = ['meeting_id', 'session_id', 'date', 'knesset_num', 'score', 'relevance_score', 'bullet_idx'];
+  const TEXTS   = ['text', 'text_he', 'body', 'content', 'summary'];
+  const LISTS   = ['bullets', 'speeches'];
+  const SKIP    = new Set(['bullet_id', 'id', '_truncated', 'items_removed', 'source_url', 'result_ref']);
+  const seen    = new Set(Object.keys(item).filter(k => SKIP.has(k)));
+
+  let labelHtml = '';
+  for (const f of LABELS) {
+    if (item[f]) { labelHtml = `<span class="ev-card-label">${esc(String(item[f]))}</span>`; seen.add(f); break; }
+  }
+  let metaBadges = '';
+  for (const f of METAS) {
+    if (item[f] != null) {
+      const v = (f === 'score' || f === 'relevance_score') ? Number(item[f]).toFixed(3) : String(item[f]);
+      metaBadges += `<span class="ev-card-meta-badge">${esc(f.replace(/_/g, ' '))}: ${esc(v)}</span>`;
+      seen.add(f);
+    }
+  }
+  let bodyHtml = '';
+  for (const f of TEXTS) {
+    if (item[f] && !seen.has(f)) {
+      const t = String(item[f]);
+      bodyHtml += `<div class="ev-card-text">${esc(t.length > 600 ? t.slice(0, 600) + '…' : t)}</div>`;
+      seen.add(f); break;
+    }
+  }
+  for (const f of LISTS) {
+    if (Array.isArray(item[f]) && item[f].length > 0 && !seen.has(f)) {
+      const items = item[f].slice(0, 5);
+      const more  = item[f].length - items.length;
+      bodyHtml += `<div class="ev-card-bullets">` +
+        items.map(b => `<div class="ev-card-bullet">• ${esc(typeof b === 'string' ? b : JSON.stringify(b))}</div>`).join('') +
+        (more > 0 ? `<div class="ev-card-bullet ev-card-more">+${more} נוספים…</div>` : '') +
+        `</div>`;
+      seen.add(f);
+    }
+  }
+  const rest = Object.entries(item).filter(([k]) => !seen.has(k));
+  if (rest.length > 0) {
+    bodyHtml += `<pre class="ev-card-rest">${esc(JSON.stringify(Object.fromEntries(rest), null, 2))}</pre>`;
+  }
+  const headerHtml = (labelHtml || metaBadges)
+    ? `<div class="ev-card-header">${labelHtml}<span class="ev-card-metas">${metaBadges}</span></div>`
+    : '';
+  return (
+    `<div class="ev-full-card">` +
+    headerHtml +
+    (bodyHtml ? `<div class="ev-card-body">${bodyHtml}</div>` : '') +
+    `</div>`
   );
 }
 
