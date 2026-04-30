@@ -29,18 +29,21 @@ Decision protocol:
    arguments to tools MUST be in Hebrew. You may call up to
    {max_tool_calls} tools total for this step.
 
-   If args_hint points you to the result of a previous step, search it
-   in the evidence and try to `expend` it.
+3. If `args_hint` points you to the result of a previous step, search
+   the evidence for previous tool calls that meat your needs, and
+   call `exapnd` to get their results.
+   The specific wording in args_hint is just there as a hint, and
+   doesn't necesserily point to a defined interface you can use.
 
-3. After each tool returns you will see its result. You may then call
+4. After each tool returns you will see its result. You may then call
    another tool if more information is needed, or proceed to step 4.
 
-4. When you have gathered enough evidence, call `record_evidence` once:
+5. When you have gathered enough evidence, call `record_evidence` once:
      - `decision`     = "produced"
      - `summary`      = 1–3 sentences covering ALL tool results,
                         focused on what is RELEVANT to `task`
 
-5. If any tool returns an error or zero results and no further tool can
+6. If any tool returns an error or zero results and no further tool can
    help, call `record_evidence` with:
      - `decision`     = "abort_step"
      - `summary`      = a short reason

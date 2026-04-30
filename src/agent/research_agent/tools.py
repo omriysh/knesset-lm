@@ -254,7 +254,9 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
             "description": (
                 "Fetch full profile for an MK. "
                 "Returns party/faction history, committee memberships, "
-                "ministerial roles. Use find_mk first to get mk_id."
+                "ministerial roles. "
+                "The id is a unique identifying number, not the name. "
+                "Use find_mk first to get mk_id."
             ),
             "properties": {
                 "mk_id":       {"type": "string"},
