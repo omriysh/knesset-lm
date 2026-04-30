@@ -51,6 +51,32 @@ from pydantic import BaseModel
 
 import config
 from agent.llm.gemma import GemmaLlamaBackend
+
+# ── Tool-result lazy-load cache ───────────────────────────────────────────────
+# Maps ref_id → full tool result text.  Populated when subgraph step_completed
+# events are streamed; served by GET /api/research/{sid}/tool_result/{ref_id}.
+_TOOL_RESULT_CACHE: dict[str, str] = {}
+
+
+def _strip_tool_result_fulls(ev_data: dict) -> dict:
+    """Strip full text from step_completed tool_call_results; store in cache.
+
+    Only mutates hook/step_completed payloads.  All other events pass through
+    unchanged.  Returns a shallow copy of ev_data so the original is untouched.
+    """
+    if ev_data.get("kind") != "hook" or ev_data.get("name") != "step_completed":
+        return ev_data
+    payload = ev_data.get("payload") or {}
+    results = payload.get("tool_call_results")
+    if not results:
+        return ev_data
+    patched_results = []
+    for tr in results:
+        full = tr.get("full") or ""
+        ref_id = uuid.uuid4().hex[:16]
+        _TOOL_RESULT_CACHE[ref_id] = full
+        patched_results.append({**tr, "full": "", "result_ref": ref_id})
+    return {**ev_data, "payload": {**payload, "tool_call_results": patched_results}}
 from agent.machine import StateMachine
 from agent.runner import MachineRunner, build_tool_registry
 from indexing.embedder import ProtocolEmbedder
@@ -430,11 +456,12 @@ async def research_start(req: ResearchStartRequest, request: Request):
                     yield _sse("node_result", ev_data)
 
                 elif ev_type == "subgraph_event":
+                    stripped = _strip_tool_result_fulls(ev_data)
                     yield _sse("subgraph_event", {
                         "type":    "subgraph_event",
-                        "kind":    ev_data.get("kind"),
-                        "name":    ev_data.get("name"),
-                        "payload": ev_data.get("payload", {}),
+                        "kind":    stripped.get("kind"),
+                        "name":    stripped.get("name"),
+                        "payload": stripped.get("payload", {}),
                     })
 
                 elif ev_type == "user_input_required":
@@ -663,11 +690,12 @@ async def research_respond(
                     yield _sse("node_result", ev_data)
 
                 elif ev_type == "subgraph_event":
+                    stripped = _strip_tool_result_fulls(ev_data)
                     yield _sse("subgraph_event", {
                         "type":    "subgraph_event",
-                        "kind":    ev_data.get("kind"),
-                        "name":    ev_data.get("name"),
-                        "payload": ev_data.get("payload", {}),
+                        "kind":    stripped.get("kind"),
+                        "name":    stripped.get("name"),
+                        "payload": stripped.get("payload", {}),
                     })
 
                 elif ev_type == "user_input_required":
@@ -764,6 +792,15 @@ async def research_delete(session_id: str, request: Request):
     # Return 204 regardless of whether the file existed (idempotent delete)
     from fastapi.responses import Response
     return Response(status_code=204)
+
+
+@app.get("/api/research/{session_id}/tool_result/{ref_id}")
+async def get_tool_result(session_id: str, ref_id: str):
+    """Return the full text for a lazily-loaded tool result panel."""
+    full = _TOOL_RESULT_CACHE.get(ref_id)
+    if full is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return JSONResponse({"full": full})
 
 
 # ── Workspace models ──────────────────────────────────────────────────────────

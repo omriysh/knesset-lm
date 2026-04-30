@@ -18,6 +18,9 @@ const submitBtn   = document.getElementById('submit-btn');
 
 marked.use({ breaks: true, gfm: true });
 
+/* ── Tool result lazy-load config ──────────────────────────── */
+const TOOL_RESULT_UNLOAD_MS = 30_000;
+
 /* ── Settings ───────────────────────────────────────────────── */
 function _stagesAlways() {
   return localStorage.getItem('showStagesAlways') === 'true';
@@ -291,7 +294,12 @@ function handleEvent(ev, data, refs) {
 
           let toolResults;
           if (toolCallResults.length > 0) {
-            toolResults = toolCallResults.map(tc => ({ name: tc.name, args: tc.args || {}, result: tc.full || tc.summary || '' }));
+            toolResults = toolCallResults.map(tc => ({
+              name:       tc.name,
+              args:       tc.args || {},
+              result:     tc.full || tc.summary || '',
+              result_ref: tc.result_ref || null,
+            }));
           } else if (toolCalls.length === 1) {
             toolResults = [{ name: toolCalls[0].name || toolName || 'כלי', args: toolCalls[0].args || {}, result: fullResult }];
           } else if (toolCalls.length > 1) {
@@ -926,22 +934,108 @@ function renderThinkingHtml(thinking, llmMs) {
 function renderToolResultHtml(tr) {
   const name      = tr.name       || '';
   const args      = tr.args       || {};
-  const result    = tr.result     || '';
   const elapsedMs = tr.elapsed_ms != null ? tr.elapsed_ms : null;
   const argsStr   = JSON.stringify(args, null, 2);
   const timeStr   = elapsedMs != null
     ? ` <span class="tool-time">${(elapsedMs / 1000).toFixed(1)}s</span>`
     : '';
   const hasArgs = Object.keys(args).length > 0;
+  const argsHtml = hasArgs
+    ? `<div class="prompt-block"><div class="prompt-role">ארגומנטים</div><pre class="prompt-text">${esc(argsStr)}</pre></div>`
+    : '';
+
+  if (tr.result_ref) {
+    // Lazy variant — full text fetched on expand
+    return (
+      `<details class="sub-details tool-result-lazy"` +
+      ` data-result-ref="${esc(tr.result_ref)}" data-session-id="${esc(sessionId || '')}" data-loaded="0">` +
+      `<summary class="sub-summary"><span class="tool-summary-label">${esc(name)}</span>${timeStr}</summary>` +
+      `<div class="sub-details-body">` +
+      argsHtml +
+      `<div class="tool-result-slot"><div class="tool-result-placeholder">▼ לחץ להצגת תוצאה</div></div>` +
+      `</div></details>`
+    );
+  }
+
+  // Inline variant (backward compat)
+  const result = tr.result || '';
   return (
     `<details class="sub-details">` +
     `<summary class="sub-summary"><span class="tool-summary-label">${esc(name)}</span>${timeStr}</summary>` +
     `<div class="sub-details-body">` +
-    (hasArgs ? `<div class="prompt-block"><div class="prompt-role">ארגומנטים</div><pre class="prompt-text">${esc(argsStr)}</pre></div>` : '') +
+    argsHtml +
     `<div class="prompt-block"><div class="prompt-role">תוצאה</div><pre class="prompt-text">${esc(result)}</pre></div>` +
     `</div></details>`
   );
 }
+
+/* ── Lazy tool result loading ───────────────────────────────── */
+
+function _isToolPanelVisible(el) {
+  if (!el.open) return false;
+  let node = el.parentElement;
+  while (node) {
+    if (node.tagName === 'DETAILS' && !node.open) return false;
+    node = node.parentElement;
+  }
+  return true;
+}
+
+async function _loadToolResult(el) {
+  if (el.dataset.loaded === '1' || el.dataset.loading === '1') return;
+  el.dataset.loading = '1';
+  const slot = el.querySelector('.tool-result-slot');
+  if (slot) slot.innerHTML = '<div class="tool-result-loading">טוען...</div>';
+  const ref = el.dataset.resultRef;
+  const sid = el.dataset.sessionId;
+  try {
+    const resp = await fetch(`/api/research/${sid}/tool_result/${ref}`);
+    const json = await resp.json();
+    const text = json.full || '';
+    if (slot) slot.innerHTML =
+      `<div class="prompt-block"><div class="prompt-role">תוצאה</div><pre class="prompt-text">${esc(text)}</pre></div>`;
+    el.dataset.loaded  = '1';
+    el.dataset.loading = '0';
+    _updateToolResultTimer(el);
+  } catch (err) {
+    if (slot) slot.innerHTML = `<div class="tool-result-error">שגיאה בטעינה: ${esc(String(err))}</div>`;
+    el.dataset.loading = '0';
+  }
+}
+
+function _unloadToolResult(el) {
+  clearTimeout(el._unloadTimer);
+  el._unloadTimer = null;
+  el.dataset.loaded = '0';
+  const slot = el.querySelector('.tool-result-slot');
+  if (slot) slot.innerHTML = '<div class="tool-result-placeholder">▼ לחץ להצגת תוצאה</div>';
+}
+
+function _updateToolResultTimer(el) {
+  if (el.dataset.loaded !== '1') return;
+  if (_isToolPanelVisible(el)) {
+    clearTimeout(el._unloadTimer);
+    el._unloadTimer = null;
+  } else {
+    if (!el._unloadTimer) {
+      el._unloadTimer = setTimeout(() => _unloadToolResult(el), TOOL_RESULT_UNLOAD_MS);
+    }
+  }
+}
+
+// Global toggle handler — handles both self-open (trigger load) and
+// any ancestor toggle (re-evaluate timer for all loaded lazy panels).
+document.addEventListener('toggle', function(e) {
+  const toggled = e.target;
+
+  // If a lazy panel opened and not yet loaded, fetch the result.
+  if (toggled.classList && toggled.classList.contains('tool-result-lazy') && toggled.open) {
+    _loadToolResult(toggled);
+  }
+
+  // Re-evaluate timer for every loaded lazy panel in the document.
+  document.querySelectorAll('.tool-result-lazy[data-loaded="1"]').forEach(_updateToolResultTimer);
+}, true); // capture phase — toggle doesn't bubble
 
 function renderRetrievalHtml(r) {
   const meetings = r.meetings      || [];
