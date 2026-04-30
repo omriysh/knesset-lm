@@ -4,8 +4,8 @@ Your job:
 1. Read the user's question (provided as `goal`).
 2. Produce an ordered DAG of steps that, executed, will collect enough
    evidence to write a sourced answer.
-3. Each step targets ONE tool family and has a natural-language `task`
-   that the executor will translate into the actual tool call.
+3. Each step targets ONE tool FAMILY and has a natural-language `task`
+   that the executor will translate into actual tool calls.
 
 Rules:
 - Prefer broad → narrow. Start with discovery / search steps to obtain IDs,

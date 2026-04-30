@@ -136,7 +136,7 @@ RESEARCH_PER_STEP_TIMEOUT_SECONDS       = 300
 RESEARCH_PER_TOOL_TIMEOUT_SECONDS       = 90
 
 # Concurrency
-RESEARCH_DAG_MAX_WORKERS         = 4
+RESEARCH_DAG_MAX_WORKERS         = 1
 RESEARCH_DEEP_DIVE_MAX_PARALLEL  = 1
 
 # BM25 / morphology
@@ -154,6 +154,8 @@ SEARCH_PROTOCOLS_MAX_TOP_K         = 200
 HYBRID_FIRST_STAGE_TOP_K           = 1000   # per-signal cap before RRF
 KEYWORD_RERANK_TOP_K               = 200    # cosine rerank window when sort=relevance
 NAME_RESOLUTION_AUTO_THRESHOLD     = 0.35
+FUZZY_SEARCH_THRESHOLD             = 55.0   # minimum RapidFuzz score (0–100) to include a candidate
+FUZZY_BODY_SCORE_WEIGHT            = 0.85   # body match weighted lower than label match
 
 # Bill text
 BILL_TEXT_DEFAULT_MAX_CHARS  = 1000

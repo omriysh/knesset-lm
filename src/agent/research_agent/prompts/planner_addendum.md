@@ -9,10 +9,10 @@ generic rules above.
 ## 1. Resolve named entities BEFORE you use them
 
 The user's question almost always names entities in free text — an MK
-("בני גנץ", "Smotrich"), a committee ("ועדת החוקה"), a bill ("חוק
+("בני גנץ", "סמוטריץ'"), a committee ("ועדת החוקה"), a bill ("חוק
 ההסדרים"), or a vote ("ההצבעה על מתווה הגז"). Those strings are NOT
-identifiers. Before any step that references them as if they were IDs,
-plan a `find_*` step that turns the name into a stable id:
+identifiers. Any step that references them as if they were IDs, has
+to use a `find_*` tool that turns the name into a stable id:
 
   - person → `find_mk` → `mk_id`
   - committee → `find_committee` → `committee_id`
@@ -22,13 +22,13 @@ plan a `find_*` step that turns the name into a stable id:
 A downstream step that consumes one of these IDs MUST list the
 corresponding `find_*` step in its `deps`. Skipping resolution and
 embedding a free-text name into an `args_hint` like
-`{"mk_id": "Bibi Netanyahu"}` is a planning error — the executor will
+`{"mk_id": "בנימין נתניהו"}` is a planning error — the executor will
 reject it and the pre-critic will flag it as PHANTOM_ENTITY.
 
-The only exception is the `query`/`topic` field on discovery tools
-(`search_topics`, `search_protocols_keyword`, `get_votes_on_topic`,
-etc.): those accept free-text Hebrew or English. Do not pre-resolve
-topic words.
+When you are writing args_hint, the task and the expected evidence,
+make sure to ALWAYS use the Hebrew names of MKs, committees and laws.
+The tools take only Hebrew, an English hint can throw the executor
+off and the plan wouldn't work.
 
 ## 2. Cite meetings by `meeting_id`
 

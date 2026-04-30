@@ -25,8 +25,12 @@ Decision protocol:
 
 2. Otherwise, call tools from your allowed set one at a time. Use
    `args_hint` as a starting point but correct names / IDs / dates
-   where prior evidence supplies better values. You may call up to
+   where prior evidence supplies better values. Names and free-text
+   arguments to tools MUST be in Hebrew. You may call up to
    {max_tool_calls} tools total for this step.
+
+   If args_hint points you to the result of a previous step, search it
+   in the evidence and try to `expend` it.
 
 3. After each tool returns you will see its result. You may then call
    another tool if more information is needed, or proceed to step 4.

@@ -25,6 +25,7 @@ field per §4.3.
 from __future__ import annotations
 
 import json
+import sys
 import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,21 +40,19 @@ from utils.knesset_db import (
     _get_bill_text_by_id,
     _resolve_bill_by_name,
     get_bill_details,
+    get_party_members,
     get_session_transcript,
 )
 from utils.tool_helpers.adapters import (
-    adapt_get_bill_details,
-    adapt_get_bill_text,
     adapt_get_committee_members,
     adapt_get_committee_sessions,
-    adapt_get_mk_committees,
-    adapt_get_mk_profile,
     adapt_get_mk_votes,
     adapt_get_recent_votes,
     adapt_get_votes_on_topic,
     adapt_get_votes_on_topic_by_mk,
     fetch_committee_record,
 )
+from utils.tool_helpers.fuzzy_name_index import FuzzyNameIndex
 from utils.tool_helpers.name_search import name_search
 
 
@@ -110,6 +109,7 @@ def dispatch(registry: ToolRegistry, name: str, args: dict) -> ToolEnvelope:
     """
     spec = _find_spec(registry, name)
     if spec is None:
+        print(f"[tools] unknown tool: {name!r}", file=sys.stderr, flush=True)
         return ToolEnvelope(
             summary="",
             full="",
@@ -118,9 +118,18 @@ def dispatch(registry: ToolRegistry, name: str, args: dict) -> ToolEnvelope:
             error="unknown_tool",
         )
 
+    args_safe = _safe_args(args)
+    args_preview = json.dumps(args_safe, ensure_ascii=False)[:300]
+    print(f"[tools] → {name}  args={args_preview}", flush=True)
+
     try:
         result = spec.handler(args or {})
     except Exception as exc:  # noqa: BLE001 — surface to envelope
+        print(
+            f"[tools] ✗ {name} EXCEPTION {type(exc).__name__}: {exc}\n"
+            + traceback.format_exc(),
+            file=sys.stderr, flush=True,
+        )
         return ToolEnvelope(
             summary="",
             full="",
@@ -131,11 +140,12 @@ def dispatch(registry: ToolRegistry, name: str, args: dict) -> ToolEnvelope:
                 "exception": str(exc),
                 "traceback": traceback.format_exc(),
             },
-            provenance={"tool_name": name, "args": _safe_args(args)},
+            provenance={"tool_name": name, "args": args_safe},
             error="dispatch_exception",
         )
 
     if not isinstance(result, ToolEnvelope):
+        print(f"[tools] ← {name}  (non-envelope result)", flush=True)
         return ToolEnvelope(
             summary="",
             full=json.dumps(result, ensure_ascii=False, default=str)
@@ -144,6 +154,12 @@ def dispatch(registry: ToolRegistry, name: str, args: dict) -> ToolEnvelope:
             provenance={"tool_name": name},
             error="handler_returned_non_envelope",
         )
+
+    status = f"error={result.error}" if result.error else "ok"
+    summary_preview = (result.summary or "")[:120]
+    print(f"[tools] ← {name}  {status}  summary={summary_preview!r}", flush=True)
+    print(f"[tools] ← {name}  {status}  full:", flush=True)
+    print(result.full or "", flush=True)
     return result
 
 
@@ -158,7 +174,8 @@ def _safe_args(args: dict) -> dict:
     """Return a JSON-roundtrippable copy of ``args`` for provenance."""
     try:
         return json.loads(json.dumps(args, ensure_ascii=False, default=str))
-    except Exception:
+    except Exception as exc:
+        print(f"[tools] _safe_args serialisation failed: {exc}", file=sys.stderr, flush=True)
         return {"_repr": repr(args)}
 
 
@@ -515,6 +532,35 @@ def handle_find_vote(args: dict) -> ToolEnvelope:
     )
 
 
+def handle_find_party(args: dict) -> ToolEnvelope:
+    """Fuzzy-match a party name and return all its members for a given Knesset."""
+    query       = (args.get("query") or "").strip()
+    knesset_num = int(args.get("knesset_num") or 25)
+    top_k       = int(args.get("top_k") or 3)
+
+    if not query:
+        return _validation_error("missing_query", kind="search", source="parties",
+                                 knesset_num=knesset_num)
+
+    results = get_party_members(party_query=query, knesset_num=knesset_num, top_k=top_k)
+
+    if not results:
+        return ToolEnvelope(
+            summary=f"לא נמצאו מפלגות לשאילתה '{query}'",
+            full="[]",
+            metadata={"kind": "search", "source": "parties", "count": 0},
+            provenance={"query": query, "knesset_num": knesset_num},
+        )
+
+    summary_parts = [f"{r['party']} ({r['mk_count']} ח\"כ)" for r in results]
+    return ToolEnvelope(
+        summary=f"מפלגות: {', '.join(summary_parts)}",
+        full=json.dumps(results, ensure_ascii=False),
+        metadata={"kind": "search", "source": "parties", "count": len(results)},
+        provenance={"query": query, "knesset_num": knesset_num},
+    )
+
+
 def _generic_find(
     args: dict,
     *,
@@ -542,15 +588,17 @@ def _generic_find(
         return _bm25_missing_envelope(target, knesset_num)
 
     try:
-        candidates = name_search(
-            query,
-            bm25_index=bm25,
-            fetch_by_id=fetch_record,
-            knesset_num=knesset_num,
-            top_k=top_k,
-        )
+        fuzzy = FuzzyNameIndex.from_bm25(bm25)
     finally:
         bm25.close()
+
+    candidates = name_search(
+        query,
+        fuzzy_index=fuzzy,
+        fetch_by_id=fetch_record,
+        knesset_num=knesset_num,
+        top_k=top_k,
+    )
 
     payload: list[dict] = []
     for c in candidates:
@@ -628,96 +676,81 @@ def _fetch_vote_record(vote_id: str) -> dict | None:
 
 
 def handle_get_mk_profile(args: dict) -> ToolEnvelope:
-    """Resolve an MK by ``mk_id`` (preferred) or ``name``."""
     mk_id = (args.get("mk_id") or "").strip()
-    name = (args.get("name") or "").strip()
     knesset_num = int(args.get("knesset_num") or 25)
 
-    if mk_id:
-        record = _fetch_mk_record(mk_id)
-        if record is None:
-            return _validation_error(
-                "mk_not_found", kind="fetch", source="oknesset",
-                mk_id=mk_id, knesset_num=knesset_num,
-            )
-        return ToolEnvelope(
-            summary="",
-            full=json.dumps(record, ensure_ascii=False, default=str),
-            metadata={"kind": "fetch", "source": "oknesset", "count": 1},
-            provenance={"mk_id": mk_id, "knesset_num": knesset_num},
-        )
-
-    if not name:
+    if not mk_id:
         return _validation_error(
-            "missing_mk_id_or_name", kind="fetch", source="oknesset",
+            "missing_mk_id", kind="fetch", source="oknesset",
             knesset_num=knesset_num,
         )
-    return adapt_get_mk_profile(name=name, knesset_num=knesset_num)
+    record = _fetch_mk_record(mk_id)
+    if record is None:
+        return _validation_error(
+            "mk_not_found", kind="fetch", source="oknesset",
+            mk_id=mk_id, knesset_num=knesset_num,
+        )
+    return ToolEnvelope(
+        summary="",
+        full=json.dumps(record, ensure_ascii=False, default=str),
+        metadata={"kind": "fetch", "source": "oknesset", "count": 1},
+        provenance={"mk_id": mk_id, "knesset_num": knesset_num},
+    )
 
 
 def handle_get_mk_committees(args: dict) -> ToolEnvelope:
     mk_id = (args.get("mk_id") or "").strip()
-    name = (args.get("name") or "").strip()
     knesset_num = int(args.get("knesset_num") or 25)
 
-    if mk_id:
-        record = _fetch_mk_record(mk_id)
-        if record is None:
-            return _validation_error(
-                "mk_not_found", kind="fetch", source="oknesset",
-                mk_id=mk_id, knesset_num=knesset_num,
-            )
-        # Use the same projection as adapter.adapt_get_mk_committees but
-        # on the already-resolved record.
-        positions = record.get("committee_positions") or []
-        filtered = [
-            p for p in positions
-            if not isinstance(p, dict) or p.get("knesset") in (None, knesset_num)
-        ]
-        payload = {
-            "mk_id":               mk_id,
-            "full_name":           record.get("full_name") or record.get("mk_individual_name") or "",
-            "knesset_num":         knesset_num,
-            "committee_positions": filtered,
-        }
-        return ToolEnvelope(
-            summary="",
-            full=json.dumps(payload, ensure_ascii=False, default=str),
-            metadata={"kind": "fetch", "source": "oknesset", "count": 1},
-            provenance={"mk_id": mk_id, "knesset_num": knesset_num},
-        )
-
-    if not name:
+    if not mk_id:
         return _validation_error(
-            "missing_mk_id_or_name", kind="fetch", source="oknesset",
+            "missing_mk_id", kind="fetch", source="oknesset",
             knesset_num=knesset_num,
         )
-    return adapt_get_mk_committees(name=name, knesset_num=knesset_num)
+    record = _fetch_mk_record(mk_id)
+    if record is None:
+        return _validation_error(
+            "mk_not_found", kind="fetch", source="oknesset",
+            mk_id=mk_id, knesset_num=knesset_num,
+        )
+    positions = record.get("committee_positions") or []
+    filtered = [
+        p for p in positions
+        if not isinstance(p, dict) or p.get("knesset") in (None, knesset_num)
+    ]
+    payload = {
+        "mk_id":               mk_id,
+        "full_name":           record.get("full_name") or record.get("mk_individual_name") or "",
+        "knesset_num":         knesset_num,
+        "committee_positions": filtered,
+    }
+    return ToolEnvelope(
+        summary="",
+        full=json.dumps(payload, ensure_ascii=False, default=str),
+        metadata={"kind": "fetch", "source": "oknesset", "count": 1},
+        provenance={"mk_id": mk_id, "knesset_num": knesset_num},
+    )
 
 
 def handle_get_committee_members(args: dict) -> ToolEnvelope:
     committee_id = (args.get("committee_id") or "").strip()
-    name = (args.get("name") or "").strip()
     knesset_num = int(args.get("knesset_num") or 25)
 
-    if committee_id:
-        record = fetch_committee_record(committee_id)
-        if record is None:
-            return _validation_error(
-                "committee_not_found", kind="fetch", source="oknesset",
-                committee_id=committee_id, knesset_num=knesset_num,
-            )
-        return adapt_get_committee_members(
-            name=record.get("name") or "",
-            knesset_num=knesset_num,
-        )
-
-    if not name:
+    if not committee_id:
         return _validation_error(
-            "missing_committee_id_or_name", kind="fetch", source="oknesset",
+            "missing_committee_id", kind="fetch", source="oknesset",
             knesset_num=knesset_num,
         )
-    return adapt_get_committee_members(name=name, knesset_num=knesset_num)
+    record = fetch_committee_record(committee_id)
+    if record is None:
+        return _validation_error(
+            "committee_not_found", kind="fetch", source="oknesset",
+            committee_id=committee_id, knesset_num=knesset_num,
+        )
+    return adapt_get_committee_members(
+        name=record.get("name") or "",
+        knesset_num=knesset_num,
+    )
 
 
 def handle_get_committee_sessions(args: dict) -> ToolEnvelope:
@@ -742,34 +775,29 @@ def handle_get_committee_sessions(args: dict) -> ToolEnvelope:
 
 def handle_get_bill_details(args: dict) -> ToolEnvelope:
     bill_id = (args.get("bill_id") or "").strip()
-    bill_name = (args.get("bill_name") or "").strip()
     knesset_num = int(args.get("knesset_num") or 25)
 
-    if bill_id:
-        record = _fetch_bill_record(bill_id)
-        if record is None:
-            return _validation_error(
-                "bill_not_found", kind="fetch", source="odata",
-                bill_id=bill_id, knesset_num=knesset_num,
-            )
-        return ToolEnvelope(
-            summary="",
-            full=json.dumps(record, ensure_ascii=False, default=str),
-            metadata={"kind": "fetch", "source": "odata", "count": 1},
-            provenance={"bill_id": bill_id, "knesset_num": knesset_num},
-        )
-
-    if not bill_name:
+    if not bill_id:
         return _validation_error(
-            "missing_bill_id_or_name", kind="fetch", source="odata",
+            "missing_bill_id", kind="fetch", source="odata",
             knesset_num=knesset_num,
         )
-    return adapt_get_bill_details(bill_name=bill_name, knesset_num=knesset_num)
+    record = _fetch_bill_record(bill_id)
+    if record is None:
+        return _validation_error(
+            "bill_not_found", kind="fetch", source="odata",
+            bill_id=bill_id, knesset_num=knesset_num,
+        )
+    return ToolEnvelope(
+        summary="",
+        full=json.dumps(record, ensure_ascii=False, default=str),
+        metadata={"kind": "fetch", "source": "odata", "count": 1},
+        provenance={"bill_id": bill_id, "knesset_num": knesset_num},
+    )
 
 
 def handle_get_bill_text(args: dict) -> ToolEnvelope:
     bill_id = (args.get("bill_id") or "").strip()
-    bill_name = (args.get("bill_name") or "").strip()
     knesset_num = int(args.get("knesset_num") or 25)
     max_chars = int(args.get("max_chars") or config.BILL_TEXT_DEFAULT_MAX_CHARS)
     max_chars = max(
@@ -777,46 +805,39 @@ def handle_get_bill_text(args: dict) -> ToolEnvelope:
         min(max_chars, config.BILL_TEXT_MAX_MAX_CHARS),
     )
 
-    if bill_id:
-        try:
-            record = _get_bill_text_by_id(int(bill_id), max_chars=max_chars)
-        except Exception as exc:
-            return ToolEnvelope(
-                summary="",
-                full="",
-                metadata={"kind": "error", "source": "odata", "count": 0,
-                          "exception": str(exc)},
-                provenance={"bill_id": bill_id, "knesset_num": knesset_num},
-                error="bill_text_fetch_failed",
-            )
-        if record is None:
-            return _validation_error(
-                "bill_text_not_found", kind="fetch", source="odata",
-                bill_id=bill_id, knesset_num=knesset_num,
-            )
-        warnings = ["result_truncated_to_%d_chars" % max_chars] if record.get("truncated") else []
-        return ToolEnvelope(
-            summary="",
-            full=json.dumps(record, ensure_ascii=False, default=str),
-            metadata={
-                "kind":   "fetch",
-                "source": "odata",
-                "count":  1,
-                **({"warnings": warnings} if warnings else {}),
-            },
-            provenance={"bill_id": bill_id, "knesset_num": knesset_num},
-            truncated=bool(record.get("truncated")),
-        )
-
-    if not bill_name:
+    if not bill_id:
         return _validation_error(
-            "missing_bill_id_or_name", kind="fetch", source="odata",
+            "missing_bill_id", kind="fetch", source="odata",
             knesset_num=knesset_num,
         )
-    return adapt_get_bill_text(
-        bill_name=bill_name,
-        knesset_num=knesset_num,
-        max_chars=max_chars,
+    try:
+        record = _get_bill_text_by_id(int(bill_id), max_chars=max_chars)
+    except Exception as exc:
+        return ToolEnvelope(
+            summary="",
+            full="",
+            metadata={"kind": "error", "source": "odata", "count": 0,
+                      "exception": str(exc)},
+            provenance={"bill_id": bill_id, "knesset_num": knesset_num},
+            error="bill_text_fetch_failed",
+        )
+    if record is None:
+        return _validation_error(
+            "bill_text_not_found", kind="fetch", source="odata",
+            bill_id=bill_id, knesset_num=knesset_num,
+        )
+    warnings = ["result_truncated_to_%d_chars" % max_chars] if record.get("truncated") else []
+    return ToolEnvelope(
+        summary="",
+        full=json.dumps(record, ensure_ascii=False, default=str),
+        metadata={
+            "kind":   "fetch",
+            "source": "odata",
+            "count":  1,
+            **({"warnings": warnings} if warnings else {}),
+        },
+        provenance={"bill_id": bill_id, "knesset_num": knesset_num},
+        truncated=bool(record.get("truncated")),
     )
 
 
@@ -827,25 +848,21 @@ def handle_get_bill_text(args: dict) -> ToolEnvelope:
 
 def handle_get_mk_votes(args: dict) -> ToolEnvelope:
     mk_id = (args.get("mk_id") or "").strip()
-    name = (args.get("name") or "").strip()
     knesset_num = int(args.get("knesset_num") or 25)
     top_n = int(args.get("top_n") or 20)
 
-    if mk_id and not name:
-        record = _fetch_mk_record(mk_id)
-        if record is None:
-            return _validation_error(
-                "mk_not_found", kind="fetch", source="odata",
-                mk_id=mk_id, knesset_num=knesset_num,
-            )
-        # adapt_get_mk_votes resolves by name; use the record's full name.
-        name = record.get("full_name") or record.get("mk_individual_name") or ""
-
-    if not name:
+    if not mk_id:
         return _validation_error(
-            "missing_mk_id_or_name", kind="fetch", source="odata",
+            "missing_mk_id", kind="fetch", source="odata",
             knesset_num=knesset_num,
         )
+    record = _fetch_mk_record(mk_id)
+    if record is None:
+        return _validation_error(
+            "mk_not_found", kind="fetch", source="odata",
+            mk_id=mk_id, knesset_num=knesset_num,
+        )
+    name = record.get("full_name") or record.get("mk_individual_name") or ""
     return adapt_get_mk_votes(name=name, knesset_num=knesset_num, top_n=top_n)
 
 
@@ -860,27 +877,23 @@ def handle_get_votes_on_topic(args: dict) -> ToolEnvelope:
 def handle_get_votes_on_topic_by_mk(args: dict) -> ToolEnvelope:
     topic = (args.get("topic") or "").strip()
     mk_id = (args.get("mk_id") or "").strip()
-    name = (args.get("name") or "").strip()
     knesset_num = int(args.get("knesset_num") or 25)
     top_n = int(args.get("top_n") or 20)
 
     if not topic:
         return _validation_error("missing_topic", kind="fetch", source="odata")
-
-    if mk_id and not name:
-        record = _fetch_mk_record(mk_id)
-        if record is None:
-            return _validation_error(
-                "mk_not_found", kind="fetch", source="odata",
-                mk_id=mk_id, knesset_num=knesset_num,
-            )
-        name = record.get("full_name") or record.get("mk_individual_name") or ""
-
-    if not name:
+    if not mk_id:
         return _validation_error(
-            "missing_mk_id_or_name", kind="fetch", source="odata",
+            "missing_mk_id", kind="fetch", source="odata",
             knesset_num=knesset_num,
         )
+    record = _fetch_mk_record(mk_id)
+    if record is None:
+        return _validation_error(
+            "mk_not_found", kind="fetch", source="odata",
+            mk_id=mk_id, knesset_num=knesset_num,
+        )
+    name = record.get("full_name") or record.get("mk_individual_name") or ""
     return adapt_get_votes_on_topic_by_mk(
         topic=topic, name=name, knesset_num=knesset_num, top_n=top_n,
     )
@@ -1107,6 +1120,7 @@ __all__ = [
     "handle_find_committee",
     "handle_find_bill",
     "handle_find_vote",
+    "handle_find_party",
     # fetch
     "handle_get_mk_profile",
     "handle_get_mk_committees",

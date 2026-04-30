@@ -365,6 +365,55 @@ def get_all_parties(knesset_num: int = 25) -> list[dict]:
     return result
 
 
+def get_party_members(party_query: str, knesset_num: int = 25, top_k: int = 3) -> list[dict]:
+    """
+    Fuzzy-match party_query against all party/faction names in a given Knesset.
+    Returns up to top_k matches, each with:
+      {party, mk_count, members: [{mk_id, full_name, is_current}]}
+    Matching uses difflib SequenceMatcher + substring boost.
+    """
+    import difflib
+
+    parties = get_all_parties(knesset_num)
+    if not parties:
+        return []
+
+    party_names = [p["party"] for p in parties]
+    scored = [
+        (name, difflib.SequenceMatcher(None, party_query, name).ratio())
+        for name in party_names
+    ]
+    for i, (name, score) in enumerate(scored):
+        if party_query in name or name in party_query:
+            scored[i] = (name, max(score, 0.8))
+
+    scored.sort(key=lambda x: x[1], reverse=True)
+    top_matches = [(name, sc) for name, sc in scored[:top_k] if sc > 0.1]
+
+    members_raw = _get_all_members_raw(knesset_num)
+    results: list[dict] = []
+    for party_name, _sc in top_matches:
+        mk_count = next((p["mk_count"] for p in parties if p["party"] == party_name), 0)
+        members: list[dict] = []
+        for mk in members_raw:
+            faction = _most_recent_faction(
+                [f for f in (mk.get("factions") or []) if f],
+                knesset_num,
+            )
+            if faction and faction["faction_name"].strip() == party_name:
+                members.append({
+                    "mk_id":      str(mk.get("mk_individual_id") or ""),
+                    "full_name":  mk.get("full_name") or mk.get("mk_individual_name") or "",
+                    "is_current": bool(mk.get("IsCurrent", False)),
+                })
+        results.append({
+            "party":    party_name,
+            "mk_count": mk_count,
+            "members":  sorted(members, key=lambda m: m.get("full_name", "")),
+        })
+    return results
+
+
 def _search_mks_by_name(name: str, knesset_num: int = 25) -> list[dict]:
     """
     Search for MKs by name (Hebrew, partial, or altname).

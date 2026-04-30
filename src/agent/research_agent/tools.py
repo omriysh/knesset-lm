@@ -27,6 +27,7 @@ from utils.tools import (
     handle_find_bill,
     handle_find_committee,
     handle_find_mk,
+    handle_find_party,
     handle_find_vote,
     handle_get_bill_details,
     handle_get_bill_text,
@@ -202,6 +203,29 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         cost_hint="cheap",
     ),
 
+    ToolSpec(
+        name="find_party",
+        schema={
+            "type": "object",
+            "description": (
+                "Fuzzy-match a party/faction name and return all its members "
+                "for a given Knesset. Returns up to top_k party matches, each "
+                "with party name, seat count, and a list of {mk_id, full_name, "
+                "is_current} members. Use when a question involves party composition "
+                "or party-level analysis."
+            ),
+            "properties": {
+                "query":       {"type": "string", "description": "Party or faction name (Hebrew)"},
+                "knesset_num": {"type": "integer", "default": 25},
+                "top_k":       {"type": "integer", "default": 3, "minimum": 1, "maximum": 5},
+            },
+            "required": ["query"],
+        },
+        handler=handle_find_party,
+        task_kinds=["discover", "fetch"],
+        cost_hint="cheap",
+    ),
+
     # ── Fetch / data tools ────────────────────────────────────────────────
     ToolSpec(
         name="get_meeting_summary",
@@ -228,15 +252,15 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         schema={
             "type": "object",
             "description": (
-                "Fetch full profile for an MK by mk_id (preferred) or name. "
+                "Fetch full profile for an MK. "
                 "Returns party/faction history, committee memberships, "
-                "ministerial roles. Use find_mk first to disambiguate."
+                "ministerial roles. Use find_mk first to get mk_id."
             ),
             "properties": {
                 "mk_id":       {"type": "string"},
-                "name":        {"type": "string"},
                 "knesset_num": {"type": "integer", "default": 25},
             },
+            "required": ["mk_id"],
         },
         handler=handle_get_mk_profile,
         task_kinds=["fetch"],
@@ -247,12 +271,12 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         name="get_mk_committees",
         schema={
             "type": "object",
-            "description": "List committees the MK serves on in the given Knesset.",
+            "description": "List committees the MK serves on in the given Knesset. Use find_mk first to get mk_id.",
             "properties": {
                 "mk_id":       {"type": "string"},
-                "name":        {"type": "string"},
                 "knesset_num": {"type": "integer", "default": 25},
             },
+            "required": ["mk_id"],
         },
         handler=handle_get_mk_committees,
         task_kinds=["fetch"],
@@ -265,13 +289,13 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
             "type": "object",
             "description": (
                 "List active members of a committee with role "
-                "(chair, deputy, member)."
+                "(chair, deputy, member). Use find_committee first to get committee_id."
             ),
             "properties": {
                 "committee_id": {"type": "string"},
-                "name":         {"type": "string"},
                 "knesset_num":  {"type": "integer", "default": 25},
             },
+            "required": ["committee_id"],
         },
         handler=handle_get_committee_members,
         task_kinds=["fetch"],
@@ -304,14 +328,15 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         schema={
             "type": "object",
             "description": (
-                "Fetch metadata for a bill by bill_id (preferred) or name. "
-                "Returns status, type, initiators, document links."
+                "Fetch metadata for a bill. "
+                "Returns status, type, initiators, document links. "
+                "Use find_bill first to get bill_id."
             ),
             "properties": {
                 "bill_id":     {"type": "string"},
-                "bill_name":   {"type": "string"},
                 "knesset_num": {"type": "integer", "default": 25},
             },
+            "required": ["bill_id"],
         },
         handler=handle_get_bill_details,
         task_kinds=["fetch"],
@@ -327,11 +352,10 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
                 "max_chars characters. The cap keeps this tool usable inside "
                 "the plan-execute loop without blowing the executor's "
                 "context; raise max_chars only when the bill text itself is "
-                "the answer the user wants."
+                "the answer the user wants. Use find_bill first to get bill_id."
             ),
             "properties": {
                 "bill_id":     {"type": "string"},
-                "bill_name":   {"type": "string"},
                 "knesset_num": {"type": "integer", "default": 25},
                 "max_chars": {
                     "type":    "integer",
@@ -340,6 +364,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
                     "maximum": config.BILL_TEXT_MAX_MAX_CHARS,
                 },
             },
+            "required": ["bill_id"],
         },
         handler=handle_get_bill_text,
         task_kinds=["fetch"],
@@ -351,13 +376,13 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         name="get_mk_votes",
         schema={
             "type": "object",
-            "description": "Recent plenum votes cast by an MK and how they voted.",
+            "description": "Recent plenum votes cast by an MK and how they voted. Use find_mk first to get mk_id.",
             "properties": {
                 "mk_id":       {"type": "string"},
-                "name":        {"type": "string"},
                 "knesset_num": {"type": "integer", "default": 25},
                 "top_n":       {"type": "integer", "default": 20, "minimum": 1},
             },
+            "required": ["mk_id"],
         },
         handler=handle_get_mk_votes,
         task_kinds=["fetch"],
@@ -388,15 +413,14 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         name="get_votes_on_topic_by_mk",
         schema={
             "type": "object",
-            "description": "How a specific MK voted on each vote matching a topic.",
+            "description": "How a specific MK voted on each vote matching a topic. Use find_mk first to get mk_id.",
             "properties": {
                 "topic":       {"type": "string"},
                 "mk_id":       {"type": "string"},
-                "name":        {"type": "string"},
                 "knesset_num": {"type": "integer", "default": 25},
                 "top_n":       {"type": "integer", "default": 20, "minimum": 1},
             },
-            "required": ["topic"],
+            "required": ["topic", "mk_id"],
         },
         handler=handle_get_votes_on_topic_by_mk,
         task_kinds=["fetch", "filter"],
