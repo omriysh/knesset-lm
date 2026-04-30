@@ -104,12 +104,12 @@ def summaries_dir(knesset_num: int = 25) -> Path:
 
 # Models (cloud)
 GOOGLE_API_KEY_ENV   = "GOOGLE_API_KEY"
-PLANNER_MODEL        = "gemini-2.5-flash-lite"
-CRITIC_PRE_MODEL     = "gemma-4-31b-it"
+PLANNER_MODEL        = "gemini-2.5-flash"
+CRITIC_PRE_MODEL     = "gemini-2.5-flash-lite"
 CRITIC_POST_MODEL    = "gemini-2.5-flash-lite"
-SYNTHESIZER_MODEL    = "gemini-2.5-flash-lite"
-EXECUTOR_MODEL_LIGHT = "gemma-4-26b-a4b-it"
-EXECUTOR_MODEL_HEAVY = "gemma-4-31b-it"   # gemma, not gemini — see §1.2
+SYNTHESIZER_MODEL    = "gemini-2.5-flash"
+EXECUTOR_MODEL_LIGHT = "gemini-2.5-flash-lite"
+EXECUTOR_MODEL_HEAVY = "gemini-2.5-flash-lite"
 INTENT_MODEL         = "local"            # always llama-server
 
 # Fallback
@@ -136,7 +136,7 @@ RESEARCH_PER_STEP_TIMEOUT_SECONDS       = 300
 RESEARCH_PER_TOOL_TIMEOUT_SECONDS       = 90
 
 # Concurrency
-RESEARCH_DAG_MAX_WORKERS         = 1
+RESEARCH_DAG_MAX_WORKERS         = 4
 RESEARCH_DEEP_DIVE_MAX_PARALLEL  = 1
 
 # BM25 / morphology
