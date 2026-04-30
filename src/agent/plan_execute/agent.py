@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import traceback
 from pathlib import Path
 from typing import Any, Callable, Generator
@@ -508,7 +509,19 @@ class PlanExecuteAgent(SubgraphAgent):
         steps_by_id: dict[str, Step] = {s.id: s for s in steps}
         abandon_triggered = False
 
+        # One Event per step: set by the main thread after _add_evidence so
+        # that downstream workers don't read the store before their deps are
+        # written (EvidenceStore is not thread-safe and _add_evidence happens
+        # on the main thread, after DAGExecutor yields the dep's result).
+        evidence_ready: dict[str, threading.Event] = {
+            s.id: threading.Event() for s in steps
+        }
+
         def _worker(step: Step) -> tuple[ToolEnvelope, list[SubgraphEvent]]:
+            for dep_id in (step.deps or []):
+                ev = evidence_ready.get(dep_id)
+                if ev:
+                    ev.wait()
             return self._dispatch_step(step, registry)
 
         with DAGExecutor() as dag:
@@ -527,6 +540,9 @@ class PlanExecuteAgent(SubgraphAgent):
                         error=error_kind,
                     )
                     entry_id        = self._add_evidence(step_id, "internal:error", error_env)
+                    ev = evidence_ready.get(step_id)
+                    if ev:
+                        ev.set()
                     tool_name       = ""
                     step_summary    = reason[:200]
                     step_full       = ""
@@ -546,6 +562,9 @@ class PlanExecuteAgent(SubgraphAgent):
                     envelope, llm_events = result
                     tool_name    = _tool_name_from_envelope(envelope)
                     entry_id     = self._add_evidence(step_id, tool_name, envelope)
+                    ev = evidence_ready.get(step_id)
+                    if ev:
+                        ev.set()
                     step_summary = envelope.summary or ""
                     step_full    = (envelope.full or "")[:8000]
                     step_error   = envelope.error
