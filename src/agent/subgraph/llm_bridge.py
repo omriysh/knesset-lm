@@ -54,17 +54,20 @@ def _get_buffer() -> deque:
 # ---------------------------------------------------------------------------
 
 
-def _drain_stream(stream) -> tuple[str, list[dict]]:
+def _drain_stream(stream) -> tuple[str, list[dict], str]:
     text_parts: list[str] = []
     tool_calls: list[dict] = []
+    thinking_parts: list[str] = []
     for ev in stream:
-        if isinstance(ev, TokenEvent):
+        if isinstance(ev, ThinkingEvent):
+            thinking_parts.append(ev.text)
+        elif isinstance(ev, TokenEvent):
             text_parts.append(ev.text)
         elif isinstance(ev, ToolCallsEvent):
             tool_calls = list(ev.calls or [])
         elif isinstance(ev, DoneEvent):
             break
-    return ("".join(text_parts), tool_calls)
+    return ("".join(text_parts), tool_calls, "".join(thinking_parts))
 
 
 def _normalize_tool_calls(tcs: list[dict]) -> list[dict]:
@@ -132,7 +135,7 @@ class LLMBridge:
             kwargs["max_tokens"] = max_tokens
 
         try:
-            text, tool_calls = _drain_stream(backend.stream(**kwargs))
+            text, tool_calls, thinking = _drain_stream(backend.stream(**kwargs))
         except Exception as exc:
             elapsed = int((time.monotonic() - t0) * 1000)
             buf.append(SubgraphEvent(
@@ -141,6 +144,13 @@ class LLMBridge:
                 payload={"content": "", "elapsed_ms": elapsed, "error": str(exc)},
             ))
             raise RuntimeError(f"llm_call({model!r}) failed: {exc}") from exc
+
+        if thinking:
+            buf.append(SubgraphEvent(
+                kind="llm_thinking",
+                name=phase or model,
+                payload={"text": thinking},
+            ))
 
         elapsed = int((time.monotonic() - t0) * 1000)
         content_preview = (text or "")

@@ -149,13 +149,21 @@ def _is_connection_error(exc: Exception) -> bool:
     ))
 
 
+def _model_supports_thinking(model: str) -> bool:
+    """True for Gemini 2.5+ models that can emit thought tokens."""
+    return model.startswith("gemini-2.5")
+
+
 class GoogleBackend:
     """LLMBackend for Google Gemini / Gemma cloud models via google.genai SDK."""
 
     MODEL             = "gemini-2.5-flash-lite"
-    supports_thinking = False
     TEMPERATURE       = 1.0
     _log_prefix       = "google"
+
+    @property
+    def supports_thinking(self) -> bool:
+        return _model_supports_thinking(self._model)
 
     @property
     def max_chunk_chars(self) -> int:
@@ -293,11 +301,21 @@ class GoogleBackend:
         """One attempt at the Google API stream, no retry logic."""
         contents, system_text = _convert_messages(messages)
 
+        thinking_config = None
+        if self.supports_thinking:
+            try:
+                thinking_config = types.ThinkingConfig(
+                    thinking_budget=config.MAX_THINKING_TOKENS
+                )
+            except Exception:  # noqa: BLE001 — SDK version may not support it
+                pass
+
         gen_config = types.GenerateContentConfig(
             max_output_tokens  = max_tokens,
             temperature        = temperature if temperature is not None else self.TEMPERATURE,
             system_instruction = system_text,
             tools              = _convert_tools_genai(tools) if tools else None,
+            thinking_config    = thinking_config,
         )
 
         tc_list:    list[dict] = []
