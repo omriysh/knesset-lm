@@ -31,11 +31,8 @@ from utils.tools import (
     handle_find_vote,
     handle_get_bill_details,
     handle_get_bill_text,
-    handle_get_committee_members,
     handle_get_committee_sessions,
     handle_get_meeting_summary,
-    handle_get_mk_committees,
-    handle_get_mk_profile,
     handle_get_mk_votes,
     handle_get_recent_votes,
     handle_get_votes_on_topic,
@@ -133,9 +130,10 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
             "type": "object",
             "description": (
                 "Resolve an MK name to one or more candidate records with "
-                "stable mk_id. Returns top BM25 matches sorted by score; the "
-                "calling LLM must pick a single mk_id from the returned list "
-                "before any downstream get_mk_* call."
+                "stable mk_id. Each result includes a full profile: party and "
+                "faction history, committee positions, ministerial roles. "
+                "Returns top BM25 matches sorted by score. "
+                "No separate profile or committee-list fetch is needed after this call."
             ),
             "properties": {
                 "query":       {"type": "string"},
@@ -153,7 +151,12 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         name="find_committee",
         schema={
             "type": "object",
-            "description": "Resolve a committee name to candidate committee_id values.",
+            "description": (
+                "Resolve a committee name to candidate committee_id values. "
+                "Each result includes the full committee record with its active "
+                "member list (mk_id, name, role). "
+                "No separate member-list fetch is needed after this call."
+            ),
             "properties": {
                 "query":       {"type": "string"},
                 "knesset_num": {"type": "integer", "default": 25},
@@ -227,6 +230,13 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
     ),
 
     # ── Fetch / data tools ────────────────────────────────────────────────
+
+    # NOTE: get_mk_profile and get_mk_committees are intentionally absent —
+    # find_mk already returns the full profile (party/faction history,
+    # committee positions) in each candidate's `record` field.
+    # get_committee_members is also absent — find_committee already includes
+    # the active member list in each candidate's `record` field.
+
     ToolSpec(
         name="get_meeting_summary",
         schema={
@@ -243,63 +253,6 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
             "required": ["meeting_id"],
         },
         handler=handle_get_meeting_summary,
-        task_kinds=["fetch"],
-        cost_hint="cheap",
-    ),
-
-    ToolSpec(
-        name="get_mk_profile",
-        schema={
-            "type": "object",
-            "description": (
-                "Fetch full profile for an MK. "
-                "Returns party/faction history, committee memberships, "
-                "ministerial roles. "
-                "The id is a unique identifying number, not the name. "
-                "Use find_mk first to get mk_id."
-            ),
-            "properties": {
-                "mk_id":       {"type": "string"},
-                "knesset_num": {"type": "integer", "default": 25},
-            },
-            "required": ["mk_id"],
-        },
-        handler=handle_get_mk_profile,
-        task_kinds=["fetch"],
-        cost_hint="cheap",
-    ),
-
-    ToolSpec(
-        name="get_mk_committees",
-        schema={
-            "type": "object",
-            "description": "List committees the MK serves on in the given Knesset. Use find_mk first to get mk_id.",
-            "properties": {
-                "mk_id":       {"type": "string"},
-                "knesset_num": {"type": "integer", "default": 25},
-            },
-            "required": ["mk_id"],
-        },
-        handler=handle_get_mk_committees,
-        task_kinds=["fetch"],
-        cost_hint="cheap",
-    ),
-
-    ToolSpec(
-        name="get_committee_members",
-        schema={
-            "type": "object",
-            "description": (
-                "List active members of a committee with role "
-                "(chair, deputy, member). Use find_committee first to get committee_id."
-            ),
-            "properties": {
-                "committee_id": {"type": "string"},
-                "knesset_num":  {"type": "integer", "default": 25},
-            },
-            "required": ["committee_id"],
-        },
-        handler=handle_get_committee_members,
         task_kinds=["fetch"],
         cost_hint="cheap",
     ),

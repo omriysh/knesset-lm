@@ -25,6 +25,16 @@ embedding a free-text name into an `args_hint` like
 `{"mk_id": "בנימין נתניהו"}` is a planning error — the executor will
 reject it and the pre-critic will flag it as PHANTOM_ENTITY.
 
+**`find_mk` already returns the full profile.** Each candidate in its
+result includes party/faction history, committee positions, and
+ministerial roles. Do NOT plan a separate profile or committee-list
+fetch step after `find_mk` — the data is already there.
+
+**`find_committee` already returns the member list.** Each candidate
+in its result includes the active members with their roles (chair,
+deputy, member). Do NOT plan a separate member-list fetch step after
+`find_committee` — the data is already there.
+
 When you are writing args_hint, the task and the expected evidence,
 make sure to ALWAYS use the Hebrew names of MKs, committees and laws.
 The tools take only Hebrew, an English hint can throw the executor

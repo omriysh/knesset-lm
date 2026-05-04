@@ -24,6 +24,7 @@ import traceback
 
 from agent.subgraph.evidence import ToolEnvelope
 from utils.knesset_db import (
+    _get_active_committee_members_by_id,
     get_all_committees,
     get_bill_details,
     get_bill_text,
@@ -502,12 +503,17 @@ def fetch_committee_record(committee_id: str) -> dict | None:
         try:
             for c in get_all_committees(knesset_num):
                 if int(c.get("CommitteeID") or 0) == cid:
-                    return {
+                    record = {
                         "committee_id": str(c.get("CommitteeID") or ""),
                         "name":         c.get("Name") or "",
                         "knesset_num":  c.get("KnessetNum"),
                         "is_current":   c.get("IsCurrent"),
                     }
+                    try:
+                        record["members"] = _get_active_committee_members_by_id(cid, knesset_num)
+                    except Exception:
+                        pass
+                    return record
         except Exception:
             continue
     return None

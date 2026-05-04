@@ -142,15 +142,16 @@ def build_bullets(knesset_num: int) -> list[dict]:
         meeting_id = parts[-1] if len(parts) == 2 else stem
         committee = summary_path.parent.name
 
-        for i, bullet in enumerate(bullets):
+        for bullet in bullets:
             text = bullet.get("text", "").strip() if isinstance(bullet, dict) else str(bullet).strip()
             if not text:
                 continue
-            row_id = f"{meeting_id}_{i}"
+            bullet_idx = bullet["idx"]
+            row_id = f"{committee}__{meeting_id}__{bullet_idx}"
             extra = {
                 "meeting_id":  meeting_id,
                 "committee":   committee,
-                "bullet_idx":  i,
+                "bullet_idx":  bullet_idx,
                 "source_file": str(summary_path),
             }
             rows.append(_make_row(row_id, text[:120], text, extra))
