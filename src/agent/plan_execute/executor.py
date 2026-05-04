@@ -339,7 +339,8 @@ def execute_step(
                     error_kind="planner_only_violation",
                 )
 
-    tool_schemas = list_tools_for_executor(registry, allowed)
+    tool_schemas = list_tools_for_executor(registry, allowed,
+                                            allow_planner_only=step.task_kind == "deep_dive")
     tool_schemas_full = list(tool_schemas) + [RECORD_EVIDENCE_SCHEMA]
 
     # ----------------------------------------------------------- prompt

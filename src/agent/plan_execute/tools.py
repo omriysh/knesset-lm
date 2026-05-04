@@ -73,19 +73,22 @@ def list_tools_for_planner(registry: ToolRegistry) -> list[dict]:
 def list_tools_for_executor(
     registry: ToolRegistry,
     allowed: list[str],
+    allow_planner_only: bool = False,
 ) -> list[dict]:
     """Return the subset of *registry* whose ``name`` is in *allowed* AND
-    whose ``planner_only`` flag is ``False``, as OpenAI-style JSON-schema
-    dicts, with the ``expand`` pseudo-tool appended at the end.
+    whose ``planner_only`` flag is ``False`` (or *allow_planner_only* is
+    ``True``), as OpenAI-style JSON-schema dicts, with the ``expand``
+    pseudo-tool appended at the end.
 
     The planner assigns a concrete set of tool names to each executor step
     via the plan; this function enforces that only non-planner-only tools
-    are ever handed to the executor.
+    are ever handed to the executor — except for ``deep_dive`` steps, where
+    the caller passes ``allow_planner_only=True``.
     """
     allowed_set = set(allowed or [])
     result: list[dict] = []
     for spec in registry or []:
-        if spec.planner_only:
+        if spec.planner_only and not allow_planner_only:
             continue
         if spec.name not in allowed_set:
             continue
