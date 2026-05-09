@@ -22,17 +22,10 @@
       "type": "transition"
     },
     {
-      "condition": "research_mode == 'summarize'",
-      "id": "e_mode_summarize",
-      "source": "mode_select",
+      "condition": "intent == 'research'",
+      "id": "e_intent_research",
+      "source": "intent_classify",
       "target": "research_subgraph",
-      "type": "transition"
-    },
-    {
-      "condition": "research_mode == 'deep_dive'",
-      "id": "e_mode_deep_dive",
-      "source": "mode_select",
-      "target": "user_input_deep_dive",
       "type": "transition"
     },
     {
@@ -41,30 +34,6 @@
       "source": "research_subgraph",
       "target": "format_answer",
       "type": "transition"
-    },
-    {
-      "id": "e_ced96c4f",
-      "source": "intent_classify",
-      "target": "llm_call_c82151e8",
-      "type": "transition",
-      "label": "",
-      "condition": "intent == 'research'"
-    },
-    {
-      "id": "e_bc7b01b6",
-      "source": "llm_call_c82151e8",
-      "target": "mode_select",
-      "type": "transition",
-      "label": "",
-      "condition": "protocol_deep_dive_relevance == \"yes\""
-    },
-    {
-      "id": "e_51f45256",
-      "source": "llm_call_c82151e8",
-      "target": "research_subgraph",
-      "type": "transition",
-      "label": "",
-      "condition": "protocol_deep_dive_relevance == \"no\""
     }
   ],
   "global_rules": "",
@@ -94,14 +63,20 @@
               "label": "intent",
               "required": true,
               "var": "intent"
+            },
+            {
+              "label": "rejection_reason",
+              "required": false,
+              "var": "rejection_reason"
             }
           ],
           "type": "json"
         },
         "rag": "",
         "stage": "router",
-        "system_prompt": "You triage user questions for the Knesset research assistant.\n\nClassify the user's most recent message into one of three classes and return ONE JSON object with a single key \"intent\":\n\n  - \"research\"          — a substantive question about the Israeli Knesset (MKs, parties, committees, bills, votes, opinions expressed in protocols). The downstream agent will gather evidence and produce a sourced answer.\n  - \"deep_dive_request\" — the user explicitly asks to BROWSE protocols themselves (look at meetings, search inside one, see who said what in a specific session).\n  - \"irrelevant\"        — not about Israeli Knesset / politics.\n\nDo not explain. Do not output prose. Do not output additional keys.",
-        "temperature": 0.1
+        "system_prompt": "You triage user questions for the Knesset research assistant.\n\nClassify the user's most recent message into one of three intents and return a JSON object:\n\n  - \"research\"          — a substantive question about the Israeli Knesset (MKs, parties, committees, bills, votes, opinions expressed in protocols). The downstream agent will gather evidence and produce a sourced answer.\n  - \"deep_dive_request\" — the user explicitly asks to BROWSE protocols themselves (look at meetings, search inside one, see who said what in a specific session).\n  - \"irrelevant\"        — not about the Israeli Knesset or Israeli politics.\n\nOutput keys:\n  - \"intent\": one of the three values above (required).\n  - \"rejection_reason\": only when intent is \"irrelevant\" — a short Hebrew sentence explaining why the question is outside scope, followed by 1–2 example questions the assistant could actually answer (also in Hebrew).\n\nDo not explain. Do not output prose beyond the JSON object.",
+        "temperature": 0.1,
+        "notes": ""
       },
       "id": "intent_classify",
       "imaginary": false,
@@ -115,32 +90,49 @@
     },
     {
       "data": {
-        "multi_select": false,
-        "options": [
-          {
-            "description": "מחקר אוטומטי מעמיק — סוכן אוסף ראיות ומנתח",
-            "label": "ענה אוטומטית",
-            "value": "summarize"
-          },
-          {
-            "description": "עיון עצמי, חיפוש חופשי ושאלות ממוקדות על הישיבות הרלוונטיות ביותר",
-            "label": "קריאה עצמית בפרוטוקולים",
-            "value": "deep_dive"
-          }
-        ],
-        "output_var": "research_mode",
-        "prompt_he": "איך נתקדם?",
-        "ui": "option_select"
+        "hooks": {
+          "cost_estimate_required": "cost_gate"
+        },
+        "implementation": "research",
+        "input": {
+          "intent_hint": "intent",
+          "question": "question"
+        },
+        "output_vars": [
+          "final_answer",
+          "footnotes"
+        ]
       },
-      "id": "mode_select",
+      "id": "research_subgraph",
       "imaginary": false,
-      "label": "בחר מצב מחקר",
+      "label": "מחקר מעמיק",
       "position": {
-        "x": 220,
-        "y": -20
+        "x": 420,
+        "y": 100
       },
       "terminal": false,
-      "type": "user_input"
+      "type": "subgraph"
+    },
+    {
+      "data": {
+        "input_template": "Research answer:\n{{final_answer}}\n\nRejection reason (if research answer is empty, use this instead):\n{{rejection_reason}}",
+        "max_tokens": 16384,
+        "model": "",
+        "notes": "",
+        "rag": "",
+        "stage": "reviewer",
+        "system_prompt": "You are an expert assistant for analyzing the activity of the Israeli Knesset.\nYou receive either a research agent answer or a rejection reason — never both.\n\nRules:\n- Always answer in Hebrew.\n- If a research answer is present: reformat it clearly and concisely for the user. Preserve all citations, dates, and committee names. Tags like [ev_...] are evidence references — keep them exactly as-is. Do not invent information not present in the answer. If the answer includes suggested follow-up questions, keep only substantive ones about the Israeli Knesset; filter out technical questions (e.g. 'why did a tool fail?').\n- If the research answer is empty and a rejection reason is provided: write a brief, polite Hebrew message explaining why the question is outside the scope of this Knesset research assistant. Use the rejection reason as context. Suggest 1–2 related questions the assistant could actually answer.",
+        "temperature": 0.7
+      },
+      "id": "format_answer",
+      "imaginary": false,
+      "label": "עיצוב תשובה",
+      "position": {
+        "x": 620,
+        "y": 100
+      },
+      "terminal": true,
+      "type": "llm_call"
     },
     {
       "data": {
@@ -174,52 +166,6 @@
     },
     {
       "data": {
-        "hooks": {
-          "cost_estimate_required": "cost_gate"
-        },
-        "implementation": "research",
-        "input": {
-          "intent_hint": "intent",
-          "question": "question"
-        },
-        "output_vars": [
-          "final_answer",
-          "footnotes"
-        ]
-      },
-      "id": "research_subgraph",
-      "imaginary": false,
-      "label": "מחקר מעמיק",
-      "position": {
-        "x": 420,
-        "y": 100
-      },
-      "terminal": false,
-      "type": "subgraph"
-    },
-    {
-      "data": {
-        "input_template": "{{final_answer}}",
-        "max_tokens": 16384,
-        "model": "",
-        "rag": "",
-        "stage": "reviewer",
-        "system_prompt": "אתה עוזר מומחה לניתוח פעולתה של הכנסת הישראלית.\nקיבלת תשובה מסוכן מחקר. תפקידך לנסח אותה מחדש בצורה ברורה, תמציתית ונגישה למשתמש.\n\nכללים:\n- ענה בעברית.\n- שמור על כל הציטוטים, התאריכים ושמות הוועדות המופיעים בתשובה המקורית. כיתוב [ev_...] הוא הכוונה למקורות, וחשוב להשאיר אותו.\n- אל תמציא מידע שאינו מופיע בתשובה.\n- אם התשובה מסמנת שהשאלה אינה רלוונטית לכנסת — ציין זאת בנימוס בשורה קצרה.\n- אם התשובה מציינת שאלות המשך מומלצות, השאר רק שאלות מהותיות שנוגעות בכנסת הישראלית. אתה רשאי לסנן שאלות טכניות, כמו \"מדוע כלי מסוים לא עבד?\" או \"כיצד ניתן לשלוף יותר טוב?\".",
-        "temperature": 0.7,
-        "notes": ""
-      },
-      "id": "format_answer",
-      "imaginary": false,
-      "label": "עיצוב תשובה",
-      "position": {
-        "x": 620,
-        "y": 100
-      },
-      "terminal": true,
-      "type": "llm_call"
-    },
-    {
-      "data": {
         "output_var": "selected_meetings",
         "prompt_he": "צוללים לפרוטוקולים…",
         "ui": "deep_dive"
@@ -233,37 +179,6 @@
       },
       "terminal": true,
       "type": "user_input"
-    },
-    {
-      "id": "llm_call_c82151e8",
-      "type": "llm_call",
-      "label": "רלוונטיות עומק בפרוטוקולים",
-      "position": {
-        "x": 420,
-        "y": -20
-      },
-      "data": {
-        "system_prompt": "You triage user questions for the Knesset research assistant.\n\nClassify the user's most recent message into one of two classes and return ONE JSON object with a single key \"protocol_deep_dive_relevance\":\n\n  - \"yes\"          — the question can benefit from diving into data from Knesset protocols.\n  - \"no\"           — the question does not benefit from diving into protocols. for example, a technical question about party associations.\n\nDo not explain. Do not output prose. Do not output additional keys.",
-        "model": "",
-        "temperature": 0.2,
-        "max_tokens": 16384,
-        "rag": "",
-        "input_template": "{{question}}",
-        "stage": "router",
-        "notes": "",
-        "output_format": {
-          "fields": [
-            {
-              "label": "protocol_deep_dive_relevance",
-              "required": true,
-              "var": "protocol_deep_dive_relevance"
-            }
-          ],
-          "type": "json"
-        }
-      },
-      "terminal": false,
-      "imaginary": false
     }
   ],
   "version": 3
