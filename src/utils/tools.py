@@ -283,6 +283,11 @@ def handle_search_topics(args: dict) -> ToolEnvelope:
     else:
         fused = bm25_ranking[:top_k]
 
+    # Fetch any Chroma-only IDs (not in BM25 search results) before closing.
+    missing = [rid for rid in fused if rid not in bm25_rows]
+    if missing:
+        bm25_rows.update(bm25.fetch_by_ids(missing))
+
     bm25.close()
 
     if not fused:

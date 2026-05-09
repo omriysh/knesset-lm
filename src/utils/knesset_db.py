@@ -1046,19 +1046,21 @@ def get_votes_on_topic_by_mk(
     vote_ids = [v["vote_id"] for v in votes]
     votes_by_id = {v["vote_id"]: v for v in votes}
 
-    id_filter = " or ".join(f"VoteID eq {vid}" for vid in vote_ids)
-    r = requests.get(
-        f"{OFFICIAL_KNESSET_NEW_API}/KNS_PlenumVoteResult",
-        params={"$filter": f"{_mk_name_filter(mk)} and ({id_filter})"},
-        timeout=TIMEOUT,
-    )
-    r.raise_for_status()
-
-    result_by_vote: dict[int, str] = {
-        row["VoteID"]: row.get("ResultDesc", "")
-        for row in r.json().get("value", [])
-        if row.get("VoteID")
-    }
+    # OData MaxNodeCount=100: batch VoteIDs to stay well under the limit.
+    # Each VoteID clause ≈ 4 AST nodes; name filter ≈ 9; use batch of 10.
+    name_filter = _mk_name_filter(mk)
+    result_by_vote: dict[int, str] = {}
+    for i in range(0, len(vote_ids), 10):
+        id_filter = " or ".join(f"VoteID eq {vid}" for vid in vote_ids[i:i + 10])
+        r = requests.get(
+            f"{OFFICIAL_KNESSET_NEW_API}/KNS_PlenumVoteResult",
+            params={"$filter": f"{name_filter} and ({id_filter})"},
+            timeout=TIMEOUT,
+        )
+        r.raise_for_status()
+        for row in r.json().get("value", []):
+            if row.get("VoteID"):
+                result_by_vote[row["VoteID"]] = row.get("ResultDesc", "")
 
     return [
         {**v, "result": result_by_vote.get(v["vote_id"], "לא הצביע")}

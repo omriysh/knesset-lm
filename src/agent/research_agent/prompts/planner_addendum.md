@@ -76,6 +76,9 @@ filter).
 prior `search_topics` result, look like the densest evidence sources
 for the question. Do NOT plan a deep-dive on a meeting whose ID you
 have not first surfaced through a discovery step — `deps` it.
+Prefer to not use the "full" deep dive mode unless necessary for the
+question. If reading relevant speaches is enough, and there is no
+need for going over the entire protocol, don't use "full".
 
 If the question is broad ("מה דעתם של חברי הכנסת על..."), discovery and
 fetch tools are usually sufficient; a deep-dive should be the

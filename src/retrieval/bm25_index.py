@@ -187,6 +187,27 @@ class BM25Index:
             results.append(d)
         return results
 
+    def fetch_by_ids(self, ids: list[str]) -> dict[str, dict]:
+        """Fetch rows by exact ID. Returns dict mapping id → row dict (same shape
+        as search() results but without a score key). Missing IDs are omitted."""
+        if not ids:
+            return {}
+        con = self._connect()
+        placeholders = ",".join("?" * len(ids))
+        sql = (
+            f"SELECT id, label, label_lemmatized, body, body_lemmatized, extra"
+            f"  FROM entries WHERE id IN ({placeholders})"
+        )
+        rows = {}
+        for row in con.execute(sql, ids).fetchall():
+            d = dict(row)
+            try:
+                d["extra"] = json.loads(d["extra"])
+            except (json.JSONDecodeError, TypeError):
+                pass
+            rows[d["id"]] = d
+        return rows
+
     # ── context manager support ───────────────────────────────────────────────
 
     def __enter__(self):

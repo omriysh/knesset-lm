@@ -122,6 +122,8 @@ RESEARCH_MAX_REPLANS            = 3
 RESEARCH_MAX_PLAN_STEPS_V1      = 8
 RESEARCH_MAX_DEEP_DIVES_PER_PLAN = 3       # validator caps plan deep-dives
 DEEP_DIVE_CALLS_PER_STEP        = 2        # kept for backward compat
+DEEP_DIVE_FULL_MODEL            = "gemini-2.5-flash-lite"
+DEEP_DIVE_FULL_BATCH_HEADROOM   = 0.60    # fraction of ctx used for input; rest = output budget
 MAX_TOOL_CALLS_PER_STEP         = 20       # max tool calls per executor step
 EVIDENCE_MAX_ENTRIES            = 200
 EVIDENCE_MAX_BYTES_PER_STEP     = 500 * 1024

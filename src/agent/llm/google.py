@@ -210,6 +210,25 @@ class GoogleBackend:
     def extract_thinking(self, raw_content: str) -> str:
         return ""
 
+    # ── Simple blocking call ──────────────────────────────────────────────────
+
+    def generate_text(
+        self,
+        messages:    list[dict],
+        max_tokens:  int        = config.MAX_TOKENS,
+        temperature: float | None = None,
+    ) -> str:
+        """Blocking generate — collects all TokenEvents and returns the full text.
+
+        Uses the same retry + fallback machinery as stream().
+        """
+        parts: list[str] = []
+        for event in self.stream(messages=messages, max_tokens=max_tokens,
+                                 temperature=temperature):
+            if isinstance(event, TokenEvent):
+                parts.append(event.text)
+        return "".join(parts)
+
     # ── Streaming ─────────────────────────────────────────────────────────────
 
     def stream(

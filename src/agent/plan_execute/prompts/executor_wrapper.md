@@ -15,6 +15,8 @@ You have access to these tools:
 You also have access to the SUMMARY VIEW of evidence collected so far:
 {evidence_view}
 
+Make sure to ALWAYS use the Hebrew names of MKs, committees and laws.
+
 Decision protocol:
 
 1. If a prior evidence entry already satisfies `expected_evidence`, do

@@ -140,7 +140,18 @@ def build_bullets(knesset_num: int) -> list[dict]:
         stem = summary_path.stem  # e.g. 01_01_2023_12345
         parts = stem.rsplit("_", 1)
         meeting_id = parts[-1] if len(parts) == 2 else stem
+
+        # Prefer committee name from meeting JSON (matches Chroma metadata).
+        # Directory name uses underscores; JSON field has the real name with spaces.
+        json_path = config.transcriptions_dir(knesset_num) / summary_path.parent.name / (stem + ".json")
         committee = summary_path.parent.name
+        if json_path.exists():
+            try:
+                import json as _json
+                _data = _json.loads(json_path.read_text(encoding="utf-8"))
+                committee = str(_data.get("committee") or committee)
+            except Exception:
+                pass
 
         for bullet in bullets:
             text = bullet.get("text", "").strip() if isinstance(bullet, dict) else str(bullet).strip()
