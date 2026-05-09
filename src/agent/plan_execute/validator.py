@@ -254,8 +254,22 @@ def validate_plan(
                 f"{_KIND_BAD_TASK_KIND}: {step.id}: task_kind={step.task_kind!r}"
             )
 
+        # analyze steps are LLM-only — no tool calls allowed
+        if step.task_kind == "analyze" and step.allowed_tools:
+            issues.append(
+                f"{_KIND_BAD_TASK_KIND}: {step.id}: task_kind='analyze' must have "
+                f"empty allowed_tools (got {list(step.allowed_tools)!r})"
+            )
+
         # tools must exist in the registry
         for tool_name in (step.allowed_tools or ()):
+            # expand is a pseudo-tool dispatched by the graph, not in the registry
+            if tool_name == "expand":
+                issues.append(
+                    f"{_KIND_UNKNOWN_TOOL}: {step.id}: 'expand' must not appear in "
+                    "allowed_tools — it is executor-internal and always available"
+                )
+                continue
             spec = registry_by_name.get(tool_name)
             if spec is None:
                 issues.append(

@@ -90,3 +90,13 @@ All schema defaults already set `knesset_num=25` (the current Knesset).
 Override only when the user's question explicitly asks about an
 earlier Knesset (e.g. "הכנסת ה-23"). When in doubt, omit
 `knesset_num` from `args_hint` and let the default apply.
+
+## 6. `analyze` steps have NO tools
+
+`task_kind: "analyze"` means the executor reasons over already-collected
+evidence using its own LLM, with no external tool calls.
+
+- Set `allowed_tools: []` (empty array) on every `analyze` step.
+- NEVER put `expand` in `allowed_tools`. `expand` is an executor-internal
+  call always available during step execution — it is not a planning-level
+  tool and will fail validation if listed in any step's `allowed_tools`.
