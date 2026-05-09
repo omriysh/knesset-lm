@@ -170,7 +170,7 @@ def build_bullets(knesset_num: int) -> list[dict]:
 
 
 def build_speeches(knesset_num: int) -> list[dict]:
-    from utils.meeting import load_meeting
+    from utils.meeting import load_meeting, parse_full_text_speeches
     transcriptions_root = config.transcriptions_dir(knesset_num)
     rows = []
     if not transcriptions_root.exists():
@@ -206,17 +206,35 @@ def build_speeches(knesset_num: int) -> list[dict]:
                 }
                 rows.append(_make_row(f"{meeting_id}_{i}", label, body, extra))
         else:
-            # full_text format — index as a single document
+            # full_text format — split into speeches; fall back to single doc if unparseable
             full = (meeting.get("full_text") or "").strip()
             if len(full) < config.MIN_SPEECH_CHARS:
                 continue
-            extra = {
-                "meeting_id": meeting_id,
-                "committee":  committee,
-                "speech_idx": 0,
-                "speaker":    "",
-            }
-            rows.append(_make_row(f"{meeting_id}_0", committee, full, extra))
+            parsed = parse_full_text_speeches(full)
+            if parsed:
+                for i, speech in enumerate(parsed):
+                    speaker = (speech.get("speaker") or "").strip()
+                    text    = (speech.get("text_he") or "").strip()
+                    if len(text) < config.MIN_SPEECH_CHARS:
+                        continue
+                    body  = f"{speaker}: {text}" if speaker else text
+                    label = speaker or f"speech_{i}"
+                    extra = {
+                        "meeting_id": meeting_id,
+                        "committee":  committee,
+                        "speech_idx": i,
+                        "speaker":    speaker,
+                    }
+                    rows.append(_make_row(f"{meeting_id}_{i}", label, body, extra))
+            else:
+                # Regex couldn't find speaker turns — index as one chunk
+                extra = {
+                    "meeting_id": meeting_id,
+                    "committee":  committee,
+                    "speech_idx": 0,
+                    "speaker":    "",
+                }
+                rows.append(_make_row(f"{meeting_id}_0", committee, full, extra))
 
     return rows
 
