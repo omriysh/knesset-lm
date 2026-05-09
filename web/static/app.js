@@ -102,6 +102,7 @@ async function startQuery() {
   let   subgraphContainer = null;
   let   subgraphPhase     = null;
   let   pendingFootnotes  = [];
+  let   pendingCitations  = [];
   let   curEvent          = '';
   let   buf               = '';
 
@@ -137,6 +138,7 @@ async function startQuery() {
             get subgraphContainer()  { return subgraphContainer; },  set subgraphContainer(v)  { subgraphContainer = v; },
             get subgraphPhase()      { return subgraphPhase; },      set subgraphPhase(v)      { subgraphPhase = v; },
             get pendingFootnotes()   { return pendingFootnotes; },   set pendingFootnotes(v)   { pendingFootnotes = v; },
+            get pendingCitations()   { return pendingCitations; },   set pendingCitations(v)   { pendingCitations = v; },
           });
         }
       }
@@ -155,7 +157,7 @@ async function startQuery() {
         if (cursor) cursor.remove();
         // Inject inline citations + sources panel
         if (pendingFootnotes.length > 0) {
-          _applyEvidenceCitations(body, pendingFootnotes);
+          _applyEvidenceCitations(body, pendingFootnotes, pendingCitations);
           agentEl.insertAdjacentHTML('beforeend', _buildSourcesHtml(pendingFootnotes, sessionId));
         }
       }
@@ -197,6 +199,10 @@ function handleEvent(ev, data, refs) {
         const footnotes = data.subgraph?.outputs?.footnotes;
         if (Array.isArray(footnotes) && footnotes.length > 0) {
           refs.pendingFootnotes = footnotes;
+        }
+        const citations = data.subgraph?.outputs?.citations;
+        if (Array.isArray(citations)) {
+          refs.pendingCitations = citations;
         }
         finaliseSubgraphCard(refs.subgraphContainer);
         refs.subgraphContainer = null;
@@ -436,6 +442,7 @@ async function submitResponse(outputVar, value) {
   let   subgraphContainer = null;
   let   subgraphPhase     = null;
   let   pendingFootnotes  = [];
+  let   pendingCitations  = [];
   let   curEvent          = '';
   let   buf               = '';
 
@@ -471,6 +478,7 @@ async function submitResponse(outputVar, value) {
             get subgraphContainer()  { return subgraphContainer; },  set subgraphContainer(v)  { subgraphContainer = v; },
             get subgraphPhase()      { return subgraphPhase; },      set subgraphPhase(v)      { subgraphPhase = v; },
             get pendingFootnotes()   { return pendingFootnotes; },   set pendingFootnotes(v)   { pendingFootnotes = v; },
+            get pendingCitations()   { return pendingCitations; },   set pendingCitations(v)   { pendingCitations = v; },
           });
         }
       }
@@ -487,7 +495,7 @@ async function submitResponse(outputVar, value) {
         if (cursor) cursor.remove();
         // Inject inline citations + sources panel
         if (pendingFootnotes.length > 0) {
-          _applyEvidenceCitations(body, pendingFootnotes);
+          _applyEvidenceCitations(body, pendingFootnotes, pendingCitations);
           agentEl.insertAdjacentHTML('beforeend', _buildSourcesHtml(pendingFootnotes, sessionId));
         }
       }
@@ -1099,14 +1107,87 @@ function renderRetrievalHtml(r) {
 
 /* ── Evidence citations ─────────────────────────────────────── */
 
-function _applyEvidenceCitations(bodyEl, footnotes) {
-  const idxMap = {};
-  footnotes.forEach((fn, i) => { idxMap[fn.id] = i + 1; });
-  bodyEl.innerHTML = bodyEl.innerHTML.replace(/\[ev_([0-9a-f]+)\]/g, (match, hex) => {
-    const evId = 'ev_' + hex;
-    const n = idxMap[evId];
-    if (!n) return match;
-    return `<sup class="ev-cite" title="${evId}">[${n}]</sup>`;
+// Shared popup element — created once, reused.
+let _evPopup = null;
+function _getEvPopup() {
+  if (!_evPopup) {
+    _evPopup = document.createElement('div');
+    _evPopup.className = 'ev-citation-popup';
+    _evPopup.hidden = true;
+    document.body.appendChild(_evPopup);
+    document.addEventListener('click', () => { _evPopup.hidden = true; });
+  }
+  return _evPopup;
+}
+
+function _showCitationPopup(supEl, quote, toolName) {
+  const popup = _getEvPopup();
+  popup.innerHTML =
+    `<div>${esc(quote)}</div>` +
+    (toolName ? `<div class="ev-citation-popup-source">${esc(toolName)}</div>` : '');
+
+  popup.hidden = false;
+  // Measure after making visible so getBoundingClientRect is accurate.
+  const sr = supEl.getBoundingClientRect();
+  const pr = popup.getBoundingClientRect();
+  const GAP = 8;
+  let left = sr.left + sr.width / 2 - pr.width / 2;
+  left = Math.max(8, Math.min(left, window.innerWidth - pr.width - 8));
+  const top = sr.top + window.scrollY - pr.height - GAP;
+  // Tail points at the sup: compute offset within popup.
+  const tailLeft = (sr.left + sr.width / 2) - left;
+  popup.style.left = left + 'px';
+  popup.style.top  = top + 'px';
+  popup.style.setProperty('--tail-left', tailLeft + 'px');
+}
+
+function _applyEvidenceCitations(bodyEl, footnotes, citations) {
+  // Build lookup: citation n → {ev_id, quote}
+  const citMap = {};
+  (citations || []).forEach(c => { if (c && c.n != null) citMap[c.n] = c; });
+
+  // Build lookup: ev_id → footnote index (1-based) for display number
+  const evIdToIdx = {};
+  footnotes.forEach((fn, i) => { evIdToIdx[fn.id] = i + 1; });
+
+  const hasCitations = Object.keys(citMap).length > 0;
+
+  if (hasCitations) {
+    // New format: [N] sequential citation markers from synthesizer
+    bodyEl.innerHTML = bodyEl.innerHTML.replace(/\[(\d+)\]/g, (match, numStr) => {
+      const n   = parseInt(numStr, 10);
+      const cit = citMap[n];
+      if (!cit) return match;
+      const displayN = evIdToIdx[cit.ev_id] || n;
+      return (
+        `<sup class="ev-cite" data-cite-n="${n}" ` +
+        `data-ev-id="${esc(cit.ev_id)}" ` +
+        `data-quote="${esc(cit.quote || '')}" ` +
+        `title="${esc(cit.ev_id)}">[${displayN}]</sup>`
+      );
+    });
+  } else {
+    // Fallback: old [ev_xxx] format (e.g. no citations in payload)
+    bodyEl.innerHTML = bodyEl.innerHTML.replace(/\[ev_([0-9a-f]+)\]/g, (match, hex) => {
+      const evId = 'ev_' + hex;
+      const n = evIdToIdx[evId];
+      if (!n) return match;
+      return `<sup class="ev-cite" data-ev-id="${esc(evId)}" title="${esc(evId)}">[${n}]</sup>`;
+    });
+  }
+
+  // Attach click handlers
+  bodyEl.querySelectorAll('sup.ev-cite').forEach(sup => {
+    sup.addEventListener('click', e => {
+      e.stopPropagation();
+      const quote    = sup.dataset.quote || '';
+      const evId     = sup.dataset.evId  || '';
+      const fn       = footnotes.find(f => f.id === evId);
+      const toolName = fn ? fn.tool_name : '';
+      if (quote) {
+        _showCitationPopup(sup, quote, toolName);
+      }
+    });
   });
 }
 

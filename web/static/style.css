@@ -1548,9 +1548,45 @@ sup.ev-cite {
   color: #6366f1;
   font-size: 0.65em;
   font-weight: 700;
-  cursor: default;
+  cursor: pointer;
   padding: 0 1px;
   vertical-align: super;
+  user-select: none;
+}
+sup.ev-cite:hover { color: #4f46e5; }
+
+.ev-citation-popup {
+  position: fixed;
+  z-index: 9000;
+  background: #fff;
+  border: 1px solid #c7d2fe;
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(99,102,241,0.15);
+  padding: 10px 14px;
+  max-width: 340px;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  direction: rtl;
+  text-align: right;
+  color: #1f2937;
+  pointer-events: none;
+}
+.ev-citation-popup::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: var(--tail-left, 50%);
+  transform: translateX(-50%);
+  border: 7px solid transparent;
+  border-top-color: #fff;
+  border-bottom: none;
+  filter: drop-shadow(0 1px 0 #c7d2fe);
+}
+.ev-citation-popup-source {
+  font-size: 0.72rem;
+  color: #6366f1;
+  margin-top: 6px;
+  opacity: 0.8;
 }
 
 .ev-sources {

@@ -13,34 +13,36 @@ headers (תשובה ישירה / פירוט / שאלות המשך מומלצות
 of MKs, committees, bills, and votes are quoted verbatim from the
 evidence summaries, in their original Hebrew form.
 
-## 2. Footnote-marker syntax: `[ev_xxx]`
+## 2. Citation syntax: `[N]` sequential numbers
 
 EVERY factual claim — every name, date, vote count, quoted opinion —
-ends with a `[ev_xxx]` marker that resolves to an entry id in the
-evidence store. The id format is exactly `ev_` followed by twelve
-hex characters (e.g. `[ev_3a9b1c0d4ef0]`). Do not invent IDs; copy
-them verbatim from the evidence summary view.
+ends with `[N]` where N is a sequential integer starting at 1.
 
-If multiple evidence entries support the same claim, list them
-comma-separated inside one set of brackets:
-`[ev_3a9b1c0d4ef0, ev_7f0e2a1b3c4d]`.
+Each `citations` entry must contain:
+- `ev_id`: copied verbatim from the evidence summary view (format:
+  `ev_` followed by twelve hex characters). Do not invent IDs.
+- `quote`: 1–3 Hebrew sentences verbatim or closely paraphrased from
+  that specific evidence entry that directly support the claim at that
+  citation point in the answer.
+
+The same `ev_id` may appear in multiple `citations` entries with
+different N values when different parts of the same evidence support
+different claims.
 
 If you cannot cite a claim, do not make the claim. Editorialising,
 hedging, or paraphrasing without a citation is a contract violation.
 
-## 3. Footnote section listing evidence sources
+## 3. JSON output wrapper
 
-After the main answer, append a `שאלות המשך מומלצות` section
-(per the generic instructions). DO NOT manually write a `מקורות`
-section — the UI auto-renders it from the markers you used.
+Your entire response must be a single valid JSON object:
+{"answer": "...", "citations": [...]}
 
-When a `[ev_xxx]` marker references an entry that resolves to a
-`meeting_id` (committee meeting protocol or summary), the UI will
-render it as a clickable meeting link. When it resolves to an
-`mk_id`, `bill_id`, `committee_id`, or `vote_id`, the UI links to
-the corresponding profile/detail page. This linking is automatic
-based on what the tool stored in the evidence's `provenance`
-field — your job is only to use the right marker.
+The `answer` value is Hebrew markdown prose. The `citations` array
+has objects with `n` (integer), `ev_id` (string), and `quote`
+(Hebrew string). Output nothing before or after the JSON object.
+
+DO NOT manually write a `מקורות` section in `answer` — the UI
+auto-renders it from the citations you provided.
 
 ## 4. Domain-specific honesty rules
 

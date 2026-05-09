@@ -75,6 +75,36 @@ def _load_generic_prompt(name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Synthesizer output parsing
+# ---------------------------------------------------------------------------
+
+
+def _parse_synthesizer_output(raw: str) -> tuple[str, list[dict]]:
+    """Parse JSON from the synthesizer LLM output.
+
+    Returns (answer_text, citations_list). Falls back to (raw, []) if JSON
+    parsing fails so a broken synthesis still surfaces as plain text.
+    """
+    text = raw.strip()
+    # Strip optional ```json ... ``` fences the model might emit.
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-z]*\n?", "", text)
+        text = re.sub(r"\n?```$", "", text.rstrip())
+        text = text.strip()
+    try:
+        obj = json.loads(text)
+        if isinstance(obj, dict) and "answer" in obj:
+            answer = str(obj.get("answer") or "")
+            citations = obj.get("citations") or []
+            if isinstance(citations, list):
+                return answer, citations
+    except (json.JSONDecodeError, ValueError):
+        pass
+    # Fallback: treat entire output as answer text.
+    return raw, []
+
+
+# ---------------------------------------------------------------------------
 # Helpers for plan parsing
 # ---------------------------------------------------------------------------
 
@@ -169,7 +199,7 @@ class PlanExecuteAgent(SubgraphAgent):
     # instantiate (the test harness uses bare PlanExecuteAgent in some
     # paths).
     EVENTS: set[str] = set()
-    OUTPUT_VARS: list[str] = ["final_answer", "footnotes"]
+    OUTPUT_VARS: list[str] = ["final_answer", "footnotes", "citations"]
 
     # ── Subclass surface ────────────────────────────────────────────────
 
@@ -500,7 +530,7 @@ class PlanExecuteAgent(SubgraphAgent):
             name="synthesizing",
             payload={"plan_version": plan.version},
         )
-        final_answer = yield from self._synthesize_gen(query, plan, self._store)
+        final_answer, citations = yield from self._synthesize_gen(query, plan, self._store)
 
         footnotes = self._collect_footnotes()
 
@@ -510,6 +540,7 @@ class PlanExecuteAgent(SubgraphAgent):
             payload={
                 "final_answer": final_answer,
                 "footnotes":    footnotes,
+                "citations":    citations,
             },
         )
 
@@ -763,7 +794,7 @@ class PlanExecuteAgent(SubgraphAgent):
         query: str,
         plan: Plan,
         store,
-    ) -> Generator[SubgraphEvent, Any, str]:
+    ) -> Generator[SubgraphEvent, Any, tuple[str, list]]:
         """Stream the synthesizer LLM, yielding SubgraphEvents, and return the answer."""
         from pathlib import Path as _Path
         _prompts_dir = _Path(__file__).parent / "prompts"
@@ -814,8 +845,8 @@ class PlanExecuteAgent(SubgraphAgent):
             yield sg_ev
 
         if error_msg:
-            return f"שגיאה בסינתזה: {error_msg}"
-        return "".join(text_parts)
+            return f"שגיאה בסינתזה: {error_msg}", []
+        return _parse_synthesizer_output("".join(text_parts))
 
     def _summary_view_dict(self) -> list[dict]:
         return self._store.summary_view() if self._store is not None else []

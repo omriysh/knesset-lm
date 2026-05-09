@@ -71,7 +71,7 @@ class ResearchAgent(PlanExecuteAgent):
 
     # Context keys the agent writes when it yields ``done``. Matches the
     # outer SM's ``data.output_vars`` for the research subgraph node.
-    OUTPUT_VARS = ["final_answer", "footnotes"]
+    OUTPUT_VARS = ["final_answer", "footnotes", "citations"]
 
     def tool_registry(self) -> ToolRegistry:
         return RESEARCH_TOOL_REGISTRY
