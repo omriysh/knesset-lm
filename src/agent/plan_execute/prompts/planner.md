@@ -24,8 +24,10 @@ Rules:
   A Python budget estimator aggregates these; do NOT emit a
   `cost_estimate_seconds` field yourself.
 - Step IDs are stable footnote stems — once emitted they must not change.
-  Replans are append-only: when you revise a plan, add new steps with new
-  IDs; do not rewrite old ones.
+  Replans are append-only: when you revise a plan, output ONLY the new steps
+  with IDs that continue the existing sequence (e.g. if s1–s4 exist, use
+  s5, s6, …). NEVER reuse or rewrite old step IDs; the agent will silently
+  discard any step whose ID already exists in the plan.
 
 Output: one JSON object matching the schema below. No prose, no markdown
 fences, no commentary.

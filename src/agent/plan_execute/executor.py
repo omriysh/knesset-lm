@@ -413,9 +413,17 @@ def execute_step(
                 )
 
             if decision == "abort_step":
-                return _abort_envelope(
-                    summary or "Executor aborted the step."
-                )
+                if collected:
+                    combined = _combine_envelopes(collected, step.id, call_args)
+                    return ToolEnvelope(
+                        summary=summary or "executor aborted after tool calls.",
+                        full=combined.full,
+                        metadata=combined.metadata,
+                        provenance=combined.provenance,
+                        truncated=combined.truncated,
+                        error="abort_step",
+                    )
+                return _abort_envelope(summary or "Executor aborted the step.")
 
             if decision == "produced":
                 if not collected:
@@ -553,10 +561,14 @@ def execute_step(
     ref_evidence = record["arguments"].get("ref_evidence")
 
     if decision == "abort_step":
-        last_tool = combined.provenance.get("tool_name", "") if isinstance(combined.provenance, dict) else ""
-        return _abort_envelope(
-            record_summary or "executor aborted after tool calls.",
-            tool_name=last_tool,
+        # Preserve tool call data from combined so the UI can display what was called/returned.
+        return ToolEnvelope(
+            summary=record_summary or "executor aborted after tool calls.",
+            full=combined.full,
+            metadata=combined.metadata,
+            provenance=combined.provenance,
+            truncated=combined.truncated,
+            error="abort_step",
         )
 
     if decision == "skip":

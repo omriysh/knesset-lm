@@ -258,20 +258,25 @@ class EvidenceStore:
 
         Includes tool arguments (from provenance tool_calls) so the LLM can
         see what was queried, but excludes full results and provenance details.
+        ``full_available`` signals that calling ``expand(evidence_id=<id>)``
+        will return structured data (meeting_ids, bill_ids, etc.).
         """
         out: list[dict] = []
         for entry in self.iter():
             env = entry.envelope
             prov = env.provenance if isinstance(env.provenance, dict) else {}
+            # Full payload may be in memory or spilled to disk; either way expand works.
+            has_full = bool(env.full) or (entry.id in self._spill_paths)
             out.append({
-                "id":         entry.id,
-                "tool_name":  entry.tool_name,
-                "step_id":    entry.step_id,
-                "summary":    env.summary or "",
-                "tool_calls": prov.get("tool_calls") or [],
-                "metadata":   env.metadata or {},
-                "truncated":  bool(env.truncated),
-                "error":      env.error,
+                "id":             entry.id,
+                "tool_name":      entry.tool_name,
+                "step_id":        entry.step_id,
+                "summary":        env.summary or "",
+                "tool_calls":     prov.get("tool_calls") or [],
+                "metadata":       env.metadata or {},
+                "truncated":      bool(env.truncated),
+                "error":          env.error,
+                "full_available": has_full,
             })
         return out
 

@@ -31,11 +31,11 @@ Decision protocol:
    arguments to tools MUST be in Hebrew. You may call up to
    {max_tool_calls} tools total for this step.
 
-3. If `args_hint` points you to the result of a previous step, search
-   the evidence for previous tool calls that meat your needs, and
-   call `exapnd` to get their results.
-   The specific wording in args_hint is just there as a hint, and
-   doesn't necesserily point to a defined interface you can use.
+3. The evidence_view only shows summaries — raw structured results (IDs,
+   lists, etc.) are NOT included. If your task requires IDs or data from
+   a previous step (e.g. meeting_ids from search_topics, bill_id from
+   find_bill), call `expand` with the `ev_xxx` id from evidence_view to
+   get the full raw results. Do this BEFORE calling any other tool.
 
 4. After each tool returns you will see its result. You may then call
    another tool if more information is needed, or proceed to step 4.

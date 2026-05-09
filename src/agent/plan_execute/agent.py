@@ -125,6 +125,27 @@ def _make_plan_from_dict(d: dict, *, version: int = 1) -> Plan | None:
     return plan
 
 
+def _build_replan_section(replan_hint: str, prior_plan: "Plan | None") -> str:
+    """Build the {replan_hint} template slot for replanning calls.
+
+    Includes the existing step IDs so the planner doesn't restart at s1.
+    """
+    parts: list[str] = []
+    if replan_hint:
+        parts.append(f"Replan hint: {replan_hint}")
+    if prior_plan is not None and prior_plan.steps:
+        existing_ids = [s.id for s in prior_plan.steps]
+        nums = [int(m.group(1)) for s in existing_ids
+                if (m := re.match(r"^s(\d+)$", s)) is not None]
+        next_n = max(nums) + 1 if nums else len(existing_ids) + 1
+        parts.append(
+            f"REPLAN — existing step IDs that must NOT be reused: {existing_ids}. "
+            f"New steps MUST continue the sequence: s{next_n}, s{next_n + 1}, … "
+            "Do NOT start from s1."
+        )
+    return ("\n" + "\n".join(parts)) if parts else ""
+
+
 # ---------------------------------------------------------------------------
 # PlanExecuteAgent
 # ---------------------------------------------------------------------------
@@ -710,7 +731,7 @@ class PlanExecuteAgent(SubgraphAgent):
                 "evidence_view":  json.dumps(
                     self._summary_view_dict(), ensure_ascii=False, indent=2
                 ),
-                "replan_hint":    f"\nReplan hint: {replan_hint}" if replan_hint else "",
+                "replan_hint":    _build_replan_section(replan_hint, prior_plan),
             },
         )
 

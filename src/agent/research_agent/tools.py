@@ -87,9 +87,18 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         schema={
             "type": "object",
             "description": (
-                "Keyword search across all protocol speeches with optional "
+                "BM25 keyword search over protocol speech text with optional "
                 "filters by committee, meeting, speaker, or date range. "
-                "Returns top_k speech-anchor hits with meeting+speaker context. "
+                "Returns top_k speech-anchor hits with meeting+speaker context.\n"
+                "IMPORTANT — query syntax rules:\n"
+                "  • Write a plain Hebrew phrase (a few key words). All tokens "
+                "are required to appear in the same speech — they are AND-ed.\n"
+                "  • No boolean operators: do NOT write OR / AND / NOT. Those "
+                "words are treated as literal tokens and will kill recall.\n"
+                "  • Do NOT combine multiple questions into one query string. "
+                "Use separate tool calls for each distinct sub-topic.\n"
+                "  • Prefer the single most discriminative Hebrew term rather "
+                "than a long sentence.\n"
                 "Cost scales with top_k: top_k > 100 becomes expensive (BM25 "
                 "over many MB of speeches); prefer narrowing via committee_ids "
                 "/ speaker / date range before raising top_k."

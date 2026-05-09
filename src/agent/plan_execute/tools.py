@@ -26,9 +26,12 @@ EXPAND_TOOL_SCHEMA: dict = {
     "function": {
         "name": "expand",
         "description": (
-            "Request the full payload of a spilled EvidenceEntry by its ID. "
-            "Use this when the executor summary references an evidence entry "
-            "whose full content was not included inline."
+            "Fetch the raw tool results from a previous step's evidence entry. "
+            "The evidence_view only shows natural-language summaries; the actual "
+            "structured data (meeting_ids, bill_ids, mk_ids, vote_ids, etc.) is "
+            "in the full payload. Call expand(evidence_id=<ev_xxx id from evidence_view>) "
+            "whenever a downstream step needs specific IDs or structured values "
+            "that were produced by an earlier step."
         ),
         "parameters": {
             "type": "object",
