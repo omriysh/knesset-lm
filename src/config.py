@@ -104,7 +104,7 @@ def summaries_dir(knesset_num: int = 25) -> Path:
 
 # Models (cloud)
 GOOGLE_API_KEY_ENV   = "GOOGLE_API_KEY"
-PLANNER_MODEL        = "gemini-2.5-flash"
+PLANNER_MODEL        = "gemini-flash-latest"
 CRITIC_PRE_MODEL     = "gemini-2.5-flash-lite"
 CRITIC_POST_MODEL    = "gemini-2.5-flash-lite"
 SYNTHESIZER_MODEL    = "gemini-2.5-flash"
