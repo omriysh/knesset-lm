@@ -26,9 +26,10 @@ embedding a free-text name into an `args_hint` like
 reject it and the pre-critic will flag it as PHANTOM_ENTITY.
 
 **`find_mk` already returns the full profile.** Each candidate in its
-result includes party/faction history, committee positions, and
-ministerial roles. Do NOT plan a separate profile or committee-list
-fetch step after `find_mk` — the data is already there.
+result carries a `profile` field with: `factions`, `committee_positions`,
+`govministries`, and `is_current` — all filtered to the requested
+`knesset_num`. Do NOT plan a separate profile or committee-list fetch
+step after `find_mk` — the data is already there.
 
 **`find_committee` already returns the member list.** Each candidate
 in its result includes the active members with their roles (chair,

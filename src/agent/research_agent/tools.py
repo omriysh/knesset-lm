@@ -233,7 +233,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
 
     # NOTE: get_mk_profile and get_mk_committees are intentionally absent —
     # find_mk already returns the full profile (party/faction history,
-    # committee positions) in each candidate's `record` field.
+    # committee positions, govministries) in each candidate's `profile` field.
     # get_committee_members is also absent — find_committee already includes
     # the active member list in each candidate's `record` field.
 

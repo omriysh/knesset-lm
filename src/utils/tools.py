@@ -485,16 +485,67 @@ def _sql_safe(s: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _build_mk_full_profile(record: dict, knesset_num: int) -> dict:
+    """Return a clean MK profile dict filtered to the given Knesset."""
+    def _kn_filter(items: list, key: str = "knesset") -> list:
+        return [x for x in (items or []) if not isinstance(x, dict) or x.get(key) in (None, knesset_num)]
+
+    return {
+        "mk_id":               str(record.get("mk_individual_id") or record.get("PersonID") or ""),
+        "full_name":           record.get("full_name") or record.get("mk_individual_name") or "",
+        "is_current":          record.get("IsCurrent", False),
+        "factions":            _kn_filter(record.get("factions")),
+        "committee_positions": _kn_filter(record.get("committee_positions")),
+        "govministries":       _kn_filter(record.get("govministries")),
+        "faction_chairpersons": _kn_filter(record.get("faction_chairpersons")),
+    }
+
+
 def handle_find_mk(args: dict) -> ToolEnvelope:
-    return _generic_find(
-        args,
-        target="mks",
-        kind="search",
-        source="bm25_mks",
-        id_key="mk_id",
-        label_key="full_name",
-        fetch_record=lambda eid: _fetch_mk_record(eid),
-        default_top_k=5,
+    query       = (args.get("query") or "").strip()
+    knesset_num = int(args.get("knesset_num") or 25)
+    top_k       = max(1, int(args.get("top_k") or 5))
+
+    if not query:
+        return _validation_error("missing_query", kind="search", source="bm25_mks",
+                                 knesset_num=knesset_num)
+
+    bm25 = _open_bm25("mks", knesset_num)
+    if bm25 is None:
+        return _bm25_missing_envelope("mks", knesset_num)
+
+    try:
+        fuzzy = FuzzyNameIndex.from_bm25(bm25)
+    finally:
+        bm25.close()
+
+    candidates = name_search(query, fuzzy_index=fuzzy, knesset_num=knesset_num, top_k=top_k)
+
+    payload: list[dict] = []
+    for c in candidates:
+        raw = _fetch_mk_record(c["id"])
+        item: dict = {
+            "mk_id":     c["id"],
+            "full_name": c["label"],
+            "score":     c["score"],
+        }
+        if raw is not None:
+            item["profile"] = _build_mk_full_profile(raw, knesset_num)
+        payload.append(item)
+
+    warnings: list[str] = []
+    if payload and not payload[0].get("profile"):
+        warnings.append("low_confidence_match")
+
+    metadata: dict = {"kind": "search", "source": "bm25_mks", "count": len(payload)}
+    if warnings:
+        metadata["warnings"] = warnings
+
+    return ToolEnvelope(
+        summary="",
+        full=json.dumps(payload, ensure_ascii=False),
+        metadata=metadata,
+        provenance={"query": query, "knesset_num": knesset_num, "top_k": top_k},
     )
 
 
