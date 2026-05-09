@@ -60,8 +60,7 @@ keep linking to the same primary source.
 If the user asks about both MKs' opinions AND their voting record on
 the same topic, you need at least one step that touches protocols
 (`search_topics` / `search_protocols_keyword`) AND at least one step
-that touches votes (`get_votes_on_topic`, `get_mk_votes`,
-`get_votes_on_topic_by_mk`). A plan that only covers one half is
+that touches votes (`query_voting_records`). A plan that only covers one half is
 under-reaching and will be flagged.
 
 Likewise, "what did committee X discuss about Y?" needs both the

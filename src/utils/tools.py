@@ -898,66 +898,39 @@ def handle_get_bill_text(args: dict) -> ToolEnvelope:
 
 
 # ---------------------------------------------------------------------------
-# Voting tools (4)
+# Voting tools (merged)
 # ---------------------------------------------------------------------------
 
 
-def handle_get_mk_votes(args: dict) -> ToolEnvelope:
-    mk_id = (args.get("mk_id") or "").strip()
-    knesset_num = int(args.get("knesset_num") or 25)
-    top_n = int(args.get("top_n") or 20)
-
-    if not mk_id:
-        return _validation_error(
-            "missing_mk_id", kind="fetch", source="odata",
-            knesset_num=knesset_num,
-        )
-    record = _fetch_mk_record(mk_id)
-    if record is None:
-        return _validation_error(
-            "mk_not_found", kind="fetch", source="odata",
-            mk_id=mk_id, knesset_num=knesset_num,
-        )
-    name = record.get("full_name") or record.get("mk_individual_name") or ""
-    return adapt_get_mk_votes(name=name, knesset_num=knesset_num, top_n=top_n)
-
-
-def handle_get_votes_on_topic(args: dict) -> ToolEnvelope:
-    topic = (args.get("topic") or "").strip()
-    top_n = int(args.get("top_n") or 20)
-    if not topic:
-        return _validation_error("missing_topic", kind="search", source="odata")
-    return adapt_get_votes_on_topic(topic=topic, top_n=top_n)
-
-
-def handle_get_votes_on_topic_by_mk(args: dict) -> ToolEnvelope:
+def handle_query_voting_records(args: dict) -> ToolEnvelope:
+    """Unified voting query — behaviour determined by which params are supplied:
+      topic + mk_id → how that MK voted on matching votes
+      mk_id only    → recent votes cast by the MK
+      topic only    → votes matching the topic keyword
+      neither       → most recent votes overall
+    """
     topic = (args.get("topic") or "").strip()
     mk_id = (args.get("mk_id") or "").strip()
     knesset_num = int(args.get("knesset_num") or 25)
     top_n = int(args.get("top_n") or 20)
 
-    if not topic:
-        return _validation_error("missing_topic", kind="fetch", source="odata")
-    if not mk_id:
-        return _validation_error(
-            "missing_mk_id", kind="fetch", source="odata",
-            knesset_num=knesset_num,
-        )
-    record = _fetch_mk_record(mk_id)
-    if record is None:
-        return _validation_error(
-            "mk_not_found", kind="fetch", source="odata",
-            mk_id=mk_id, knesset_num=knesset_num,
-        )
-    name = record.get("full_name") or record.get("mk_individual_name") or ""
-    return adapt_get_votes_on_topic_by_mk(
-        topic=topic, name=name, knesset_num=knesset_num, top_n=top_n,
-    )
+    if mk_id:
+        record = _fetch_mk_record(mk_id)
+        if record is None:
+            return _validation_error(
+                "mk_not_found", kind="fetch", source="odata",
+                mk_id=mk_id, knesset_num=knesset_num,
+            )
+        name = record.get("full_name") or record.get("mk_individual_name") or ""
+        if topic:
+            return adapt_get_votes_on_topic_by_mk(
+                topic=topic, name=name, knesset_num=knesset_num, top_n=top_n,
+            )
+        return adapt_get_mk_votes(name=name, knesset_num=knesset_num, top_n=top_n)
 
+    if topic:
+        return adapt_get_votes_on_topic(topic=topic, top_n=top_n)
 
-def handle_get_recent_votes(args: dict) -> ToolEnvelope:
-    knesset_num = int(args.get("knesset_num") or 25)
-    top_n = int(args.get("top_n") or 10)
     return adapt_get_recent_votes(top_n=top_n, knesset_num=knesset_num)
 
 
@@ -1186,10 +1159,7 @@ __all__ = [
     "handle_get_bill_text",
     "handle_get_meeting_summary",
     # votes
-    "handle_get_mk_votes",
-    "handle_get_votes_on_topic",
-    "handle_get_votes_on_topic_by_mk",
-    "handle_get_recent_votes",
+    "handle_query_voting_records",
     # deep
     "handle_deep_dive_meeting",
 ]

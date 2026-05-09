@@ -33,10 +33,7 @@ from utils.tools import (
     handle_get_bill_text,
     handle_get_committee_sessions,
     handle_get_meeting_summary,
-    handle_get_mk_votes,
-    handle_get_recent_votes,
-    handle_get_votes_on_topic,
-    handle_get_votes_on_topic_by_mk,
+    handle_query_voting_records,
     handle_search_protocols_keyword,
     handle_search_topics,
 )
@@ -328,72 +325,26 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
 
     # ── Voting tools ──────────────────────────────────────────────────────
     ToolSpec(
-        name="get_mk_votes",
-        schema={
-            "type": "object",
-            "description": "Recent plenum votes cast by an MK and how they voted. Use find_mk first to get mk_id.",
-            "properties": {
-                "mk_id":       {"type": "string"},
-                "knesset_num": {"type": "integer", "default": 25},
-                "top_n":       {"type": "integer", "default": 20, "minimum": 1},
-            },
-            "required": ["mk_id"],
-        },
-        handler=handle_get_mk_votes,
-        task_kinds=["fetch"],
-        cost_hint="cheap",
-    ),
-
-    ToolSpec(
-        name="get_votes_on_topic",
+        name="query_voting_records",
         schema={
             "type": "object",
             "description": (
-                "Search plenum votes by topic keyword. Returns vote "
-                "metadata, no per-MK results."
+                "Unified plenum vote query. Behaviour depends on which params are supplied:\n"
+                "  topic + mk_id → how that MK voted on each matching vote\n"
+                "  mk_id only   → recent votes cast by the MK\n"
+                "  topic only   → vote metadata for votes matching the keyword\n"
+                "  neither      → most recent votes overall\n"
+                "Use find_mk first to obtain mk_id."
             ),
-            "properties": {
-                "topic":       {"type": "string"},
-                "knesset_num": {"type": "integer", "default": 25},
-                "top_n":       {"type": "integer", "default": 20, "minimum": 1},
-            },
-            "required": ["topic"],
-        },
-        handler=handle_get_votes_on_topic,
-        task_kinds=["discover"],
-        cost_hint="cheap",
-    ),
-
-    ToolSpec(
-        name="get_votes_on_topic_by_mk",
-        schema={
-            "type": "object",
-            "description": "How a specific MK voted on each vote matching a topic. Use find_mk first to get mk_id.",
             "properties": {
                 "topic":       {"type": "string"},
                 "mk_id":       {"type": "string"},
                 "knesset_num": {"type": "integer", "default": 25},
                 "top_n":       {"type": "integer", "default": 20, "minimum": 1},
             },
-            "required": ["topic", "mk_id"],
         },
-        handler=handle_get_votes_on_topic_by_mk,
-        task_kinds=["fetch", "filter"],
-        cost_hint="cheap",
-    ),
-
-    ToolSpec(
-        name="get_recent_votes",
-        schema={
-            "type": "object",
-            "description": "Most recent plenum votes overall. No filters.",
-            "properties": {
-                "knesset_num": {"type": "integer", "default": 25},
-                "top_n":       {"type": "integer", "default": 10, "minimum": 1},
-            },
-        },
-        handler=handle_get_recent_votes,
-        task_kinds=["discover"],
+        handler=handle_query_voting_records,
+        task_kinds=["discover", "fetch", "filter"],
         cost_hint="cheap",
     ),
 
