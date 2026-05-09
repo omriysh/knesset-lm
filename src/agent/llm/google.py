@@ -30,7 +30,7 @@ from google import genai
 from google.genai import types
 
 import config
-from agent.llm.base import DoneEvent, LLMEvent, ThinkingEvent, TokenEvent, ToolCallsEvent
+from agent.llm.base import DoneEvent, LLMBackend, LLMEvent, ThinkingEvent, TokenEvent, ToolCallsEvent
 
 
 def _convert_tools_genai(tools: list[dict]) -> list[types.Tool] | None:
@@ -154,7 +154,7 @@ def _model_supports_thinking(model: str) -> bool:
     return model.startswith("gemini-2.5")
 
 
-class GoogleBackend:
+class GoogleBackend(LLMBackend):
     """LLMBackend for Google Gemini / Gemma cloud models via google.genai SDK."""
 
     MODEL             = "gemini-2.5-flash-lite"
@@ -231,7 +231,7 @@ class GoogleBackend:
 
     # ── Streaming ─────────────────────────────────────────────────────────────
 
-    def stream(
+    def _stream_impl(
         self,
         messages:    list[dict],
         tools:       list[dict] | None = None,
