@@ -97,9 +97,26 @@ def _parse_synthesizer_output(raw: str) -> tuple[str, list[dict]]:
             answer = str(obj.get("answer") or "")
             citations = obj.get("citations") or []
             if isinstance(citations, list):
+                print(
+                    f"[synthesizer] parsed ok: answer_len={len(answer)} citations={len(citations)}",
+                    flush=True,
+                )
                 return answer, citations
-    except (json.JSONDecodeError, ValueError):
-        pass
+            print(
+                f"[synthesizer] 'citations' field is not a list (type={type(citations).__name__}); falling back",
+                flush=True,
+            )
+        else:
+            keys = list(obj.keys()) if isinstance(obj, dict) else type(obj).__name__
+            print(
+                f"[synthesizer] JSON parsed but 'answer' key missing; keys={keys}; falling back",
+                flush=True,
+            )
+    except (json.JSONDecodeError, ValueError) as exc:
+        print(
+            f"[synthesizer] JSON parse failed ({exc}); raw_len={len(raw)} first_200={raw[:200]!r}",
+            flush=True,
+        )
     # Fallback: treat entire output as answer text.
     return raw, []
 
@@ -830,6 +847,12 @@ class PlanExecuteAgent(SubgraphAgent):
             expanded_payloads=json.dumps(expanded, ensure_ascii=False, indent=2),
         )
 
+        print(
+            f"[synthesizer] starting: evidence_entries={len(view)} expanded={len(expanded)} "
+            f"prompt_len={len(prompt)}",
+            flush=True,
+        )
+
         phase = "synthesizer"
         text_parts: list[str] = []
         error_msg: str = ""
@@ -844,9 +867,16 @@ class PlanExecuteAgent(SubgraphAgent):
                 error_msg = sg_ev.payload["error"]
             yield sg_ev
 
+        raw_output = "".join(text_parts)
+        print(
+            f"[synthesizer] llm done: raw_len={len(raw_output)} error={error_msg!r} "
+            f"first_100={raw_output[:100]!r}",
+            flush=True,
+        )
+
         if error_msg:
             return f"שגיאה בסינתזה: {error_msg}", []
-        return _parse_synthesizer_output("".join(text_parts))
+        return _parse_synthesizer_output(raw_output)
 
     def _summary_view_dict(self) -> list[dict]:
         return self._store.summary_view() if self._store is not None else []
