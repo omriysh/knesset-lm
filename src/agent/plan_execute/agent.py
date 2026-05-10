@@ -483,6 +483,15 @@ class PlanExecuteAgent(SubgraphAgent):
             for s in pending_steps:
                 executed_step_ids.add(s.id)
 
+            # Skip answer validator when no more replans are available.
+            if post_replans >= max_replans:
+                yield SubgraphEvent(
+                    kind="progress",
+                    name="critic_post_replan_capped",
+                    payload={"reason": "max_replans_reached", "replans": post_replans},
+                )
+                break
+
             yield SubgraphEvent(
                 kind="progress",
                 name="critic_post_started",
@@ -492,15 +501,6 @@ class PlanExecuteAgent(SubgraphAgent):
             yield from self._llm.drain_events()
 
             if cpost.verdict != "replan":
-                break
-
-            if post_replans >= max_replans:
-                # Force-synthesize anyway per §11.
-                yield SubgraphEvent(
-                    kind="progress",
-                    name="critic_post_replan_capped",
-                    payload={"reason": cpost.reason, "replans": post_replans},
-                )
                 break
 
             try:
