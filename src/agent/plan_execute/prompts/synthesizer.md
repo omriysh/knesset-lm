@@ -37,6 +37,12 @@ Citation rules:
   - For list results (e.g. search_topics returning an array of
     bullets): include only the specific element(s) that support the
     claim, not the whole array.
+  - For protocol evidence (search_topics, search_protocols_keyword,
+    get_meeting_summary, deep_dive_meeting): always include `meeting_id`
+    and `committee` fields in the quote if present — even if they are not
+    the direct claim. They are needed by the UI to show meeting context.
+  - For voting evidence (query_voting_records, find_vote): always include
+    `mk_name` (if present), `vote_title`, and `result` fields.
 - The same `ev_id` may appear in multiple `citations` entries with
   different N values when different parts of the same evidence support
   different claims — use this freely.

@@ -29,6 +29,14 @@ Each `citations` entry must contain:
   the current claim. For list results (e.g. `search_topics`), include
   only the specific element(s) that support the claim.
 
+  For protocol evidence (search_topics, search_protocols_keyword,
+  get_meeting_summary, deep_dive_meeting): always include `meeting_id`
+  and `committee` in the quote if present — the UI uses them for
+  meeting context display.
+
+  For voting evidence (query_voting_records, find_vote): always include
+  `mk_name` (if present), `vote_title`, and `result` fields.
+
 The same `ev_id` may appear in multiple `citations` entries with
 different N values when different parts of the same evidence support
 different claims.

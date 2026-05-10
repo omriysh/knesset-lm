@@ -1063,7 +1063,7 @@ def get_votes_on_topic_by_mk(
                 result_by_vote[row["VoteID"]] = row.get("ResultDesc", "")
 
     return [
-        {**v, "result": result_by_vote.get(v["vote_id"], "לא הצביע")}
+        {**v, "mk_name": mk_name, "result": result_by_vote.get(v["vote_id"], "לא הצביע")}
         for v in votes
     ]
 

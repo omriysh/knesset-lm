@@ -57,61 +57,88 @@ from agent.llm.gemma import GemmaLlamaBackend
 # events are streamed; served by GET /api/research/{sid}/tool_result/{ref_id}.
 _TOOL_RESULT_CACHE: dict[str, str] = {}
 
-# ── Meeting date cache ────────────────────────────────────────────────────────
-_MEETING_DATE_CACHE: dict[str, str | None] = {}
+# ── Meeting info cache (meeting_id → {date, committee}) ───────────────────────
+_MEETING_INFO_CACHE: dict[str, dict] = {}
 
 
-def _get_meeting_date(meeting_id: str) -> str | None:
-    """Resolve a meeting_id (session_id) to a DD/MM/YYYY date string.
+def _get_meeting_info(meeting_id: str) -> dict:
+    """Resolve a meeting_id to {date: DD/MM/YYYY, committee: Hebrew name}.
 
     Scans raw_transcriptions across all Knesset numbers; filenames are
-    DD_MM_YYYY_<session_id>.json.  Result is cached in-process.
+    DD_MM_YYYY_<session_id>.json, stored under <knesset_num>/<committee>/.
+    Result is cached in-process.  Returns {} if not found.
     """
     import glob as _glob
-    if meeting_id in _MEETING_DATE_CACHE:
-        return _MEETING_DATE_CACHE[meeting_id]
+    if meeting_id in _MEETING_INFO_CACHE:
+        return _MEETING_INFO_CACHE[meeting_id]
     base = config.transcriptions_dir(25).parent  # Data/raw_transcriptions/
     matches = _glob.glob(str(base / "**" / f"*_{meeting_id}.json"), recursive=True)
-    date: str | None = None
+    info: dict = {}
     if matches:
-        parts = Path(matches[0]).stem.split("_")  # DD_MM_YYYY_session_id
+        p = Path(matches[0])
+        parts = p.stem.split("_")            # DD_MM_YYYY_session_id
         if len(parts) >= 4:
-            date = f"{parts[0]}/{parts[1]}/{parts[2]}"
-    _MEETING_DATE_CACHE[meeting_id] = date
-    return date
+            info["date"] = f"{parts[0]}/{parts[1]}/{parts[2]}"
+        info["committee"] = p.parent.name.replace("_", " ")
+    _MEETING_INFO_CACHE[meeting_id] = info
+    return info
 
 
 def _enrich_citations(citations: list[dict], footnote_by_id: dict[str, dict]) -> list[dict]:
-    """Resolve meeting_id → date in citation quote objects where the tool's ui
-    has enrich_fields containing 'meeting_id'."""
+    """Enrich citation quotes:
+    - Empty/null quote → inject provenance fields as a special _no_results marker
+    - meeting_id present in quote → resolve to DD/MM/YYYY date string
+    """
+    _PROV_QUERY_KEYS = ("query", "topic", "mk_query", "speaker", "committee")
+
     enriched = []
     for cit in citations:
         ev_id = cit.get("ev_id", "")
         fn = footnote_by_id.get(ev_id, {})
-        enrich_fields = (fn.get("ui") or {}).get("enrich_fields", [])
-        if "meeting_id" not in enrich_fields:
-            enriched.append(cit)
-            continue
+        ui = fn.get("ui") or {}
+        enrich_fields = ui.get("enrich_fields", [])
+
         quote = cit.get("quote")
         if isinstance(quote, str):
             try:
                 quote = json.loads(quote)
             except Exception:
-                quote = None
-        if isinstance(quote, dict) and "meeting_id" in quote and "date" not in quote:
-            date = _get_meeting_date(str(quote["meeting_id"]))
-            if date:
-                quote = {**quote, "date": date}
+                pass  # keep as string
+
+        # Empty quote → substitute provenance so UI can show what was queried
+        if quote is None or quote == "" or quote == [] or quote == {}:
+            prov = fn.get("provenance") or {}
+            useful = {k: v for k, v in prov.items() if k in _PROV_QUERY_KEYS and v}
+            if useful:
+                cit = {**cit, "quote": {"_no_results": True, **useful}}
+            enriched.append(cit)
+            continue
+
+        # meeting_id enrichment (date + committee)
+        if "meeting_id" not in enrich_fields:
+            enriched.append(cit)
+            continue
+
+        def _apply_meeting_info(obj: dict) -> dict:
+            mid = obj.get("meeting_id")
+            if mid is None:
+                return obj
+            info = _get_meeting_info(str(mid))
+            patch: dict = {}
+            if info.get("date") and "date" not in obj:
+                patch["date"] = info["date"]
+            if info.get("committee"):
+                patch["committee"] = info["committee"]
+            return {**obj, **patch} if patch else obj
+
+        if isinstance(quote, dict):
+            quote = _apply_meeting_info(quote)
             cit = {**cit, "quote": quote}
         elif isinstance(quote, list):
-            new_list = []
-            for item in quote:
-                if isinstance(item, dict) and "meeting_id" in item and "date" not in item:
-                    date = _get_meeting_date(str(item["meeting_id"]))
-                    if date:
-                        item = {**item, "date": date}
-                new_list.append(item)
-            cit = {**cit, "quote": new_list}
+            cit = {**cit, "quote": [
+                _apply_meeting_info(item) if isinstance(item, dict) else item
+                for item in quote
+            ]}
         enriched.append(cit)
     return enriched
 

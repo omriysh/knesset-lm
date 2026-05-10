@@ -1604,6 +1604,11 @@ sup.ev-cite:hover { color: #4f46e5; }
   border-top: 1px solid #e5e7eb;
   margin: 6px 0;
 }
+.ev-citation-empty {
+  font-size: 0.82rem;
+  color: #6b7280;
+  font-style: italic;
+}
 .ev-citation-kvlist { font-size: 0.82rem; }
 .ev-citation-kv {
   display: flex;

@@ -1133,6 +1133,12 @@ function _renderQuoteObj(obj) {
   if (typeof obj !== 'object' || obj === null) {
     return `<div class="ev-citation-quote">${esc(String(obj))}</div>`;
   }
+  // Empty result: show the query that returned nothing
+  if (obj._no_results) {
+    const q = obj.query || obj.topic || obj.mk_query || obj.speaker || '';
+    const label = q ? ` עבור "${esc(q)}"` : '';
+    return `<div class="ev-citation-empty">לא נמצאו תוצאות${label}</div>`;
+  }
   // Meeting-like: has meeting_id or committee → structured header + text
   if (obj.meeting_id != null || obj.committee != null) {
     const parts = [];
