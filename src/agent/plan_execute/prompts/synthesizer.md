@@ -13,7 +13,7 @@ You receive:
 {
   "answer": "<Hebrew markdown answer with [N] citation markers>",
   "citations": [
-    {"n": 1, "ev_id": "ev_...", "quote": "<Hebrew quote from evidence>"},
+    {"n": 1, "ev_id": "ev_...", "quote": <JSON fragment from evidence>},
     ...
   ]
 }
@@ -22,9 +22,21 @@ Citation rules:
 - Every factual claim in `answer` ends with `[N]` where N is a
   sequential integer starting at 1.
 - Each `citations` entry maps one N to: the `ev_id` of the evidence
-  entry being cited, and a `quote` — 1–3 Hebrew sentences verbatim or
-  closely paraphrased from that evidence entry that directly support
-  the specific claim at that citation point.
+  entry being cited, and a `quote` — a JSON object or array copied
+  verbatim from the relevant part of that evidence entry. Rules for
+  selecting the quote:
+  - Copy field names and values exactly — do not translate or paraphrase.
+  - Select ONLY the fields/elements that directly back the specific
+    claim at this citation point. Do not include unrelated sections.
+  - For multi-section results (e.g. find_mk with separate `factions`
+    and `committee_positions` arrays): include only the section(s)
+    relevant to the current claim. If citing a committee role, include
+    only the matching `committee_positions` entry — not the `factions`
+    array. If citing faction membership, include only the matching
+    `factions` entry.
+  - For list results (e.g. search_topics returning an array of
+    bullets): include only the specific element(s) that support the
+    claim, not the whole array.
 - The same `ev_id` may appear in multiple `citations` entries with
   different N values when different parts of the same evidence support
   different claims — use this freely.

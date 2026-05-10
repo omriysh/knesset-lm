@@ -427,6 +427,15 @@ def execute_step(
 
             if decision == "produced":
                 if not collected:
+                    if step.task_kind == "analyze":
+                        # analyze steps reason over existing evidence — no prior tool calls expected
+                        return ToolEnvelope(
+                            summary=summary or "No analysis produced.",
+                            full=summary or "",
+                            metadata={"kind": "analyze", "source": "executor", "count": 0},
+                            provenance={"step_id": step.id},
+                            error=None,
+                        )
                     return _abort_envelope(
                         "record_evidence(produced) called without any tool results"
                     )

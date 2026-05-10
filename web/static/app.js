@@ -1120,21 +1120,74 @@ function _getEvPopup() {
   return _evPopup;
 }
 
-function _showCitationPopup(supEl, quote, toolName) {
+// Fields to skip when rendering a quote object generically.
+const _QUOTE_SKIP = new Set([
+  'bullet_id', 'bullet_idx', 'id', 'knesset', 'knesset_num',
+  'mk_individual_id', 'committee_id', 'faction_id', 'position_id',
+]);
+
+function _renderQuoteObj(obj) {
+  if (Array.isArray(obj)) {
+    return obj.map(_renderQuoteObj).join('<hr class="ev-quote-sep">');
+  }
+  if (typeof obj !== 'object' || obj === null) {
+    return `<div class="ev-citation-quote">${esc(String(obj))}</div>`;
+  }
+  // Meeting-like: has meeting_id or committee → structured header + text
+  if (obj.meeting_id != null || obj.committee != null) {
+    const parts = [];
+    if (obj.committee) parts.push(esc(String(obj.committee)));
+    if (obj.date)      parts.push(esc(String(obj.date)));
+    const header = parts.length
+      ? `<div class="ev-citation-meeting-header">${parts.join(' &middot; ')}</div>`
+      : '';
+    const text = obj.text || obj.label || obj.summary || obj.full_text || '';
+    const textHtml = text ? `<div class="ev-citation-quote">${esc(String(text))}</div>` : '';
+    return header + textHtml;
+  }
+  // Generic: render visible key-value pairs
+  const rows = Object.entries(obj)
+    .filter(([k, v]) => !_QUOTE_SKIP.has(k) && v != null && v !== '')
+    .map(([k, v]) => {
+      const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
+      return `<div class="ev-citation-kv">` +
+        `<span class="ev-kv-key">${esc(k)}</span>` +
+        `<span class="ev-kv-val">${esc(val)}</span></div>`;
+    });
+  return rows.length
+    ? `<div class="ev-citation-kvlist">${rows.join('')}</div>`
+    : `<div class="ev-citation-quote">${esc(JSON.stringify(obj))}</div>`;
+}
+
+function _showCitationPopup(supEl, quoteRaw, uiMeta) {
   const popup = _getEvPopup();
-  popup.innerHTML =
-    `<div>${esc(quote)}</div>` +
-    (toolName ? `<div class="ev-citation-popup-source">${esc(toolName)}</div>` : '');
+
+  // Parse quote — may be a JSON object/array or a plain string.
+  let quoteObj = null;
+  if (typeof quoteRaw === 'object' && quoteRaw !== null) {
+    quoteObj = quoteRaw;
+  } else if (typeof quoteRaw === 'string') {
+    const t = quoteRaw.trim();
+    if (t.startsWith('{') || t.startsWith('[')) {
+      try { quoteObj = JSON.parse(t); } catch (_) {}
+    }
+  }
+
+  const contentHtml = quoteObj != null
+    ? _renderQuoteObj(quoteObj)
+    : `<div class="ev-citation-quote">${esc(quoteRaw || '')}</div>`;
+
+  const metaNote = (uiMeta && uiMeta.meta_note) ? uiMeta.meta_note : (uiMeta && uiMeta.tool_name) || '';
+  popup.innerHTML = contentHtml +
+    (metaNote ? `<div class="ev-citation-popup-source">${esc(metaNote)}</div>` : '');
 
   popup.hidden = false;
-  // Measure after making visible so getBoundingClientRect is accurate.
   const sr = supEl.getBoundingClientRect();
   const pr = popup.getBoundingClientRect();
   const GAP = 8;
   let left = sr.left + sr.width / 2 - pr.width / 2;
   left = Math.max(8, Math.min(left, window.innerWidth - pr.width - 8));
   const top = sr.top + window.scrollY - pr.height - GAP;
-  // Tail points at the sup: compute offset within popup.
   const tailLeft = (sr.left + sr.width / 2) - left;
   popup.style.left = left + 'px';
   popup.style.top  = top + 'px';
@@ -1153,21 +1206,24 @@ function _applyEvidenceCitations(bodyEl, footnotes, citations) {
   const hasCitations = Object.keys(citMap).length > 0;
 
   if (hasCitations) {
-    // New format: [N] sequential citation markers from synthesizer
     bodyEl.innerHTML = bodyEl.innerHTML.replace(/\[(\d+)\]/g, (match, numStr) => {
       const n   = parseInt(numStr, 10);
       const cit = citMap[n];
       if (!cit) return match;
       const displayN = evIdToIdx[cit.ev_id] || n;
+      // Serialize quote to string for data attribute (may be object or string).
+      const quoteStr = (typeof cit.quote === 'object' && cit.quote !== null)
+        ? JSON.stringify(cit.quote)
+        : (cit.quote || '');
       return (
         `<sup class="ev-cite" data-cite-n="${n}" ` +
         `data-ev-id="${esc(cit.ev_id)}" ` +
-        `data-quote="${esc(cit.quote || '')}" ` +
+        `data-quote="${esc(quoteStr)}" ` +
         `title="${esc(cit.ev_id)}">[${displayN}]</sup>`
       );
     });
   } else {
-    // Fallback: old [ev_xxx] format (e.g. no citations in payload)
+    // Fallback: old [ev_xxx] format
     bodyEl.innerHTML = bodyEl.innerHTML.replace(/\[ev_([0-9a-f]+)\]/g, (match, hex) => {
       const evId = 'ev_' + hex;
       const n = evIdToIdx[evId];
@@ -1180,12 +1236,12 @@ function _applyEvidenceCitations(bodyEl, footnotes, citations) {
   bodyEl.querySelectorAll('sup.ev-cite').forEach(sup => {
     sup.addEventListener('click', e => {
       e.stopPropagation();
-      const quote    = sup.dataset.quote || '';
+      const quoteRaw = sup.dataset.quote || '';
       const evId     = sup.dataset.evId  || '';
       const fn       = footnotes.find(f => f.id === evId);
-      const toolName = fn ? fn.tool_name : '';
-      if (quote) {
-        _showCitationPopup(sup, quote, toolName);
+      const uiMeta   = fn ? (fn.ui || {tool_name: fn.tool_name}) : {};
+      if (quoteRaw) {
+        _showCitationPopup(sup, quoteRaw, uiMeta);
       }
     });
   });

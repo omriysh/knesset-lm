@@ -367,7 +367,7 @@ class PlanExecuteAgent(SubgraphAgent):
         self._plan = plan
 
         # ─── Critic-pre on v1 ───────────────────────────────────────────
-        cp = critic_pre(plan, self._phased_llm("critic_pre"))
+        cp = critic_pre(plan, self._phased_llm("critic_pre"), registry=registry)
         yield from self._llm.drain_events()
         if cp.verdict in ("revise", "replan"):
             yield SubgraphEvent(
@@ -840,11 +840,14 @@ class PlanExecuteAgent(SubgraphAgent):
                 if len(expanded) >= 5:
                     break
 
-        prompt = template.format(
-            goal=goal,
-            plan=plan_json,
-            evidence_view=json.dumps(view, ensure_ascii=False, indent=2),
-            expanded_payloads=json.dumps(expanded, ensure_ascii=False, indent=2),
+        evidence_view_json = json.dumps(view, ensure_ascii=False, indent=2)
+        expanded_payloads_json = json.dumps(expanded, ensure_ascii=False, indent=2)
+        prompt = (
+            template
+            .replace("{goal}", goal)
+            .replace("{plan}", plan_json)
+            .replace("{evidence_view}", evidence_view_json)
+            .replace("{expanded_payloads}", expanded_payloads_json)
         )
 
         print(

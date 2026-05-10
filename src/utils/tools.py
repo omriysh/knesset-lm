@@ -80,6 +80,7 @@ class ToolSpec:
     task_kinds: list[str] = field(default_factory=list)
     cost_hint: str = "cheap"
     planner_only: bool = False
+    ui: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """Serialise the registry-visible fields. Handler is omitted."""
@@ -89,6 +90,7 @@ class ToolSpec:
             "task_kinds":   list(self.task_kinds),
             "cost_hint":    self.cost_hint,
             "planner_only": bool(self.planner_only),
+            "ui":           dict(self.ui or {}),
         }
 
 

@@ -21,9 +21,13 @@ ends with `[N]` where N is a sequential integer starting at 1.
 Each `citations` entry must contain:
 - `ev_id`: copied verbatim from the evidence summary view (format:
   `ev_` followed by twelve hex characters). Do not invent IDs.
-- `quote`: 1–3 Hebrew sentences verbatim or closely paraphrased from
-  that specific evidence entry that directly support the claim at that
-  citation point in the answer.
+- `quote`: a JSON object or array copied verbatim from the relevant
+  part of the evidence entry. Select ONLY the fields/elements that
+  directly back the specific claim — not the whole result. For
+  multi-section results (e.g. `find_mk` with separate `factions` and
+  `committee_positions` arrays), include only the section relevant to
+  the current claim. For list results (e.g. `search_topics`), include
+  only the specific element(s) that support the claim.
 
 The same `ev_id` may appear in multiple `citations` entries with
 different N values when different parts of the same evidence support
@@ -38,8 +42,9 @@ Your entire response must be a single valid JSON object:
 {"answer": "...", "citations": [...]}
 
 The `answer` value is Hebrew markdown prose. The `citations` array
-has objects with `n` (integer), `ev_id` (string), and `quote`
-(Hebrew string). Output nothing before or after the JSON object.
+has objects with `n` (integer), `ev_id` (string), and `quote` (a
+JSON object/array from the evidence). Output nothing before or after
+the JSON object.
 
 DO NOT manually write a `מקורות` section in `answer` — the UI
 auto-renders it from the citations you provided.

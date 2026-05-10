@@ -118,11 +118,12 @@ def synthesize(
         indent=2,
     )
 
-    prompt = template.format(
-        goal=goal,
-        plan=plan_json,
-        evidence_view=view_json,
-        expanded_payloads=expanded_json,
+    prompt = (
+        template
+        .replace("{goal}", goal)
+        .replace("{plan}", plan_json)
+        .replace("{evidence_view}", view_json)
+        .replace("{expanded_payloads}", expanded_json)
     )
 
     try:

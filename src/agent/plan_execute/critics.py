@@ -23,7 +23,9 @@ from typing import Any, Callable
 
 import config
 from agent.plan_execute.plan import Plan
+from agent.plan_execute.tools import list_tools_for_planner
 from agent.subgraph.evidence import EvidenceStore
+from utils.tools import ToolRegistry
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +109,11 @@ def _parse_json(raw: object) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def critic_pre(plan: Plan, llm_call: Callable) -> CriticResult:
+def critic_pre(
+    plan: Plan,
+    llm_call: Callable,
+    registry: ToolRegistry | None = None,
+) -> CriticResult:
     """Pre-execution critic. Reads the plan only — no evidence.
 
     Single LLM call against ``config.CRITIC_PRE_MODEL``. Returns a
@@ -119,13 +125,23 @@ def critic_pre(plan: Plan, llm_call: Callable) -> CriticResult:
         llm_call: callable used to invoke the critic model.
             Signature: ``llm_call(model: str, prompt: str,
             response_format=...) -> str | dict``.
+        registry: the tool registry the plan references.  When supplied the
+            full catalogue is injected into the prompt so the critic can
+            verify tool names and capabilities; when omitted a short
+            placeholder is used.
     """
     template = _load_prompt("critic_pre.md")
     plan_json = json.dumps(plan.to_dict(), ensure_ascii=False, indent=2)
+    if registry:
+        catalogue_str = json.dumps(
+            list_tools_for_planner(registry), ensure_ascii=False, indent=2
+        )
+    else:
+        catalogue_str = "(tool catalogue unavailable)"
     prompt = template.format(
         goal=plan.goal,
         plan=plan_json,
-        tool_catalogue="(provided to the planner; omitted here for brevity)",
+        tool_catalogue=catalogue_str,
         max_steps_v1=int(getattr(config, "RESEARCH_MAX_PLAN_STEPS_V1", 8)),
         max_deep_dives=int(getattr(config, "RESEARCH_MAX_DEEP_DIVES_PER_PLAN", 3)),
     )

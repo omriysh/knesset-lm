@@ -80,6 +80,10 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         handler=handle_search_topics,
         task_kinds=["discover"],
         cost_hint="cheap",
+        ui={
+            "meta_note": "שורה מסיכום AI של ישיבת הוועדה",
+            "enrich_fields": ["meeting_id"],
+        },
     ),
 
     ToolSpec(
@@ -128,6 +132,10 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         handler=handle_search_protocols_keyword,
         task_kinds=["filter", "discover"],
         cost_hint="cheap",
+        ui={
+            "meta_note": "קטע מפרוטוקול ישיבת הוועדה",
+            "enrich_fields": ["meeting_id"],
+        },
     ),
 
     ToolSpec(
@@ -151,6 +159,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         handler=handle_find_mk,
         task_kinds=["discover", "fetch"],
         cost_hint="cheap",
+        ui={"meta_note": "פרופיל חבר הכנסת (oknesset.org)"},
     ),
 
     ToolSpec(
@@ -173,6 +182,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         handler=handle_find_committee,
         task_kinds=["discover", "fetch"],
         cost_hint="cheap",
+        ui={"meta_note": "נתוני ועדת הכנסת"},
     ),
 
     ToolSpec(
@@ -193,6 +203,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         handler=handle_find_bill,
         task_kinds=["discover", "fetch"],
         cost_hint="cheap",
+        ui={"meta_note": "נתוני הצעת חוק"},
     ),
 
     ToolSpec(
@@ -210,6 +221,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         handler=handle_find_vote,
         task_kinds=["discover", "fetch"],
         cost_hint="cheap",
+        ui={"meta_note": "נתוני הצבעה"},
     ),
 
     ToolSpec(
@@ -233,6 +245,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         handler=handle_find_party,
         task_kinds=["discover", "fetch"],
         cost_hint="cheap",
+        ui={"meta_note": "הרכב סיעה"},
     ),
 
     # ── Fetch / data tools ────────────────────────────────────────────────
@@ -261,6 +274,10 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         handler=handle_get_meeting_summary,
         task_kinds=["fetch"],
         cost_hint="cheap",
+        ui={
+            "meta_note": "סיכום AI של ישיבת הוועדה",
+            "enrich_fields": ["meeting_id"],
+        },
     ),
 
     ToolSpec(
@@ -282,6 +299,10 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         handler=handle_get_committee_sessions,
         task_kinds=["fetch", "discover"],
         cost_hint="cheap",
+        ui={
+            "meta_note": "רשימת ישיבות ועדה",
+            "enrich_fields": ["meeting_id"],
+        },
     ),
 
     ToolSpec(
@@ -302,6 +323,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         handler=handle_get_bill_details,
         task_kinds=["fetch"],
         cost_hint="cheap",
+        ui={"meta_note": "פרטי הצעת חוק"},
     ),
 
     ToolSpec(
@@ -330,6 +352,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         handler=handle_get_bill_text,
         task_kinds=["fetch"],
         cost_hint="medium",
+        ui={"meta_note": "טקסט הצעת חוק"},
     ),
 
     # ── Voting tools ──────────────────────────────────────────────────────
@@ -355,6 +378,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         handler=handle_query_voting_records,
         task_kinds=["discover", "fetch", "filter"],
         cost_hint="cheap",
+        ui={"meta_note": "רשומות הצבעה"},
     ),
 
     # ── Deep-dive (planner-only) ──────────────────────────────────────────
@@ -384,6 +408,10 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         task_kinds=["deep_dive"],
         cost_hint="expensive",
         planner_only=True,
+        ui={
+            "meta_note": "ניתוח מעמיק של ישיבת הוועדה",
+            "enrich_fields": ["meeting_id"],
+        },
     ),
 ]
 

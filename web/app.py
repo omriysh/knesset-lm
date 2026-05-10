@@ -57,9 +57,68 @@ from agent.llm.gemma import GemmaLlamaBackend
 # events are streamed; served by GET /api/research/{sid}/tool_result/{ref_id}.
 _TOOL_RESULT_CACHE: dict[str, str] = {}
 
+# ── Meeting date cache ────────────────────────────────────────────────────────
+_MEETING_DATE_CACHE: dict[str, str | None] = {}
 
-def _strip_footnote_fulls(ev_data: dict) -> dict:
+
+def _get_meeting_date(meeting_id: str) -> str | None:
+    """Resolve a meeting_id (session_id) to a DD/MM/YYYY date string.
+
+    Scans raw_transcriptions across all Knesset numbers; filenames are
+    DD_MM_YYYY_<session_id>.json.  Result is cached in-process.
+    """
+    import glob as _glob
+    if meeting_id in _MEETING_DATE_CACHE:
+        return _MEETING_DATE_CACHE[meeting_id]
+    base = config.transcriptions_dir(25).parent  # Data/raw_transcriptions/
+    matches = _glob.glob(str(base / "**" / f"*_{meeting_id}.json"), recursive=True)
+    date: str | None = None
+    if matches:
+        parts = Path(matches[0]).stem.split("_")  # DD_MM_YYYY_session_id
+        if len(parts) >= 4:
+            date = f"{parts[0]}/{parts[1]}/{parts[2]}"
+    _MEETING_DATE_CACHE[meeting_id] = date
+    return date
+
+
+def _enrich_citations(citations: list[dict], footnote_by_id: dict[str, dict]) -> list[dict]:
+    """Resolve meeting_id → date in citation quote objects where the tool's ui
+    has enrich_fields containing 'meeting_id'."""
+    enriched = []
+    for cit in citations:
+        ev_id = cit.get("ev_id", "")
+        fn = footnote_by_id.get(ev_id, {})
+        enrich_fields = (fn.get("ui") or {}).get("enrich_fields", [])
+        if "meeting_id" not in enrich_fields:
+            enriched.append(cit)
+            continue
+        quote = cit.get("quote")
+        if isinstance(quote, str):
+            try:
+                quote = json.loads(quote)
+            except Exception:
+                quote = None
+        if isinstance(quote, dict) and "meeting_id" in quote and "date" not in quote:
+            date = _get_meeting_date(str(quote["meeting_id"]))
+            if date:
+                quote = {**quote, "date": date}
+            cit = {**cit, "quote": quote}
+        elif isinstance(quote, list):
+            new_list = []
+            for item in quote:
+                if isinstance(item, dict) and "meeting_id" in item and "date" not in item:
+                    date = _get_meeting_date(str(item["meeting_id"]))
+                    if date:
+                        item = {**item, "date": date}
+                new_list.append(item)
+            cit = {**cit, "quote": new_list}
+        enriched.append(cit)
+    return enriched
+
+
+def _strip_footnote_fulls(ev_data: dict, registry=None) -> dict:
     """Strip `full` from footnotes in node_result subgraph outputs; cache each one.
+    Also enriches footnotes with tool ui metadata and resolves meeting dates in citations.
 
     Only mutates node_result events that carry subgraph outputs with footnotes.
     All other events pass through unchanged.
@@ -71,16 +130,43 @@ def _strip_footnote_fulls(ev_data: dict) -> dict:
     footnotes = outputs.get("footnotes")
     if not isinstance(footnotes, list):
         return ev_data
+
+    # Build tool_name → ui lookup from RESEARCH_TOOL_REGISTRY (list[ToolSpec])
+    ui_map: dict[str, dict] = {spec.name: spec.ui or {} for spec in RESEARCH_TOOL_REGISTRY}
+
     patched = []
+    footnote_by_id: dict[str, dict] = {}
     for fn in footnotes:
         full = fn.get("full") or ""
+        tool_name = fn.get("tool_name", "")
+        ui = ui_map.get(tool_name, {})
+        base = {**fn, "ui": ui}
         if full:
             ref_id = uuid.uuid4().hex[:16]
             _TOOL_RESULT_CACHE[ref_id] = full
-            patched.append({**fn, "full": "", "result_ref": ref_id})
+            enriched_fn = {**base, "full": "", "result_ref": ref_id}
         else:
-            patched.append({**fn, "result_ref": None})
-    return {**ev_data, "subgraph": {**subgraph, "outputs": {**outputs, "footnotes": patched}}}
+            enriched_fn = {**base, "result_ref": None}
+        patched.append(enriched_fn)
+        footnote_by_id[fn.get("id", "")] = enriched_fn
+
+    citations = outputs.get("citations")
+    enriched_citations = (
+        _enrich_citations(citations, footnote_by_id)
+        if isinstance(citations, list) else citations
+    )
+
+    return {
+        **ev_data,
+        "subgraph": {
+            **subgraph,
+            "outputs": {
+                **outputs,
+                "footnotes": patched,
+                "citations": enriched_citations,
+            },
+        },
+    }
 
 
 def _strip_tool_result_fulls(ev_data: dict) -> dict:
@@ -104,6 +190,7 @@ def _strip_tool_result_fulls(ev_data: dict) -> dict:
     return {**ev_data, "payload": {**payload, "tool_call_results": patched_results}}
 from agent.machine import StateMachine
 from agent.runner import MachineRunner, build_tool_registry
+from agent.research_agent.tools import RESEARCH_TOOL_REGISTRY
 from indexing.embedder import ProtocolEmbedder
 from indexing.parse_summary import parse_summary_bullets
 from retrieval.protocol_rag import query_retrieve
@@ -478,7 +565,7 @@ async def research_start(req: ResearchStartRequest, request: Request):
                     yield _sse("thinking_token", {"text": ev_data})
 
                 elif ev_type == "node_result":
-                    yield _sse("node_result", _strip_footnote_fulls(ev_data))
+                    yield _sse("node_result", _strip_footnote_fulls(ev_data, registry=tool_registry))
 
                 elif ev_type == "subgraph_event":
                     stripped = _strip_tool_result_fulls(ev_data)
@@ -712,7 +799,7 @@ async def research_respond(
                     yield _sse("thinking_token", {"text": ev_data})
 
                 elif ev_type == "node_result":
-                    yield _sse("node_result", _strip_footnote_fulls(ev_data))
+                    yield _sse("node_result", _strip_footnote_fulls(ev_data, registry=tool_registry))
 
                 elif ev_type == "subgraph_event":
                     stripped = _strip_tool_result_fulls(ev_data)

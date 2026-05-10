@@ -100,3 +100,7 @@ evidence using its own LLM, with no external tool calls.
 - NEVER put `expand` in `allowed_tools`. `expand` is an executor-internal
   call always available during step execution — it is not a planning-level
   tool and will fail validation if listed in any step's `allowed_tools`.
+- NEVER add a final "synthesis" or "summarize all findings" analyze step.
+  The agent automatically synthesizes all collected evidence into the final
+  answer after the plan completes — a redundant synthesis step wastes tokens
+  and produces no new evidence.

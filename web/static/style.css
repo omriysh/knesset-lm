@@ -1588,6 +1588,33 @@ sup.ev-cite:hover { color: #4f46e5; }
   margin-top: 6px;
   opacity: 0.8;
 }
+.ev-citation-meeting-header {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 4px;
+}
+.ev-citation-quote {
+  font-size: 0.85rem;
+  color: #1f2937;
+  line-height: 1.45;
+}
+.ev-quote-sep {
+  border: none;
+  border-top: 1px solid #e5e7eb;
+  margin: 6px 0;
+}
+.ev-citation-kvlist { font-size: 0.82rem; }
+.ev-citation-kv {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+.ev-kv-key {
+  color: #6b7280;
+  flex-shrink: 0;
+}
+.ev-kv-val { color: #1f2937; }
 
 .ev-sources {
   border: 1px solid #e2e3df;
