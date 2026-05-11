@@ -9,7 +9,7 @@ However, this repo features a few standalone offerings you might find useful:
 - The agent is based on a generic custom implementation of an llm state-machine, that comes with a web UI for designing machines and an engine that runs them. The designer UI can be found under `devtools/designer`, and the engine at `src/agent`.
 Access different features via `scripts/`.
 
-Runs entirely locally. No paid APIs.
+The agents support local LLMs via llama.cpp, or Google API calls.
 
 ---
 
