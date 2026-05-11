@@ -53,9 +53,11 @@ function onStagesAlwaysToggle(el) {
 }
 
 /* ── State ─────────────────────────────────────────────────────── */
-let running       = false;
-let sessionId     = null;   // current or last session id
-let _lastQuestion = '';     // most recent user question (for explore-sources)
+let running             = false;
+let sessionId           = null;   // current or last session id
+let _lastQuestion       = '';     // most recent user question (for explore-sources)
+let _reconnectSessionId = null;   // set on stream start, cleared on clean done/error
+let _reconnecting       = false;  // true while _attemptReconnect is looping
 
 /* ── Textarea auto-resize ───────────────────────────────────────── */
 queryInput.addEventListener('input', () => {
@@ -146,6 +148,9 @@ async function startQuery() {
   } catch (err) {
     setStatusMsg(statusEl, '');
     appendErrorMsg('שגיאת חיבור: ' + err.message);
+    if (_reconnectSessionId && document.visibilityState === 'visible') {
+      setTimeout(_attemptReconnect, 1500);
+    }
   } finally {
     // Finalize streamed answer
     if (agentEl && rawAnswer) {
@@ -176,6 +181,7 @@ function handleEvent(ev, data, refs) {
   switch (ev) {
     case 'session_id':
       sessionId = data.session_id;
+      _reconnectSessionId = data.session_id;
       break;
 
     case 'status':
@@ -410,6 +416,7 @@ function handleEvent(ev, data, refs) {
     }
 
     case 'done': {
+      _reconnectSessionId = null;
       finaliseLiveCard(refs.stagesEl);
       // Reveal stages wrap (collapsed) even if user never clicked — allows post-hoc inspection
       if (!_stagesAlways()) {
@@ -448,6 +455,7 @@ function handleEvent(ev, data, refs) {
     }
 
     case 'error':
+      _reconnectSessionId = null;
       finaliseLiveCard(refs.stagesEl);
       setStatusMsg(refs.statusEl, '');
       appendErrorMsg(data.error || 'שגיאה לא ידועה');
@@ -527,6 +535,9 @@ async function submitResponse(outputVar, value) {
   } catch (err) {
     setStatusMsg(statusEl, '');
     appendErrorMsg('שגיאת חיבור: ' + err.message);
+    if (_reconnectSessionId && document.visibilityState === 'visible') {
+      setTimeout(_attemptReconnect, 1500);
+    }
   } finally {
     if (agentEl && rawAnswer) {
       const body = agentEl.querySelector('.prose-content');
@@ -1433,6 +1444,99 @@ function _renderEvidenceCard(item) {
     `</div>`
   );
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   RECONNECT — recover SSE stream after mobile focus loss
+═══════════════════════════════════════════════════════════════════ */
+
+async function _attemptReconnect() {
+  if (_reconnecting || !_reconnectSessionId) return;
+  _reconnecting = true;
+  const sid = _reconnectSessionId;
+  const statusEl = appendStatus('מחבר מחדש...');
+
+  try {
+    for (let attempt = 0; attempt < 30 && _reconnectSessionId; attempt++) {
+      if (attempt > 0) {
+        setStatusMsg(statusEl, 'עדיין מעבד — בודק שוב...');
+        await new Promise(r => setTimeout(r, attempt < 5 ? 3000 : 8000));
+        if (!_reconnectSessionId) break;
+      }
+
+      let continueRetry = false;
+      try {
+        const res = await fetch(`/api/research/${sid}/stream`);
+        if (!res.ok) break;
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '', curEvent = '';
+        let agentEl = null, rawAnswer = '';
+        const pendingFootnotes = [], pendingCitations = [];
+
+        outer: while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const lines = buf.split('\n'); buf = lines.pop();
+          for (const line of lines) {
+            if (line.startsWith('event: ')) { curEvent = line.slice(7).trim(); continue; }
+            if (!line.startsWith('data: ')) continue;
+            let data; try { data = JSON.parse(line.slice(6)); } catch { continue; }
+
+            if (curEvent === 'still_running') {
+              continueRetry = true;
+              break outer;
+            } else if (curEvent === 'token') {
+              rawAnswer += data.text || '';
+              if (!agentEl) { agentEl = appendAgentCard(); setStatusMsg(statusEl, ''); }
+              const body = agentEl.querySelector('.prose-content');
+              if (body) body.innerHTML = esc(rawAnswer) + '<span class="stream-cursor"></span>';
+            } else if (curEvent === 'done') {
+              _reconnectSessionId = null;
+              if (agentEl && rawAnswer) {
+                const body = agentEl.querySelector('.prose-content');
+                if (body) {
+                  body.innerHTML = marked.parse(rawAnswer);
+                  const c = agentEl.querySelector('.stream-cursor');
+                  if (c) c.remove();
+                  if (pendingFootnotes.length) {
+                    _applyEvidenceCitations(body, pendingFootnotes, pendingCitations);
+                    agentEl.insertAdjacentHTML('beforeend', _buildSourcesHtml(pendingFootnotes, sid));
+                  }
+                }
+              }
+              break outer;
+            } else if (curEvent === 'user_input_required') {
+              _reconnectSessionId = null;
+              sessionId = sid;
+              if (!data.session_id) data = { ...data, session_id: sid };
+              renderUserInputPanel(data);
+              break outer;
+            } else if (curEvent === 'error') {
+              _reconnectSessionId = null;
+              appendErrorMsg(data.error || 'שגיאה לא ידועה');
+              break outer;
+            }
+          }
+        }
+      } catch (_) { /* network error — retry on next iteration */ }
+      if (!continueRetry) break;
+    }
+  } finally {
+    setStatusMsg(statusEl, '');
+    if (statusEl && !statusEl.textContent.trim()) statusEl.remove();
+    running = false;
+    submitBtn.disabled = false;
+    _reconnecting = false;
+    scrollToBottom();
+  }
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && _reconnectSessionId && !_reconnecting && !running) {
+    _attemptReconnect();
+  }
+});
 
 /* ── Utility ───────────────────────────────────────────────────── */
 function esc(s) {

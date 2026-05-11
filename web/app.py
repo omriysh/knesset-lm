@@ -541,6 +541,14 @@ async def research_start(req: ResearchStartRequest, request: Request):
         # First event: session_id
         yield _sse("session_id", {"session_id": session_id})
 
+        # Persist "running" status immediately — reconnect endpoint uses this
+        # to signal still-in-progress to clients that reconnect mid-execution.
+        _run_ts = _now()
+        save_session(ResearchSession(
+            session_id=session_id, status="running",
+            original_question=question, created_at=_run_ts, updated_at=_run_ts,
+        ), sessions_dir)
+
         loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
         queue: asyncio.Queue = asyncio.Queue()
         _SENTINEL = object()
@@ -573,7 +581,11 @@ async def research_start(req: ResearchStartRequest, request: Request):
 
         try:
             while True:
-                item = await queue.get()
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield ": keep-alive\n\n"
+                    continue
                 if item is _SENTINEL:
                     break
                 ev_type, ev_data = item
@@ -710,6 +722,9 @@ async def research_stream(session_id: str, request: Request):
             ui_event["session_id"] = session_id
             yield _sse("user_input_required", ui_event)
 
+        elif session.status == "running":
+            yield _sse("still_running", {"session_id": session_id})
+
         elif session.status == "done":
             yield _sse("token", {"text": session.final_answer or ""})
             yield _sse("done", {})
@@ -807,7 +822,11 @@ async def research_respond(
 
         try:
             while True:
-                item = await queue.get()
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield ": keep-alive\n\n"
+                    continue
                 if item is _SENTINEL:
                     break
                 ev_type, ev_data = item
