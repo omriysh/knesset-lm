@@ -59,6 +59,7 @@ let _lastQuestion       = '';     // most recent user question (for explore-sour
 let _reconnectSessionId = null;   // set on stream start, cleared on clean done/error
 let _reconnecting       = false;  // true while _attemptReconnect is looping
 let _reconnectErrorEl   = null;   // the red error card shown on disconnect (removed on reconnect)
+let _currentStagesEl    = null;   // .ai-stages-card of the active session (for reconnect cleanup)
 
 /* ── Textarea auto-resize ───────────────────────────────────────── */
 queryInput.addEventListener('input', () => {
@@ -99,6 +100,7 @@ async function startQuery() {
   // Status above stages; stages collapsed until clicked
   const statusEl   = appendStatus('');      // appears first (above)
   const stagesEl   = appendStagesCard();    // appears below, collapsed
+  _currentStagesEl = stagesEl;
   _wireStatusToggle(statusEl, stagesEl);
   let   agentEl           = null;
   let   rawAnswer         = '';
@@ -487,6 +489,7 @@ async function submitResponse(outputVar, value) {
 
   const statusEl          = appendStatus('ממשיך...');
   const stagesEl          = appendStagesCard();
+  _currentStagesEl = stagesEl;
   _wireStatusToggle(statusEl, stagesEl);
   let   agentEl           = null;
   let   rawAnswer         = '';
@@ -1456,6 +1459,14 @@ function _renderEvidenceCard(item) {
    RECONNECT — recover SSE stream after mobile focus loss
 ═══════════════════════════════════════════════════════════════════ */
 
+function _injectPartialNotice(containerEl) {
+  if (containerEl.querySelector('.reconnect-partial-notice')) return;
+  const notice = document.createElement('div');
+  notice.className = 'reconnect-partial-notice';
+  notice.textContent = 'תוכן חלקי בשל ניתוק בזמן תהליך חשיבה. כדי לראות את התהליך המלא החיבור לאתר צריך להישאר רציף. התוצאה הסופית תוצג לאחר סיום העיבוד, גם אם חלק מהשלבים לא יופיעו כאן.';
+  containerEl.insertBefore(notice, containerEl.firstChild);
+}
+
 async function _attemptReconnect() {
   if (_reconnecting || !_reconnectSessionId) return;
   _reconnecting = true;
@@ -1463,6 +1474,18 @@ async function _attemptReconnect() {
   submitBtn.disabled = true;
   // Remove the disconnect error card — we're recovering
   if (_reconnectErrorEl) { _reconnectErrorEl.remove(); _reconnectErrorEl = null; }
+
+  // Finalize any live stage cards left open from the disconnected stream.
+  // Inject partial notice into subgraph wrapper cards so expanding them explains the gap.
+  chatColumn.querySelectorAll('.subgraph-card .subgraph-inner-stages').forEach(inner => {
+    _injectPartialNotice(inner);
+  });
+  chatColumn.querySelectorAll('.live-stage-card').forEach(card => {
+    card.classList.remove('live-stage-card');
+    const dot = card.querySelector('.live-thinking-dot');
+    if (dot) dot.remove();
+  });
+
   const sid = _reconnectSessionId;
   const statusEl = appendStatus('מחבר מחדש...');
 
@@ -1483,6 +1506,8 @@ async function _attemptReconnect() {
         let buf = '', curEvent = '';
         let agentEl = null, rawAnswer = '';
         const pendingFootnotes = [], pendingCitations = [];
+        // replayRefs tracks state while processing the replayed event_log
+        const replayRefs = { stagesEl: null, subgraphContainer: null };
 
         outer: while (true) {
           const { done, value } = await reader.read();
@@ -1497,14 +1522,90 @@ async function _attemptReconnect() {
             if (curEvent === 'still_running') {
               continueRetry = true;
               break outer;
+
+            } else if (curEvent === 'node_start') {
+              if (data.subgraph) {
+                if (!replayRefs.stagesEl) {
+                  // Replace the old partial stages card with a fresh replay one
+                  if (_currentStagesEl) {
+                    _currentStagesEl.closest('.msg-agent')?.remove();
+                    _currentStagesEl = null;
+                  }
+                  replayRefs.stagesEl = appendStagesCard();
+                  _currentStagesEl = replayRefs.stagesEl;
+                }
+                replayRefs.subgraphContainer = addSubgraphWrapperCard(replayRefs.stagesEl, data);
+                _injectPartialNotice(replayRefs.subgraphContainer);
+              }
+
+            } else if (curEvent === 'node_result') {
+              if (data.subgraph) {
+                const footnotes = data.subgraph?.outputs?.footnotes;
+                if (Array.isArray(footnotes) && footnotes.length) pendingFootnotes.push(...footnotes);
+                const citations = data.subgraph?.outputs?.citations;
+                if (Array.isArray(citations)) pendingCitations.push(...citations);
+                finaliseSubgraphCard(replayRefs.subgraphContainer);
+                replayRefs.subgraphContainer = null;
+              }
+
+            } else if (curEvent === 'subgraph_event') {
+              const sg_kind    = data.kind    || '';
+              const sg_name    = data.name    || '';
+              const sg_payload = data.payload || {};
+              if (sg_kind === 'hook' && sg_name === 'step_completed' && replayRefs.subgraphContainer) {
+                const stepTask        = sg_payload.step_task || 'שלב';
+                const toolName        = sg_payload.tool_name || '';
+                const hasError        = !!(sg_payload.error && sg_payload.error !== 'skip');
+                const fullResult      = sg_payload.full || '';
+                const toolCalls       = sg_payload.tool_calls || [];
+                const toolCallResults = sg_payload.tool_call_results || [];
+                let toolResults;
+                if (toolCallResults.length > 0) {
+                  toolResults = toolCallResults.map(tc => ({
+                    name: tc.name, args: tc.args || {}, result: tc.full || tc.summary || '', result_ref: tc.result_ref || null,
+                  }));
+                } else if (toolCalls.length === 1) {
+                  toolResults = [{ name: toolCalls[0].name || toolName || 'כלי', args: toolCalls[0].args || {}, result: fullResult }];
+                } else if (toolCalls.length > 1) {
+                  toolResults = toolCalls.map(tc => ({ name: tc.name, args: tc.args || {}, result: '' }));
+                  if (fullResult) toolResults.push({ name: 'תוצאה מלאה', args: {}, result: fullResult });
+                } else if (fullResult) {
+                  toolResults = [{ name: toolName || 'תוצאה מלאה', args: {}, result: fullResult }];
+                } else {
+                  toolResults = [];
+                }
+                addCompletedStageCard(replayRefs.subgraphContainer, {
+                  label:        `ביצוע: ${stepTask.slice(0, 60)}`,
+                  stage:        hasError ? 'reviewer' : 'tool',
+                  content:      sg_payload.summary || '',
+                  tools:        toolName ? [toolName] : [],
+                  tool_results: toolResults,
+                  prompt:       {},
+                });
+              } else if (sg_kind === 'hook' && sg_name === 'synthesizer_completed' && replayRefs.subgraphContainer) {
+                addCompletedStageCard(replayRefs.subgraphContainer, {
+                  label: 'מסכם ממצאים', stage: 'research',
+                  content: '', thinking: '', tools: [], tool_results: [], prompt: {},
+                });
+              } else if (sg_kind === 'done' && replayRefs.subgraphContainer) {
+                finaliseSubgraphCard(replayRefs.subgraphContainer);
+                replayRefs.subgraphContainer = null;
+              }
+
             } else if (curEvent === 'token') {
               rawAnswer += data.text || '';
               if (!agentEl) { agentEl = appendAgentCard(); setStatusMsg(statusEl, ''); }
               const body = agentEl.querySelector('.prose-content');
               if (body) body.innerHTML = esc(rawAnswer) + '<span class="stream-cursor"></span>';
+
             } else if (curEvent === 'done') {
               _reconnectSessionId = null;
               sessionId = sid;
+              // Reveal replay stages card if one was created
+              if (replayRefs.stagesEl && !_stagesAlways()) {
+                const wrap = replayRefs.stagesEl.parentElement;
+                if (wrap && wrap.style.display === 'none') wrap.style.display = 'block';
+              }
               if (agentEl) {
                 const body = agentEl.querySelector('.prose-content');
                 if (body) {
@@ -1534,17 +1635,19 @@ async function _attemptReconnect() {
                   });
                   exploreBtn.innerHTML = 'חקור בפרוטוקולים';
                   exploreBtn.disabled = false;
-                } catch { exploreBtn.disabled = false; exploreBtn.innerHTML = 'שגיאה — נסה שוב'; }
+                } catch (err) { exploreBtn.disabled = false; exploreBtn.innerHTML = 'שגיאה — נסה שוב'; console.warn('[reconnect] explore button error', err); }
               });
               exploreWrap.appendChild(exploreBtn);
               chatColumn.appendChild(exploreWrap);
               break outer;
+
             } else if (curEvent === 'user_input_required') {
               _reconnectSessionId = null;
               sessionId = sid;
               if (!data.session_id) data = { ...data, session_id: sid };
               renderUserInputPanel(data);
               break outer;
+
             } else if (curEvent === 'error') {
               _reconnectSessionId = null;
               appendErrorMsg(data.error || 'שגיאה לא ידועה');
@@ -1552,7 +1655,9 @@ async function _attemptReconnect() {
             }
           }
         }
-      } catch (_) { /* network error — retry on next iteration */ }
+      } catch (err) {
+        console.warn('[reconnect] network error on attempt, will retry:', err);
+      }
       if (!continueRetry) break;
     }
   } finally {

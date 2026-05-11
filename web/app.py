@@ -552,6 +552,7 @@ async def research_start(req: ResearchStartRequest, request: Request):
         loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
         queue: asyncio.Queue = asyncio.Queue()
         _SENTINEL = object()
+        _event_log: list[dict] = []  # selective event log for reconnect replay
 
         def _run_sync():
             _final_token = ""
@@ -575,6 +576,26 @@ async def research_start(req: ResearchStartRequest, request: Request):
                         _outcome = ("error", _d)
                     elif _t == "user_input_required":
                         _outcome = ("user_paused",)
+                    elif _t == "node_start":
+                        if isinstance(_d, dict) and _d.get("subgraph"):
+                            _event_log.append({"type": "node_start", "data": _d})
+                    elif _t == "node_result":
+                        _d = _strip_footnote_fulls(_d, registry=tool_registry)
+                        event = (_t, _d)
+                        if isinstance(_d, dict) and _d.get("subgraph"):
+                            _event_log.append({"type": "node_result", "data": _d})
+                    elif _t == "subgraph_event":
+                        _stripped = _strip_tool_result_fulls(_d)
+                        _d = {
+                            "type":    "subgraph_event",
+                            "kind":    _stripped.get("kind"),
+                            "name":    _stripped.get("name"),
+                            "payload": _stripped.get("payload", {}),
+                        }
+                        event = (_t, _d)
+                        _k, _n = _d["kind"], _d["name"]
+                        if _k == "done" or (_k == "hook" and _n in ("step_completed", "synthesizer_completed")):
+                            _event_log.append({"type": "subgraph_event", "data": _d})
                     loop.call_soon_threadsafe(queue.put_nowait, event)
             except Exception as exc:
                 _err = str(exc) + "\n" + traceback.format_exc()
@@ -582,9 +603,9 @@ async def research_start(req: ResearchStartRequest, request: Request):
                 _outcome = ("error", _err)
             finally:
                 loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
-                # Safety net: generate() saves terminal state when it processes
-                # these events, but it may have been cancelled (client disconnect).
-                # Save here so reconnecting clients can find the final answer.
+                # Safety net: generate() may be cancelled by client disconnect.
+                # _event_log is complete here (built above), so the saved session
+                # has full footnotes/citations for reconnect replay.
                 if _outcome and _outcome[0] != "user_paused":
                     try:
                         _ts = _now()
@@ -594,6 +615,7 @@ async def research_start(req: ResearchStartRequest, request: Request):
                                 original_question=question,
                                 created_at=_run_ts, updated_at=_ts,
                                 final_answer=_outcome[1],
+                                event_log=list(_event_log) or None,
                             ), sessions_dir)
                         else:
                             save_session(ResearchSession(
@@ -602,8 +624,8 @@ async def research_start(req: ResearchStartRequest, request: Request):
                                 created_at=_run_ts, updated_at=_ts,
                                 error=str(_outcome[1]),
                             ), sessions_dir)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        print(f"[research_start] safety-net save failed: {exc}", flush=True)
 
         thread = threading.Thread(target=_run_sync, daemon=True)
         thread.start()
@@ -636,16 +658,10 @@ async def research_start(req: ResearchStartRequest, request: Request):
                     yield _sse("thinking_token", {"text": ev_data})
 
                 elif ev_type == "node_result":
-                    yield _sse("node_result", _strip_footnote_fulls(ev_data, registry=tool_registry))
+                    yield _sse("node_result", ev_data)
 
                 elif ev_type == "subgraph_event":
-                    stripped = _strip_tool_result_fulls(ev_data)
-                    yield _sse("subgraph_event", {
-                        "type":    "subgraph_event",
-                        "kind":    stripped.get("kind"),
-                        "name":    stripped.get("name"),
-                        "payload": stripped.get("payload", {}),
-                    })
+                    yield _sse("subgraph_event", ev_data)
 
                 elif ev_type == "user_input_required":
                     # ev_data contains the full payload including "checkpoint"
@@ -694,6 +710,7 @@ async def research_start(req: ResearchStartRequest, request: Request):
                         machine_checkpoint  = None,
                         final_answer        = final_token,
                         error               = None,
+                        event_log           = _event_log or None,
                     )
                     save_session(session, sessions_dir)
                     yield _sse("done", {})
@@ -758,6 +775,9 @@ async def research_stream(session_id: str, request: Request):
             yield _sse("still_running", {"session_id": session_id})
 
         elif session.status == "done":
+            if session.event_log:
+                for item in session.event_log:
+                    yield _sse(item["type"], item["data"])
             yield _sse("token", {"text": session.final_answer or ""})
             yield _sse("done", {})
 
@@ -822,6 +842,7 @@ async def research_respond(
         loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
         queue: asyncio.Queue = asyncio.Queue()
         _SENTINEL = object()
+        _event_log: list[dict] = []  # selective event log for reconnect replay
 
         def _run_sync():
             _final_token = ""
@@ -849,6 +870,26 @@ async def research_respond(
                         _outcome = ("error", _d)
                     elif _t == "user_input_required":
                         _outcome = ("user_paused",)
+                    elif _t == "node_start":
+                        if isinstance(_d, dict) and _d.get("subgraph"):
+                            _event_log.append({"type": "node_start", "data": _d})
+                    elif _t == "node_result":
+                        _d = _strip_footnote_fulls(_d, registry=tool_registry)
+                        event = (_t, _d)
+                        if isinstance(_d, dict) and _d.get("subgraph"):
+                            _event_log.append({"type": "node_result", "data": _d})
+                    elif _t == "subgraph_event":
+                        _stripped = _strip_tool_result_fulls(_d)
+                        _d = {
+                            "type":    "subgraph_event",
+                            "kind":    _stripped.get("kind"),
+                            "name":    _stripped.get("name"),
+                            "payload": _stripped.get("payload", {}),
+                        }
+                        event = (_t, _d)
+                        _k, _n = _d["kind"], _d["name"]
+                        if _k == "done" or (_k == "hook" and _n in ("step_completed", "synthesizer_completed")):
+                            _event_log.append({"type": "subgraph_event", "data": _d})
                     loop.call_soon_threadsafe(queue.put_nowait, event)
             except Exception as exc:
                 _err = str(exc) + "\n" + traceback.format_exc()
@@ -865,6 +906,7 @@ async def research_respond(
                                 original_question=question,
                                 created_at=session.created_at, updated_at=_ts,
                                 final_answer=_outcome[1],
+                                event_log=list(_event_log) or None,
                             ), sessions_dir)
                         else:
                             save_session(ResearchSession(
@@ -873,8 +915,8 @@ async def research_respond(
                                 created_at=session.created_at, updated_at=_ts,
                                 error=str(_outcome[1]),
                             ), sessions_dir)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        print(f"[research_respond] safety-net save failed: {exc}", flush=True)
 
         thread = threading.Thread(target=_run_sync, daemon=True)
         thread.start()
@@ -906,16 +948,10 @@ async def research_respond(
                     yield _sse("thinking_token", {"text": ev_data})
 
                 elif ev_type == "node_result":
-                    yield _sse("node_result", _strip_footnote_fulls(ev_data, registry=tool_registry))
+                    yield _sse("node_result", ev_data)
 
                 elif ev_type == "subgraph_event":
-                    stripped = _strip_tool_result_fulls(ev_data)
-                    yield _sse("subgraph_event", {
-                        "type":    "subgraph_event",
-                        "kind":    stripped.get("kind"),
-                        "name":    stripped.get("name"),
-                        "payload": stripped.get("payload", {}),
-                    })
+                    yield _sse("subgraph_event", ev_data)
 
                 elif ev_type == "user_input_required":
                     new_checkpoint = ev_data.get("checkpoint", {})
@@ -967,6 +1003,7 @@ async def research_respond(
                         machine_checkpoint  = None,
                         final_answer        = final_token,
                         error               = None,
+                        event_log           = _event_log or None,
                     )
                     save_session(updated, sessions_dir)
                     yield _sse("done", {})

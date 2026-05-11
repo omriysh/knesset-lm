@@ -425,6 +425,18 @@ details[open] > .sub-summary::before { transform: rotate(90deg); }
   margin-bottom: 4px;
 }
 
+.reconnect-partial-notice {
+  font-size: 0.78rem;
+  color: #7a6200;
+  background: #fffbe6;
+  border: 1px solid #ffe87a;
+  border-radius: 5px;
+  padding: 6px 10px;
+  margin: 4px 0 8px 0;
+  direction: rtl;
+  line-height: 1.45;
+}
+
 .stage-name {
   flex: 1;
   font-size: 0.82rem;
