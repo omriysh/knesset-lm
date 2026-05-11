@@ -554,6 +554,8 @@ async def research_start(req: ResearchStartRequest, request: Request):
         _SENTINEL = object()
 
         def _run_sync():
+            _final_token = ""
+            _outcome: tuple | None = None  # ('done', answer) | ('error', msg) | ('user_paused',)
             try:
                 runner = MachineRunner(
                     machine       = machine,
@@ -564,14 +566,44 @@ async def research_start(req: ResearchStartRequest, request: Request):
                     top_n         = top_n,
                 )
                 for event in runner.run_stream(question):
+                    _t, _d = event
+                    if _t == "token":
+                        _final_token += _d
+                    elif _t == "done":
+                        _outcome = ("done", _final_token)
+                    elif _t == "error":
+                        _outcome = ("error", _d)
+                    elif _t == "user_input_required":
+                        _outcome = ("user_paused",)
                     loop.call_soon_threadsafe(queue.put_nowait, event)
             except Exception as exc:
-                loop.call_soon_threadsafe(
-                    queue.put_nowait,
-                    ("error", str(exc) + "\n" + traceback.format_exc()),
-                )
+                _err = str(exc) + "\n" + traceback.format_exc()
+                loop.call_soon_threadsafe(queue.put_nowait, ("error", _err))
+                _outcome = ("error", _err)
             finally:
                 loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
+                # Safety net: generate() saves terminal state when it processes
+                # these events, but it may have been cancelled (client disconnect).
+                # Save here so reconnecting clients can find the final answer.
+                if _outcome and _outcome[0] != "user_paused":
+                    try:
+                        _ts = _now()
+                        if _outcome[0] == "done":
+                            save_session(ResearchSession(
+                                session_id=session_id, status="done",
+                                original_question=question,
+                                created_at=_run_ts, updated_at=_ts,
+                                final_answer=_outcome[1],
+                            ), sessions_dir)
+                        else:
+                            save_session(ResearchSession(
+                                session_id=session_id, status="error",
+                                original_question=question,
+                                created_at=_run_ts, updated_at=_ts,
+                                error=str(_outcome[1]),
+                            ), sessions_dir)
+                    except Exception:
+                        pass
 
         thread = threading.Thread(target=_run_sync, daemon=True)
         thread.start()
@@ -792,6 +824,8 @@ async def research_respond(
         _SENTINEL = object()
 
         def _run_sync():
+            _final_token = ""
+            _outcome: tuple | None = None
             try:
                 runner = MachineRunner(
                     machine       = machine,
@@ -806,14 +840,41 @@ async def research_respond(
                     resume        = checkpoint,
                     user_response = user_response,
                 ):
+                    _t, _d = event
+                    if _t == "token":
+                        _final_token += _d
+                    elif _t == "done":
+                        _outcome = ("done", _final_token)
+                    elif _t == "error":
+                        _outcome = ("error", _d)
+                    elif _t == "user_input_required":
+                        _outcome = ("user_paused",)
                     loop.call_soon_threadsafe(queue.put_nowait, event)
             except Exception as exc:
-                loop.call_soon_threadsafe(
-                    queue.put_nowait,
-                    ("error", str(exc) + "\n" + traceback.format_exc()),
-                )
+                _err = str(exc) + "\n" + traceback.format_exc()
+                loop.call_soon_threadsafe(queue.put_nowait, ("error", _err))
+                _outcome = ("error", _err)
             finally:
                 loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
+                if _outcome and _outcome[0] != "user_paused":
+                    try:
+                        _ts = _now()
+                        if _outcome[0] == "done":
+                            save_session(ResearchSession(
+                                session_id=session_id, status="done",
+                                original_question=question,
+                                created_at=session.created_at, updated_at=_ts,
+                                final_answer=_outcome[1],
+                            ), sessions_dir)
+                        else:
+                            save_session(ResearchSession(
+                                session_id=session_id, status="error",
+                                original_question=question,
+                                created_at=session.created_at, updated_at=_ts,
+                                error=str(_outcome[1]),
+                            ), sessions_dir)
+                    except Exception:
+                        pass
 
         thread = threading.Thread(target=_run_sync, daemon=True)
         thread.start()

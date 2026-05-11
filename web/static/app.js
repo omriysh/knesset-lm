@@ -58,6 +58,7 @@ let sessionId           = null;   // current or last session id
 let _lastQuestion       = '';     // most recent user question (for explore-sources)
 let _reconnectSessionId = null;   // set on stream start, cleared on clean done/error
 let _reconnecting       = false;  // true while _attemptReconnect is looping
+let _reconnectErrorEl   = null;   // the red error card shown on disconnect (removed on reconnect)
 
 /* ── Textarea auto-resize ───────────────────────────────────────── */
 queryInput.addEventListener('input', () => {
@@ -147,32 +148,33 @@ async function startQuery() {
     }
   } catch (err) {
     setStatusMsg(statusEl, '');
-    appendErrorMsg('שגיאת חיבור: ' + err.message);
+    _reconnectErrorEl = appendErrorMsg('שגיאת חיבור: ' + err.message);
     if (_reconnectSessionId && document.visibilityState === 'visible') {
       setTimeout(_attemptReconnect, 1500);
     }
   } finally {
-    // Finalize streamed answer
-    if (agentEl && rawAnswer) {
+    const _willReconnect = !!_reconnectSessionId;
+    if (agentEl && rawAnswer && !_willReconnect) {
       const body = agentEl.querySelector('.prose-content');
       if (body) {
         body.innerHTML = marked.parse(rawAnswer);
-        // Remove streaming cursor if present
         const cursor = agentEl.querySelector('.stream-cursor');
         if (cursor) cursor.remove();
-        // Inject inline citations + sources panel
         if (pendingFootnotes.length > 0) {
           _applyEvidenceCitations(body, pendingFootnotes, pendingCitations);
           agentEl.insertAdjacentHTML('beforeend', _buildSourcesHtml(pendingFootnotes, sessionId));
         }
       }
+    } else if (agentEl && _willReconnect) {
+      agentEl.remove();
     }
     setStatusMsg(statusEl, '');
-    // Remove empty status row
     if (statusEl && !statusEl.textContent.trim()) statusEl.remove();
-    running = false;
-    submitBtn.disabled = false;
-    queryInput.focus();
+    if (!_willReconnect) {
+      running = false;
+      submitBtn.disabled = false;
+      queryInput.focus();
+    }
     scrollToBottom();
   }
 }
@@ -534,29 +536,33 @@ async function submitResponse(outputVar, value) {
     }
   } catch (err) {
     setStatusMsg(statusEl, '');
-    appendErrorMsg('שגיאת חיבור: ' + err.message);
+    _reconnectErrorEl = appendErrorMsg('שגיאת חיבור: ' + err.message);
     if (_reconnectSessionId && document.visibilityState === 'visible') {
       setTimeout(_attemptReconnect, 1500);
     }
   } finally {
-    if (agentEl && rawAnswer) {
+    const _willReconnect = !!_reconnectSessionId;
+    if (agentEl && rawAnswer && !_willReconnect) {
       const body = agentEl.querySelector('.prose-content');
       if (body) {
         body.innerHTML = marked.parse(rawAnswer);
         const cursor = agentEl.querySelector('.stream-cursor');
         if (cursor) cursor.remove();
-        // Inject inline citations + sources panel
         if (pendingFootnotes.length > 0) {
           _applyEvidenceCitations(body, pendingFootnotes, pendingCitations);
           agentEl.insertAdjacentHTML('beforeend', _buildSourcesHtml(pendingFootnotes, sessionId));
         }
       }
+    } else if (agentEl && _willReconnect) {
+      agentEl.remove();
     }
     setStatusMsg(statusEl, '');
     if (statusEl && !statusEl.textContent.trim()) statusEl.remove();
-    running = false;
-    submitBtn.disabled = false;
-    queryInput.focus();
+    if (!_willReconnect) {
+      running = false;
+      submitBtn.disabled = false;
+      queryInput.focus();
+    }
     scrollToBottom();
   }
 }
@@ -645,6 +651,7 @@ function appendErrorMsg(msg) {
   el.textContent = msg;
   chatColumn.appendChild(el);
   scrollToBottom();
+  return el;
 }
 
 function scrollToBottom() {
@@ -1452,6 +1459,10 @@ function _renderEvidenceCard(item) {
 async function _attemptReconnect() {
   if (_reconnecting || !_reconnectSessionId) return;
   _reconnecting = true;
+  running = true;
+  submitBtn.disabled = true;
+  // Remove the disconnect error card — we're recovering
+  if (_reconnectErrorEl) { _reconnectErrorEl.remove(); _reconnectErrorEl = null; }
   const sid = _reconnectSessionId;
   const statusEl = appendStatus('מחבר מחדש...');
 
@@ -1493,10 +1504,11 @@ async function _attemptReconnect() {
               if (body) body.innerHTML = esc(rawAnswer) + '<span class="stream-cursor"></span>';
             } else if (curEvent === 'done') {
               _reconnectSessionId = null;
-              if (agentEl && rawAnswer) {
+              sessionId = sid;
+              if (agentEl) {
                 const body = agentEl.querySelector('.prose-content');
                 if (body) {
-                  body.innerHTML = marked.parse(rawAnswer);
+                  body.innerHTML = rawAnswer ? marked.parse(rawAnswer) : '';
                   const c = agentEl.querySelector('.stream-cursor');
                   if (c) c.remove();
                   if (pendingFootnotes.length) {
@@ -1505,6 +1517,27 @@ async function _attemptReconnect() {
                   }
                 }
               }
+              const exploreWrap = document.createElement('div');
+              exploreWrap.className = 'explore-sources-row';
+              const exploreBtn = document.createElement('button');
+              exploreBtn.className = 'explore-sources-btn';
+              exploreBtn.textContent = 'חקור בפרוטוקולים';
+              exploreBtn.addEventListener('click', async () => {
+                exploreBtn.disabled = true;
+                exploreBtn.innerHTML = '<span class="btn-spinner"></span> טוען…';
+                try {
+                  const q   = encodeURIComponent(_lastQuestion);
+                  const rd  = await fetch(`/api/research/${sid}/rag?query=${q}&top_k=20`).then(r => r.json());
+                  const mts = rd.meetings || [];
+                  openProtocolBrowser(sid, mts[0]?.meeting_id || null, mts, {
+                    originalQuestion: _lastQuestion, postCompletion: true,
+                  });
+                  exploreBtn.innerHTML = 'חקור בפרוטוקולים';
+                  exploreBtn.disabled = false;
+                } catch { exploreBtn.disabled = false; exploreBtn.innerHTML = 'שגיאה — נסה שוב'; }
+              });
+              exploreWrap.appendChild(exploreBtn);
+              chatColumn.appendChild(exploreWrap);
               break outer;
             } else if (curEvent === 'user_input_required') {
               _reconnectSessionId = null;
@@ -1525,15 +1558,17 @@ async function _attemptReconnect() {
   } finally {
     setStatusMsg(statusEl, '');
     if (statusEl && !statusEl.textContent.trim()) statusEl.remove();
+    _reconnectErrorEl = null;
     running = false;
     submitBtn.disabled = false;
     _reconnecting = false;
+    queryInput.focus();
     scrollToBottom();
   }
 }
 
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && _reconnectSessionId && !_reconnecting && !running) {
+  if (document.visibilityState === 'visible' && _reconnectSessionId && !_reconnecting) {
     _attemptReconnect();
   }
 });
