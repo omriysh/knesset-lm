@@ -81,7 +81,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         task_kinds=["discover"],
         cost_hint="cheap",
         ui={
-            "meta_note": "שורה מסיכום AI של ישיבת הוועדה",
+            "meta_note": "נושאי דיון מתוך סיכום AI של ישיבת הוועדה",
             "enrich_fields": ["meeting_id"],
         },
         compact_spec={
@@ -139,7 +139,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         task_kinds=["filter", "discover"],
         cost_hint="cheap",
         ui={
-            "meta_note": "קטע מפרוטוקול ישיבת הוועדה",
+            "meta_note": "קטע מפרוטוקול ישיבת הוועדה, תוצאת חיפוש מילת מפתח",
             "enrich_fields": ["meeting_id"],
         },
         compact_spec={
@@ -174,7 +174,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         handler=handle_find_mk,
         task_kinds=["discover", "fetch"],
         cost_hint="cheap",
-        ui={"meta_note": "פרופיל חבר הכנסת (oknesset.org)"},
+        ui={"meta_note": "נתונים מאתר הכנסת"},
         compact_spec={
             "kind": "list",
             "max_items": 1,
@@ -205,7 +205,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         handler=handle_find_committee,
         task_kinds=["discover", "fetch"],
         cost_hint="cheap",
-        ui={"meta_note": "נתוני ועדת הכנסת"},
+        ui={"meta_note": "נתונים מאתר הכנסת"},
         compact_spec={
             "kind": "list",
             "max_items": 5,
@@ -234,7 +234,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         handler=handle_find_bill,
         task_kinds=["discover", "fetch"],
         cost_hint="cheap",
-        ui={"meta_note": "נתוני הצעת חוק"},
+        ui={"meta_note": "נתונים מאתר הכנסת"},
         compact_spec={
             "kind": "list",
             "max_items": 5,
@@ -286,7 +286,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         handler=handle_find_party,
         task_kinds=["discover", "fetch"],
         cost_hint="cheap",
-        ui={"meta_note": "הרכב סיעה"},
+        ui={"meta_note": "הרכב סיעה, מתוך אתר הכנסת"},
         compact_spec={
             "kind": "list",
             "max_items": 3,
@@ -321,7 +321,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         task_kinds=["fetch"],
         cost_hint="cheap",
         ui={
-            "meta_note": "סיכום AI של ישיבת הוועדה",
+            "meta_note": "מתוך סיכום AI של ישיבת הוועדה",
             "enrich_fields": ["meeting_id"],
         },
         compact_spec={
@@ -351,7 +351,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         task_kinds=["fetch", "discover"],
         cost_hint="cheap",
         ui={
-            "meta_note": "רשימת ישיבות ועדה",
+            "meta_note": "רשימת ישיבות ועדה, מתוך אתר הכנסת",
             "enrich_fields": ["meeting_id"],
         },
         compact_spec={
@@ -379,7 +379,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         handler=handle_get_bill_details,
         task_kinds=["fetch"],
         cost_hint="cheap",
-        ui={"meta_note": "פרטי הצעת חוק"},
+        ui={"meta_note": "פרטי הצעת חוק, מנתוני אתר הכנסת"},
         compact_spec={
             "kind": "dict",
             "drop_fields": ["documents"],
@@ -442,7 +442,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         handler=handle_query_voting_records,
         task_kinds=["discover", "fetch", "filter"],
         cost_hint="cheap",
-        ui={"meta_note": "רשומות הצבעה"},
+        ui={"meta_note": "רשומות הצבעה ממאגרי הכנסת"},
         compact_spec={
             "kind": "list",
             "max_items": 20,
@@ -479,7 +479,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         cost_hint="expensive",
         planner_only=True,
         ui={
-            "meta_note": "ניתוח מעמיק של ישיבת הוועדה",
+            "meta_note": "מתוך ניתוח מעמיק של קטעים רלוונטיים מישיבת הוועדה",
             "enrich_fields": ["meeting_id"],
         },
         compact_spec={
