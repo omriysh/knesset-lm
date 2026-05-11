@@ -403,7 +403,7 @@ def get_party_members(party_query: str, knesset_num: int = 25, top_k: int = 3) -
             if faction and faction["faction_name"].strip() == party_name:
                 members.append({
                     "mk_id":      str(mk.get("mk_individual_id") or ""),
-                    "full_name":  mk.get("full_name") or mk.get("mk_individual_name") or "",
+                    "full_name":  f"{mk.get('mk_individual_first_name', '')} {mk.get('mk_individual_name', '')}".strip() or mk.get("mk_individual_name") or "",
                     "is_current": bool(mk.get("IsCurrent", False)),
                 })
         results.append({
