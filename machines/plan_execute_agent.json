@@ -1,0 +1,185 @@
+{
+  "edges": [
+    {
+      "condition": "",
+      "id": "e_begin_intent",
+      "source": "begin",
+      "target": "intent_classify",
+      "type": "transition"
+    },
+    {
+      "condition": "intent == 'irrelevant'",
+      "id": "e_intent_irrelevant",
+      "source": "intent_classify",
+      "target": "format_answer",
+      "type": "transition"
+    },
+    {
+      "condition": "intent == 'deep_dive_request'",
+      "id": "e_intent_deep_dive",
+      "source": "intent_classify",
+      "target": "user_input_deep_dive",
+      "type": "transition"
+    },
+    {
+      "condition": "intent == 'research'",
+      "id": "e_intent_research",
+      "source": "intent_classify",
+      "target": "research_subgraph",
+      "type": "transition"
+    },
+    {
+      "condition": "",
+      "id": "e_subgraph_format",
+      "source": "research_subgraph",
+      "target": "format_answer",
+      "type": "transition"
+    }
+  ],
+  "global_rules": "",
+  "id": "plan_execute_agent_v1",
+  "name": "Plan-Execute Research Agent",
+  "nodes": [
+    {
+      "data": {},
+      "id": "begin",
+      "imaginary": false,
+      "label": "התחלה",
+      "position": {
+        "x": 820,
+        "y": -20
+      },
+      "terminal": false,
+      "type": "begin"
+    },
+    {
+      "data": {
+        "input_template": "{{question}}",
+        "max_tokens": 16384,
+        "model": "",
+        "output_format": {
+          "fields": [
+            {
+              "label": "intent",
+              "required": true,
+              "var": "intent"
+            },
+            {
+              "label": "rejection_reason",
+              "required": false,
+              "var": "rejection_reason"
+            }
+          ],
+          "type": "json"
+        },
+        "rag": "",
+        "stage": "router",
+        "system_prompt": "You triage user questions for the Knesset research assistant.\n\nClassify the user's most recent message into one of three intents and return a JSON object:\n\n  - \"research\"          — a substantive question about the Israeli Knesset (MKs, parties, committees, bills, votes, opinions expressed in protocols). The downstream agent will gather evidence and produce a sourced answer.\n  - \"deep_dive_request\" — the user explicitly asks to BROWSE protocols themselves (look at meetings, search inside one, see who said what in a specific session).\n  - \"irrelevant\"        — not about the Israeli Knesset or Israeli politics.\n\nOutput keys:\n  - \"intent\": one of the three values above (required).\n  - \"rejection_reason\": only when intent is \"irrelevant\" — a short Hebrew sentence explaining why the question is outside scope, followed by 1–2 example questions the assistant could actually answer (also in Hebrew).\n\nDo not explain. Do not output prose beyond the JSON object.",
+        "temperature": 0.1,
+        "notes": ""
+      },
+      "id": "intent_classify",
+      "imaginary": false,
+      "label": "סיווג כוונה",
+      "position": {
+        "x": 620,
+        "y": -20
+      },
+      "terminal": false,
+      "type": "llm_call"
+    },
+    {
+      "data": {
+        "hooks": {
+          "cost_estimate_required": "cost_gate"
+        },
+        "implementation": "research",
+        "input": {
+          "intent_hint": "intent",
+          "question": "question"
+        },
+        "output_vars": [
+          "final_answer",
+          "footnotes"
+        ]
+      },
+      "id": "research_subgraph",
+      "imaginary": false,
+      "label": "מחקר מעמיק",
+      "position": {
+        "x": 420,
+        "y": 100
+      },
+      "terminal": false,
+      "type": "subgraph"
+    },
+    {
+      "data": {
+        "input_template": "Research answer:\n{{final_answer}}\n\nRejection reason (if research answer is empty, use this instead):\n{{rejection_reason}}",
+        "max_tokens": 16384,
+        "model": "",
+        "notes": "",
+        "rag": "",
+        "stage": "reviewer",
+        "system_prompt": "You are an expert assistant for analyzing the activity of the Israeli Knesset.\nYou receive either a research agent answer or a rejection reason — never both.\nIf you didn't receive anything - it is likely a technical error. State in clear and percise Hebrew that an error occured, and prompt the user to try again.\n\nRules:\n- Always answer in Hebrew.\n- If a research answer is present: reformat it clearly and concisely for the user. Preserve all citations, dates, and committee names. Tags like [ev_...] are evidence references — keep them exactly as-is. Do not invent information not present in the answer. If the answer includes suggested follow-up questions, keep only substantive ones about the Israeli Knesset; filter out technical questions (e.g. 'why did a tool fail?').\n- If the research answer is empty and a rejection reason is provided: write a brief, polite Hebrew message explaining why the question is outside the scope of this Knesset research assistant. Use the rejection reason as context. Suggest 1–2 related questions the assistant could actually answer.",
+        "temperature": 0.7
+      },
+      "id": "format_answer",
+      "imaginary": false,
+      "label": "עיצוב תשובה",
+      "position": {
+        "x": 620,
+        "y": 100
+      },
+      "terminal": true,
+      "type": "llm_call"
+    },
+    {
+      "data": {
+        "multi_select": false,
+        "options": [
+          {
+            "description": "הרץ את המחקר המלא",
+            "label": "כן, המשך",
+            "value": true
+          },
+          {
+            "description": "בטל את המחקר",
+            "label": "לא, בטל",
+            "value": false
+          }
+        ],
+        "output_var": "approve",
+        "preselect_var": "",
+        "prompt_he": "המחקר המתוכנן הוא יקר יחסית ({{estimated_minutes}} דקות בקירוב, {{step_count}} שלבים). האם להמשיך?",
+        "ui": "option_select"
+      },
+      "id": "cost_gate",
+      "imaginary": false,
+      "label": "אישור עלות",
+      "position": {
+        "x": 120,
+        "y": 100
+      },
+      "terminal": false,
+      "type": "user_input"
+    },
+    {
+      "data": {
+        "output_var": "selected_meetings",
+        "prompt_he": "צוללים לפרוטוקולים…",
+        "ui": "deep_dive"
+      },
+      "id": "user_input_deep_dive",
+      "imaginary": false,
+      "label": "צלול לפרוטוקולים",
+      "position": {
+        "x": 420,
+        "y": -120
+      },
+      "terminal": true,
+      "type": "user_input"
+    }
+  ],
+  "version": 3
+}

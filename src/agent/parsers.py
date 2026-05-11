@@ -52,6 +52,7 @@ Usage
 
 from __future__ import annotations
 
+import json
 import re
 import warnings
 from typing import TYPE_CHECKING
@@ -75,6 +76,8 @@ def parse_output(
         return {}
 
     fmt_type = output_format.get("type", "labeled_fields")
+    if fmt_type == "json":
+        return _parse_json_output(content, output_format, ctx)
     if fmt_type != "labeled_fields":
         warnings.warn(f"Unknown output_format type {fmt_type!r}; skipping", stacklevel=2)
         return {}
@@ -158,6 +161,51 @@ def get_loop_control(output_format: dict | None) -> dict | None:
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
+
+def _parse_json_output(
+    content: str,
+    output_format: dict,
+    ctx: "Context",
+) -> dict:
+    """Handle output_format type 'json': parse content as JSON, map fields by label key."""
+    text = content.strip()
+    # Strip markdown fences if present
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text).strip()
+    try:
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        # Try finding a JSON object anywhere in the content
+        m = re.search(r"\{[^{}]*\}", text, re.DOTALL)
+        if m:
+            try:
+                parsed = json.loads(m.group())
+            except (json.JSONDecodeError, ValueError):
+                parsed = {}
+        else:
+            parsed = {}
+
+    result: dict = {}
+    for field in output_format.get("fields", []):
+        var   = field.get("var", "")
+        label = field.get("label", var)
+        if not var:
+            continue
+        value = parsed.get(label)
+        if value is not None:
+            result[var] = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        else:
+            default = field.get("default")
+            if default is not None:
+                result[var] = default
+            elif field.get("required") and not field.get("optional"):
+                warnings.warn(
+                    f"Required json output_format field {label!r} not found in node output",
+                    stacklevel=3,
+                )
+    return result
+
 
 def _extract_labeled_fields(
     content: str,

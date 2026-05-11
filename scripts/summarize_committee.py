@@ -29,7 +29,7 @@ from tqdm import tqdm
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from utils.knesset_db import (
-    get_committee_sessions_by_name,
+    _get_committee_sessions_by_name,
     get_session_transcript,
     SESSION_TYPE_CLASSIFIED,
 )
@@ -64,7 +64,7 @@ def main() -> None:
     args = parser.parse_args()
 
     tqdm.write(f"Looking up sessions for: {args.committee!r} (Knesset {args.knesset})")
-    sessions = get_committee_sessions_by_name(args.committee, args.knesset)
+    sessions = _get_committee_sessions_by_name(args.committee, args.knesset)
 
     if not sessions:
         tqdm.write("No sessions found. Check the committee name and Knesset number.")

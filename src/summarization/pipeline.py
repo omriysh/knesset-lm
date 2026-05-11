@@ -11,7 +11,7 @@ from agent.llm.base import LLMBackend
 from summarization.agent import run_agent_loop
 from summarization.prompts import SYSTEM_PROMPT_PASS1, SYSTEM_PROMPT_CONTINUATION
 from utils.meeting import load_meeting, build_transcript_text, chunk_transcript, extract_attendance
-from utils.knesset_db import get_mk_profile, get_active_committee_members_by_name
+from utils.knesset_db import get_mk_profile, get_committee_members
 from config import summaries_dir, CHARS_PER_TOK, MAX_CHUNK_CHARS, MAX_SUMMARIZATION_CHUNKS, NOT_PROTOCOL
 
 
@@ -194,7 +194,7 @@ def summarize_meeting(
     # Pre-compute attendance once, before the chunk loop.
     # Looks up party affiliation for all present speakers and absent committee members.
     raw_names         = extract_attendance(meeting)
-    committee_members = get_active_committee_members_by_name(committee, knesset_num)
+    committee_members = get_committee_members(committee, knesset_num)
     attendance_block  = _build_attendance_block(raw_names, committee_members, knesset_num)
     if attendance_block:
         absent_count = sum(

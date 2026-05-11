@@ -1,0 +1,33 @@
+# HTTP / caching
+requests
+requests-cache
+
+# Web framework
+fastapi
+uvicorn[standard]
+pydantic
+jinja2
+aiofiles
+
+# Vector DB
+numpy
+chromadb
+
+# Document parsing (Knesset protocols)
+beautifulsoup4
+pdfplumber
+pymupdf
+python-docx
+pywin32          # Windows only — legacy .doc extraction via Word COM
+
+# Retrieval / embeddings
+rapidfuzz
+transformers>=4.57.0
+torch
+qwen-vl-utils>=0.0.14
+
+# Utilities
+tqdm
+
+# Optional: Google Gemini backend
+google-genai

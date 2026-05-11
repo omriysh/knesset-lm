@@ -18,6 +18,9 @@ const submitBtn   = document.getElementById('submit-btn');
 
 marked.use({ breaks: true, gfm: true });
 
+/* ── Tool result lazy-load config ──────────────────────────── */
+const TOOL_RESULT_UNLOAD_MS = 30_000;
+
 /* ── Settings ───────────────────────────────────────────────── */
 function _stagesAlways() {
   return localStorage.getItem('showStagesAlways') === 'true';
@@ -94,10 +97,14 @@ async function startQuery() {
   const statusEl   = appendStatus('');      // appears first (above)
   const stagesEl   = appendStagesCard();    // appears below, collapsed
   _wireStatusToggle(statusEl, stagesEl);
-  let   agentEl    = null;                  // agent response card (created on first token)
-  let   rawAnswer  = '';
-  let   curEvent   = '';
-  let   buf        = '';
+  let   agentEl           = null;
+  let   rawAnswer         = '';
+  let   subgraphContainer = null;
+  let   subgraphPhase     = null;
+  let   pendingFootnotes  = [];
+  let   pendingCitations  = [];
+  let   curEvent          = '';
+  let   buf               = '';
 
   try {
     const res = await fetch('/api/research/start', {
@@ -124,7 +131,15 @@ async function startQuery() {
         } else if (line.startsWith('data: ')) {
           let data;
           try { data = JSON.parse(line.slice(6)); } catch { continue; }
-          handleEvent(curEvent, data, { stagesEl, statusEl, get agentEl() { return agentEl; }, set agentEl(v) { agentEl = v; }, get rawAnswer() { return rawAnswer; }, set rawAnswer(v) { rawAnswer = v; } });
+          handleEvent(curEvent, data, {
+            stagesEl, statusEl,
+            get agentEl()            { return agentEl; },            set agentEl(v)            { agentEl = v; },
+            get rawAnswer()          { return rawAnswer; },          set rawAnswer(v)          { rawAnswer = v; },
+            get subgraphContainer()  { return subgraphContainer; },  set subgraphContainer(v)  { subgraphContainer = v; },
+            get subgraphPhase()      { return subgraphPhase; },      set subgraphPhase(v)      { subgraphPhase = v; },
+            get pendingFootnotes()   { return pendingFootnotes; },   set pendingFootnotes(v)   { pendingFootnotes = v; },
+            get pendingCitations()   { return pendingCitations; },   set pendingCitations(v)   { pendingCitations = v; },
+          });
         }
       }
     }
@@ -140,6 +155,11 @@ async function startQuery() {
         // Remove streaming cursor if present
         const cursor = agentEl.querySelector('.stream-cursor');
         if (cursor) cursor.remove();
+        // Inject inline citations + sources panel
+        if (pendingFootnotes.length > 0) {
+          _applyEvidenceCitations(body, pendingFootnotes, pendingCitations);
+          agentEl.insertAdjacentHTML('beforeend', _buildSourcesHtml(pendingFootnotes, sessionId));
+        }
       }
     }
     setStatusMsg(statusEl, '');
@@ -163,7 +183,11 @@ function handleEvent(ev, data, refs) {
       break;
 
     case 'node_start':
-      addLiveStageCard(refs.stagesEl, data);
+      if (data.subgraph) {
+        refs.subgraphContainer = addSubgraphWrapperCard(refs.stagesEl, data);
+      } else {
+        addLiveStageCard(refs.stagesEl, data);
+      }
       break;
 
     case 'thinking_token':
@@ -171,9 +195,205 @@ function handleEvent(ev, data, refs) {
       break;
 
     case 'node_result':
-      finaliseLiveCard(refs.stagesEl);
-      addCompletedStageCard(refs.stagesEl, data);
+      if (data.subgraph) {
+        const footnotes = data.subgraph?.outputs?.footnotes;
+        if (Array.isArray(footnotes) && footnotes.length > 0) {
+          refs.pendingFootnotes = footnotes;
+        }
+        const citations = data.subgraph?.outputs?.citations;
+        if (Array.isArray(citations)) {
+          refs.pendingCitations = citations;
+        }
+        finaliseSubgraphCard(refs.subgraphContainer);
+        refs.subgraphContainer = null;
+        refs.subgraphPhase     = null;
+      } else {
+        finaliseLiveCard(refs.stagesEl);
+        addCompletedStageCard(refs.stagesEl, data);
+      }
       break;
+
+    case 'subgraph_event': {
+      const sg_kind    = data.kind    || '';
+      const sg_name    = data.name    || '';
+      const sg_payload = data.payload || {};
+
+      const isExecutorPhase = sg_name.startsWith('executor:');
+      const isSynthesizerPhase = sg_name.startsWith('synthesizer');
+      const isSynthesizerExpandPhase = sg_name === 'synthesizer:expand';
+
+      if (sg_kind === 'llm_start') {
+        if (isExecutorPhase) {
+          // All turns of the same step share one phase slot; don't create a card.
+          if (!refs.subgraphPhase || !refs.subgraphPhase._isExecutor) {
+            refs.subgraphPhase = { _isExecutor: true, thinking: '', content: '', prompt: sg_payload.prompt || {} };
+          }
+        } else if (isSynthesizerPhase) {
+          // All turns of the synthesizer share one phase slot.
+          if (!refs.subgraphPhase || !refs.subgraphPhase._isSynthesizer) {
+            refs.subgraphPhase = {
+              _isSynthesizer: true,
+              label:       _subgraphPhaseLabel('synthesizer'),
+              stage:       'research',
+              thinking:    '',
+              content:     '',
+              prompt:      sg_payload.prompt || {},
+            };
+          }
+          // Create live card only for the synthesis turn (not expand turns).
+          if (!isSynthesizerExpandPhase && refs.subgraphContainer && !refs.subgraphPhase._liveCardCreated) {
+            refs.subgraphPhase._liveCardCreated = true;
+            addLiveStageCard(refs.subgraphContainer, {
+              label:      refs.subgraphPhase.label,
+              stage:      refs.subgraphPhase.stage,
+              loop:       0,
+              prompt:     refs.subgraphPhase.prompt,
+              openPrompt: true,
+            });
+          }
+        } else {
+          refs.subgraphPhase = {
+            label:       _subgraphPhaseLabel(sg_name || sg_payload.phase),
+            stage:       'research',
+            thinking:    '',
+            content:     '',
+            prompt:      sg_payload.prompt || {},
+            tools:       [],
+            toolResults: [],
+          };
+          if (refs.subgraphContainer) {
+            addLiveStageCard(refs.subgraphContainer, {
+              label:      refs.subgraphPhase.label,
+              stage:      refs.subgraphPhase.stage,
+              loop:       0,
+              prompt:     refs.subgraphPhase.prompt,
+              openPrompt: true,
+            });
+          }
+        }
+
+      } else if (sg_kind === 'llm_thinking') {
+        if (refs.subgraphPhase) refs.subgraphPhase.thinking += sg_payload.text || '';
+        // Show thinking in the live card only for non-executor, non-expand phases
+        if (!isExecutorPhase && !isSynthesizerExpandPhase && refs.subgraphContainer) {
+          appendLiveThinking(refs.subgraphContainer, sg_payload.text || '');
+        }
+
+      } else if (sg_kind === 'llm_token') {
+        if (refs.subgraphPhase) refs.subgraphPhase.content += sg_payload.text || '';
+        if (!isExecutorPhase && !isSynthesizerExpandPhase && refs.subgraphContainer) {
+          appendLiveOutput(refs.subgraphContainer, sg_payload.text || '');
+        }
+
+      } else if (sg_kind === 'llm_done') {
+        if (isExecutorPhase || isSynthesizerPhase) {
+          // Accumulate; card is finalized by step_completed / synthesizer_completed
+        } else if (refs.subgraphContainer && refs.subgraphPhase) {
+          const ph = refs.subgraphPhase;
+          finaliseLiveCard(refs.subgraphContainer);
+          addCompletedStageCard(refs.subgraphContainer, {
+            label:        ph.label,
+            stage:        ph.stage,
+            loop:         0,
+            content:      sg_payload.content || ph.content || '',
+            thinking:     ph.thinking,
+            tools:        ph.tools,
+            tool_results: ph.toolResults,
+            prompt:       ph.prompt,
+            elapsed_ms:   sg_payload.elapsed_ms || 0,
+            llm_ms:       sg_payload.elapsed_ms || 0,
+          });
+          refs.subgraphPhase = null;
+        }
+
+      } else if (sg_kind === 'progress') {
+        const _PROGRESS_MSGS = {
+          planning_started:         'מתכנן שלבי חקר...',
+          executing:                'מבצע שלבי חקר...',
+          synthesizing:             'מסכם ממצאים...',
+          replanning:               'מתכנן מחדש...',
+          critic_pre_revise:        'מתקן תוכנית...',
+          validator_revise:         'מאמת תוכנית...',
+          critic_post_started:      'בודק תוצאות...',
+          critic_post_replan_capped:'מסכם למרות תוצאות חלקיות...',
+        };
+        const msg = _PROGRESS_MSGS[sg_name];
+        if (msg) setStatusMsg(refs.statusEl, msg);
+
+      } else if (sg_kind === 'hook' && sg_name === 'step_completed') {
+        // Save prompt before clearing phase
+        const executorPrompt = refs.subgraphPhase ? (refs.subgraphPhase.prompt || {}) : {};
+        refs.subgraphPhase = null;
+        const task = sg_payload.step_task ? `: ${sg_payload.step_task.slice(0, 40)}` : '';
+        setStatusMsg(refs.statusEl, `שלב הושלם${task}`);
+        if (refs.subgraphContainer) {
+          const stepTask        = sg_payload.step_task || 'שלב';
+          const toolName        = sg_payload.tool_name || '';
+          const hasError        = !!(sg_payload.error && sg_payload.error !== 'skip');
+          const fullResult      = sg_payload.full || '';
+          const toolCalls       = sg_payload.tool_calls || [];
+          const toolCallResults = sg_payload.tool_call_results || [];
+
+          let toolResults;
+          if (toolCallResults.length > 0) {
+            toolResults = toolCallResults.map(tc => ({
+              name:       tc.name,
+              args:       tc.args || {},
+              result:     tc.full || tc.summary || '',
+              result_ref: tc.result_ref || null,
+            }));
+          } else if (toolCalls.length === 1) {
+            toolResults = [{ name: toolCalls[0].name || toolName || 'כלי', args: toolCalls[0].args || {}, result: fullResult }];
+          } else if (toolCalls.length > 1) {
+            toolResults = toolCalls.map(tc => ({ name: tc.name, args: tc.args || {}, result: '' }));
+            if (fullResult) toolResults.push({ name: 'תוצאה מלאה', args: {}, result: fullResult });
+          } else if (fullResult) {
+            toolResults = [{ name: toolName || 'תוצאה מלאה', args: {}, result: fullResult }];
+          } else {
+            toolResults = [];
+          }
+
+          addCompletedStageCard(refs.subgraphContainer, {
+            label:        `ביצוע: ${stepTask.slice(0, 60)}`,
+            stage:        hasError ? 'reviewer' : 'tool',
+            content:      sg_payload.summary || '',
+            tools:        toolName ? [toolName] : [],
+            tool_results: toolResults,
+            prompt:       executorPrompt,
+          });
+        }
+
+      } else if (sg_kind === 'hook' && sg_name === 'synthesizer_completed') {
+        const ph = refs.subgraphPhase;
+        if (ph && ph._isSynthesizer && refs.subgraphContainer) {
+          finaliseLiveCard(refs.subgraphContainer);
+          addCompletedStageCard(refs.subgraphContainer, {
+            label:        ph.label || _subgraphPhaseLabel('synthesizer'),
+            stage:        ph.stage || 'research',
+            content:      ph.content || '',
+            thinking:     ph.thinking || '',
+            tools:        [],
+            tool_results: [],
+            prompt:       ph.prompt || {},
+          });
+        }
+        refs.subgraphPhase = null;
+
+      } else if (sg_kind === 'done') {
+        if (refs.subgraphContainer) finaliseSubgraphCard(refs.subgraphContainer);
+        refs.subgraphContainer = null;
+        refs.subgraphPhase     = null;
+
+      } else if (sg_kind === 'error') {
+        if (refs.subgraphContainer) {
+          finaliseLiveCard(refs.subgraphContainer);
+          finaliseSubgraphCard(refs.subgraphContainer);
+        }
+        refs.subgraphContainer = null;
+        refs.subgraphPhase     = null;
+      }
+      break;
+    }
 
     case 'token': {
       refs.rawAnswer += data.text || '';
@@ -255,13 +475,17 @@ async function submitResponse(outputVar, value) {
   running = true;
   submitBtn.disabled = true;
 
-  const statusEl  = appendStatus('ממשיך...');
-  const stagesEl  = appendStagesCard();
+  const statusEl          = appendStatus('ממשיך...');
+  const stagesEl          = appendStagesCard();
   _wireStatusToggle(statusEl, stagesEl);
-  let   agentEl   = null;
-  let   rawAnswer = '';
-  let   curEvent  = '';
-  let   buf       = '';
+  let   agentEl           = null;
+  let   rawAnswer         = '';
+  let   subgraphContainer = null;
+  let   subgraphPhase     = null;
+  let   pendingFootnotes  = [];
+  let   pendingCitations  = [];
+  let   curEvent          = '';
+  let   buf               = '';
 
   try {
     const res = await fetch(`/api/research/${sessionId}/respond`, {
@@ -288,7 +512,15 @@ async function submitResponse(outputVar, value) {
         } else if (line.startsWith('data: ')) {
           let data;
           try { data = JSON.parse(line.slice(6)); } catch { continue; }
-          handleEvent(curEvent, data, { stagesEl, statusEl, get agentEl() { return agentEl; }, set agentEl(v) { agentEl = v; }, get rawAnswer() { return rawAnswer; }, set rawAnswer(v) { rawAnswer = v; } });
+          handleEvent(curEvent, data, {
+            stagesEl, statusEl,
+            get agentEl()            { return agentEl; },            set agentEl(v)            { agentEl = v; },
+            get rawAnswer()          { return rawAnswer; },          set rawAnswer(v)          { rawAnswer = v; },
+            get subgraphContainer()  { return subgraphContainer; },  set subgraphContainer(v)  { subgraphContainer = v; },
+            get subgraphPhase()      { return subgraphPhase; },      set subgraphPhase(v)      { subgraphPhase = v; },
+            get pendingFootnotes()   { return pendingFootnotes; },   set pendingFootnotes(v)   { pendingFootnotes = v; },
+            get pendingCitations()   { return pendingCitations; },   set pendingCitations(v)   { pendingCitations = v; },
+          });
         }
       }
     }
@@ -302,6 +534,11 @@ async function submitResponse(outputVar, value) {
         body.innerHTML = marked.parse(rawAnswer);
         const cursor = agentEl.querySelector('.stream-cursor');
         if (cursor) cursor.remove();
+        // Inject inline citations + sources panel
+        if (pendingFootnotes.length > 0) {
+          _applyEvidenceCitations(body, pendingFootnotes, pendingCitations);
+          agentEl.insertAdjacentHTML('beforeend', _buildSourcesHtml(pendingFootnotes, sessionId));
+        }
       }
     }
     setStatusMsg(statusEl, '');
@@ -411,9 +648,10 @@ function scrollToBottom() {
 function addLiveStageCard(stagesEl, nodeStart) {
   finaliseLiveCard(stagesEl); // clear any stale live card
 
-  const label    = nodeStart.label || 'שלב';
-  const stage    = nodeStart.stage || 'unknown';
-  const loop     = nodeStart.loop  || 0;
+  const label      = nodeStart.label      || 'שלב';
+  const stage      = nodeStart.stage      || 'unknown';
+  const loop       = nodeStart.loop       || 0;
+  const openPrompt = nodeStart.openPrompt || false;
   const loopHtml = loop > 0 ? `<span class="stage-loop-badge">סבב ${loop + 1}</span>` : '';
 
   const card = document.createElement('div');
@@ -426,7 +664,7 @@ function addLiveStageCard(stagesEl, nodeStart) {
       `<span class="stage-meta"><span class="live-thinking-dot"></span>${loopHtml}</span>` +
     `</div>` +
     `<div class="stage-body visible">` +
-      renderPromptHtml(nodeStart.prompt || {}) +
+      renderPromptHtml(nodeStart.prompt || {}, openPrompt) +
       `<details class="sub-details open">` +
         `<summary class="sub-summary thinking-summary">תהליך עבודה…</summary>` +
         `<div class="sub-details-body"><pre class="prompt-text thinking-text"></pre></div>` +
@@ -505,6 +743,96 @@ function addCompletedStageCard(stagesEl, data) {
 
   stagesEl.appendChild(card);
   scrollToBottom();
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   SUBGRAPH (RESEARCH AGENT) RENDERING HELPERS
+═══════════════════════════════════════════════════════════════════ */
+
+function _subgraphPhaseLabel(phase) {
+  const labels = {
+    'planner':          'מתכנן שלבי חקר',
+    'planner_replan':   'מתכנן מחדש',
+    'critic_pre':       'ביקורת תוכנית',
+    'validator':        'אימות תוכנית',
+    'critic_post':      'ביקורת תוצאות',
+    'synthesizer':      'מסכם ממצאים',
+  };
+  if (phase && phase.startsWith('executor:')) {
+    const parts = phase.split(':');
+    const stepId = parts[1] || '';
+    return `ביצוע ${stepId}`;
+  }
+  return labels[phase] || phase || 'שלב';
+}
+
+function addSubgraphWrapperCard(stagesEl, nodeStart) {
+  finaliseLiveCard(stagesEl);
+  const label    = nodeStart.label || 'מחקר מעמיק';
+  const loop     = nodeStart.loop  || 0;
+  const loopHtml = loop > 0 ? `<span class="stage-loop-badge">סבב ${loop + 1}</span>` : '';
+
+  const card = document.createElement('div');
+  card.className = 'stage-card subgraph-card live-stage-card';
+  card.dataset.startTs = String(Date.now());
+  card.innerHTML =
+    `<div class="stage-header open" onclick="toggleStageCard(this)">` +
+      `<span class="stage-arrow">▶</span>` +
+      `<span class="stage-dot research"></span>` +
+      `<span class="stage-name">${esc(label)}</span>` +
+      `<span class="stage-meta"><span class="live-thinking-dot"></span>${loopHtml}</span>` +
+    `</div>` +
+    `<div class="stage-body visible">` +
+      `<div class="subgraph-inner-stages"></div>` +
+    `</div>`;
+
+  stagesEl.appendChild(card);
+  scrollToBottom();
+  return card.querySelector('.subgraph-inner-stages');
+}
+
+function finaliseSubgraphCard(subgraphContainer) {
+  if (!subgraphContainer) return;
+  const card = subgraphContainer.closest('.subgraph-card');
+  if (!card) return;
+  card.classList.remove('live-stage-card');
+  const dot = card.querySelector('.live-thinking-dot');
+  if (dot) dot.remove();
+  const header = card.querySelector('.stage-header');
+  if (header) header.classList.remove('open');
+
+  const startTs = parseInt(card.dataset.startTs || '0', 10);
+  if (startTs) {
+    const elapsedMs = Date.now() - startTs;
+    const metaEl = card.querySelector('.stage-meta');
+    if (metaEl) {
+      const timeSpan = document.createElement('span');
+      timeSpan.className = 'stage-time';
+      timeSpan.textContent = (elapsedMs / 1000).toFixed(1) + 's';
+      metaEl.insertBefore(timeSpan, metaEl.firstChild);
+    }
+  }
+}
+
+function appendLiveOutput(stagesEl, text) {
+  const live = stagesEl && stagesEl.querySelector('.live-stage-card');
+  if (!live) return;
+  let pre = live.querySelector('.live-output-text');
+  if (!pre) {
+    const body = live.querySelector('.stage-body');
+    if (!body) return;
+    const det = document.createElement('details');
+    det.className = 'sub-details open';
+    det.innerHTML =
+      `<summary class="sub-summary">פלט…</summary>` +
+      `<div class="sub-details-body"><pre class="prompt-text live-output-text"></pre></div>`;
+    body.appendChild(det);
+    pre = live.querySelector('.live-output-text');
+  }
+  if (pre) {
+    pre.textContent += text;
+    pre.scrollTop = pre.scrollHeight;
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -646,14 +974,15 @@ function toggleStageCard(header) {
   header.nextElementSibling.classList.toggle('visible');
 }
 
-function renderPromptHtml(p) {
+function renderPromptHtml(p, open = false) {
   const sys  = p.system || '';
   const user = p.user   || '';
+  const openAttr = open ? ' open' : '';
   return (
-    `<details class="sub-details">` +
+    `<details class="sub-details"${openAttr}>` +
     `<summary class="sub-summary">פרומפט</summary>` +
     `<div class="sub-details-body">` +
-    `<div class="prompt-block"><div class="prompt-role">מערכת</div><pre class="prompt-text">${esc(sys)}</pre></div>` +
+    (sys ? `<div class="prompt-block"><div class="prompt-role">מערכת</div><pre class="prompt-text">${esc(sys)}</pre></div>` : '') +
     `<div class="prompt-block"><div class="prompt-role">משתמש</div><pre class="prompt-text">${esc(user)}</pre></div>` +
     `</div></details>`
   );
@@ -672,21 +1001,110 @@ function renderThinkingHtml(thinking, llmMs) {
 function renderToolResultHtml(tr) {
   const name      = tr.name       || '';
   const args      = tr.args       || {};
-  const result    = tr.result     || '';
   const elapsedMs = tr.elapsed_ms != null ? tr.elapsed_ms : null;
   const argsStr   = JSON.stringify(args, null, 2);
   const timeStr   = elapsedMs != null
     ? ` <span class="tool-time">${(elapsedMs / 1000).toFixed(1)}s</span>`
     : '';
+  const hasArgs = Object.keys(args).length > 0;
+  const argsHtml = hasArgs
+    ? `<div class="prompt-block"><div class="prompt-role">ארגומנטים</div><pre class="prompt-text">${esc(argsStr)}</pre></div>`
+    : '';
+
+  if (tr.result_ref) {
+    // Lazy variant — full text fetched on expand
+    return (
+      `<details class="sub-details tool-result-lazy"` +
+      ` data-result-ref="${esc(tr.result_ref)}" data-session-id="${esc(sessionId || '')}" data-loaded="0">` +
+      `<summary class="sub-summary"><span class="tool-summary-label">${esc(name)}</span>${timeStr}</summary>` +
+      `<div class="sub-details-body">` +
+      argsHtml +
+      `<div class="tool-result-slot"><div class="tool-result-placeholder">▼ לחץ להצגת תוצאה</div></div>` +
+      `</div></details>`
+    );
+  }
+
+  // Inline variant (backward compat)
+  const result = tr.result || '';
   return (
     `<details class="sub-details">` +
     `<summary class="sub-summary"><span class="tool-summary-label">${esc(name)}</span>${timeStr}</summary>` +
     `<div class="sub-details-body">` +
-    `<div class="prompt-block"><div class="prompt-role">ארגומנטים</div><pre class="prompt-text">${esc(argsStr)}</pre></div>` +
+    argsHtml +
     `<div class="prompt-block"><div class="prompt-role">תוצאה</div><pre class="prompt-text">${esc(result)}</pre></div>` +
     `</div></details>`
   );
 }
+
+/* ── Lazy tool result loading ───────────────────────────────── */
+
+function _isToolPanelVisible(el) {
+  if (!el.open) return false;
+  let node = el.parentElement;
+  while (node) {
+    if (node.tagName === 'DETAILS' && !node.open) return false;
+    node = node.parentElement;
+  }
+  return true;
+}
+
+async function _loadToolResult(el) {
+  if (el.dataset.loaded === '1' || el.dataset.loading === '1') return;
+  el.dataset.loading = '1';
+  const slot = el.querySelector('.tool-result-slot');
+  if (slot) slot.innerHTML = '<div class="tool-result-loading">טוען...</div>';
+  const ref = el.dataset.resultRef;
+  const sid = el.dataset.sessionId;
+  try {
+    const resp = await fetch(`/api/research/${sid}/tool_result/${ref}`);
+    const json = await resp.json();
+    const text = json.full || '';
+    if (slot) slot.innerHTML =
+      `<div class="prompt-block"><div class="prompt-role">תוצאה</div><pre class="prompt-text">${esc(text)}</pre></div>`;
+    el.dataset.loaded  = '1';
+    el.dataset.loading = '0';
+    _updateToolResultTimer(el);
+  } catch (err) {
+    if (slot) slot.innerHTML = `<div class="tool-result-error">שגיאה בטעינה: ${esc(String(err))}</div>`;
+    el.dataset.loading = '0';
+  }
+}
+
+function _unloadToolResult(el) {
+  clearTimeout(el._unloadTimer);
+  el._unloadTimer = null;
+  el.dataset.loaded = '0';
+  const slot = el.querySelector('.tool-result-slot');
+  if (slot) slot.innerHTML = '<div class="tool-result-placeholder">▼ לחץ להצגת תוצאה</div>';
+}
+
+function _updateToolResultTimer(el) {
+  if (el.dataset.loaded !== '1') return;
+  if (_isToolPanelVisible(el)) {
+    clearTimeout(el._unloadTimer);
+    el._unloadTimer = null;
+  } else {
+    if (!el._unloadTimer) {
+      el._unloadTimer = setTimeout(() => _unloadToolResult(el), TOOL_RESULT_UNLOAD_MS);
+    }
+  }
+}
+
+// Global toggle handler — handles both self-open (trigger load) and
+// any ancestor toggle (re-evaluate timer for all loaded lazy panels).
+document.addEventListener('toggle', function(e) {
+  const toggled = e.target;
+
+  if (toggled.classList && toggled.classList.contains('tool-result-lazy') && toggled.open) {
+    _loadToolResult(toggled);
+  }
+  if (toggled.classList && toggled.classList.contains('ev-source-lazy') && toggled.open) {
+    _loadEvidenceFull(toggled);
+  }
+
+  // Re-evaluate unload timer for every loaded tool-result panel.
+  document.querySelectorAll('.tool-result-lazy[data-loaded="1"]').forEach(_updateToolResultTimer);
+}, true); // capture phase — toggle doesn't bubble
 
 function renderRetrievalHtml(r) {
   const meetings = r.meetings      || [];
@@ -725,6 +1143,294 @@ function renderRetrievalHtml(r) {
     `<summary class="sub-summary">${label}</summary>` +
     `<div class="sub-details-body">${body}</div>` +
     `</details>`
+  );
+}
+
+/* ── Evidence citations ─────────────────────────────────────── */
+
+// Shared popup element — created once, reused.
+let _evPopup = null;
+function _getEvPopup() {
+  if (!_evPopup) {
+    _evPopup = document.createElement('div');
+    _evPopup.className = 'ev-citation-popup';
+    _evPopup.hidden = true;
+    document.body.appendChild(_evPopup);
+    document.addEventListener('click', () => { _evPopup.hidden = true; });
+  }
+  return _evPopup;
+}
+
+// Fields to skip when rendering a quote object generically.
+const _QUOTE_SKIP = new Set([
+  'bullet_id', 'bullet_idx', 'id', 'knesset', 'knesset_num',
+  'mk_individual_id', 'committee_id', 'faction_id', 'position_id',
+]);
+
+function _renderQuoteObj(obj) {
+  if (Array.isArray(obj)) {
+    return obj.map(_renderQuoteObj).join('<hr class="ev-quote-sep">');
+  }
+  if (typeof obj !== 'object' || obj === null) {
+    return `<div class="ev-citation-quote">${esc(String(obj))}</div>`;
+  }
+  // Empty result: show the query that returned nothing
+  if (obj._no_results) {
+    const q = obj.query || obj.topic || obj.mk_query || obj.speaker || '';
+    const label = q ? ` עבור "${esc(q)}"` : '';
+    return `<div class="ev-citation-empty">לא נמצאו תוצאות${label}</div>`;
+  }
+  // Meeting-like: has meeting_id or committee → structured header + text
+  if (obj.meeting_id != null || obj.committee != null) {
+    const parts = [];
+    if (obj.committee) parts.push(esc(String(obj.committee)));
+    if (obj.date)      parts.push(esc(String(obj.date)));
+    if (obj.speaker)   parts.push(esc(String(obj.speaker)));
+    const header = parts.length
+      ? `<div class="ev-citation-meeting-header">${parts.join(' &middot; ')}</div>`
+      : '';
+    const text = obj.text || obj.label || obj.summary || obj.full_text || '';
+    const textHtml = text ? `<div class="ev-citation-quote">${esc(String(text))}</div>` : '';
+    return header + textHtml;
+  }
+  // Generic: render visible key-value pairs
+  const rows = Object.entries(obj)
+    .filter(([k, v]) => !_QUOTE_SKIP.has(k) && v != null && v !== '')
+    .map(([k, v]) => {
+      const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
+      return `<div class="ev-citation-kv">` +
+        `<span class="ev-kv-key">${esc(k)}</span>` +
+        `<span class="ev-kv-val">${esc(val)}</span></div>`;
+    });
+  return rows.length
+    ? `<div class="ev-citation-kvlist">${rows.join('')}</div>`
+    : `<div class="ev-citation-quote">${esc(JSON.stringify(obj))}</div>`;
+}
+
+function _showCitationPopup(supEl, quoteRaw, uiMeta) {
+  const popup = _getEvPopup();
+
+  // Parse quote — may be a JSON object/array or a plain string.
+  let quoteObj = null;
+  if (typeof quoteRaw === 'object' && quoteRaw !== null) {
+    quoteObj = quoteRaw;
+  } else if (typeof quoteRaw === 'string') {
+    const t = quoteRaw.trim();
+    if (t.startsWith('{') || t.startsWith('[')) {
+      try { quoteObj = JSON.parse(t); } catch (_) {}
+    }
+  }
+
+  const contentHtml = quoteObj != null
+    ? _renderQuoteObj(quoteObj)
+    : `<div class="ev-citation-quote">${esc(quoteRaw || '')}</div>`;
+
+  const metaNote = (uiMeta && uiMeta.meta_note) ? uiMeta.meta_note : (uiMeta && uiMeta.tool_name) || '';
+  popup.innerHTML = contentHtml +
+    (metaNote ? `<div class="ev-citation-popup-source">${esc(metaNote)}</div>` : '');
+
+  popup.hidden = false;
+  const sr = supEl.getBoundingClientRect();
+  const pr = popup.getBoundingClientRect();
+  const GAP = 8;
+  let left = sr.left + sr.width / 2 - pr.width / 2;
+  left = Math.max(8, Math.min(left, window.innerWidth - pr.width - 8));
+  // Show above if room, otherwise show below.
+  const topAbove = sr.top + window.scrollY - pr.height - GAP;
+  const top = (sr.top - pr.height - GAP >= 0) ? topAbove : sr.bottom + window.scrollY + GAP;
+  const tailLeft = (sr.left + sr.width / 2) - left;
+  popup.style.left = left + 'px';
+  popup.style.top  = top + 'px';
+  popup.style.setProperty('--tail-left', tailLeft + 'px');
+}
+
+function _applyEvidenceCitations(bodyEl, footnotes, citations) {
+  // Build lookup: citation n → {ev_id, quote}
+  const citMap = {};
+  (citations || []).forEach(c => { if (c && c.n != null) citMap[c.n] = c; });
+
+  // Build lookup: ev_id → footnote index (1-based) for display number
+  const evIdToIdx = {};
+  footnotes.forEach((fn, i) => { evIdToIdx[fn.id] = i + 1; });
+
+  const hasCitations = Object.keys(citMap).length > 0;
+
+  if (hasCitations) {
+    bodyEl.innerHTML = bodyEl.innerHTML.replace(/\[(\d+)\]/g, (match, numStr) => {
+      const n   = parseInt(numStr, 10);
+      const cit = citMap[n];
+      if (!cit) return match;
+      const displayN = evIdToIdx[cit.ev_id] || n;
+      // Serialize quote to string for data attribute (may be object or string).
+      const quoteStr = (typeof cit.quote === 'object' && cit.quote !== null)
+        ? JSON.stringify(cit.quote)
+        : (cit.quote || '');
+      return (
+        `<sup class="ev-cite" data-cite-n="${n}" ` +
+        `data-ev-id="${esc(cit.ev_id)}" ` +
+        `data-quote="${esc(quoteStr)}" ` +
+        `title="${esc(cit.ev_id)}">[${displayN}]</sup>`
+      );
+    });
+  } else {
+    // Fallback: old [ev_xxx] format
+    bodyEl.innerHTML = bodyEl.innerHTML.replace(/\[ev_([0-9a-f]+)\]/g, (match, hex) => {
+      const evId = 'ev_' + hex;
+      const n = evIdToIdx[evId];
+      if (!n) return match;
+      return `<sup class="ev-cite" data-ev-id="${esc(evId)}" title="${esc(evId)}">[${n}]</sup>`;
+    });
+  }
+
+  // Attach click handlers
+  bodyEl.querySelectorAll('sup.ev-cite').forEach(sup => {
+    sup.addEventListener('click', e => {
+      e.stopPropagation();
+      const quoteRaw = sup.dataset.quote || '';
+      const evId     = sup.dataset.evId  || '';
+      const fn       = footnotes.find(f => f.id === evId);
+      // For expand entries, resolve to the original evidence entry for display metadata.
+      let resolvedFn = fn;
+      if (fn && fn.tool_name === 'expand') {
+        const origId = (fn.metadata && fn.metadata.evidence_id) || (fn.provenance && fn.provenance.evidence_id);
+        if (origId) {
+          const origFn = footnotes.find(f => f.id === origId);
+          if (origFn) resolvedFn = origFn;
+        }
+      }
+      const uiMeta   = resolvedFn ? (resolvedFn.ui || {tool_name: resolvedFn.tool_name}) : {};
+      if (quoteRaw) {
+        _showCitationPopup(sup, quoteRaw, uiMeta);
+      }
+    });
+  });
+}
+
+function _buildSourcesHtml(footnotes, sid) {
+  const entries = footnotes.map((fn, i) => {
+    const n        = i + 1;
+    const toolName = fn.tool_name  || '';
+    const stepId   = fn.step_id    || '';
+    const summary  = fn.summary    || '';
+    const ref      = fn.result_ref || '';
+    const header   = (
+      `<span class="ev-source-num">[${n}]</span>` +
+      `<span class="ev-source-tool">${esc(toolName)}</span>` +
+      `<span class="ev-source-step">${esc(stepId)}</span>` +
+      `<span class="ev-source-summary">${esc(summary)}</span>`
+    );
+    if (ref) {
+      return (
+        `<details class="ev-source-entry ev-source-lazy"` +
+        ` data-result-ref="${esc(ref)}" data-session-id="${esc(sid || '')}"` +
+        ` data-tool-name="${esc(toolName)}" data-loaded="0">` +
+        `<summary class="ev-source-header">${header}</summary>` +
+        `<div class="ev-source-full-slot"><div class="ev-source-placeholder">▼ לחץ להצגת מקור מלא</div></div>` +
+        `</details>`
+      );
+    }
+    return `<div class="ev-source-entry"><div class="ev-source-header">${header}</div></div>`;
+  }).join('');
+  return (
+    `<details class="ev-sources">` +
+    `<summary class="ev-sources-summary">מקורות (${footnotes.length})</summary>` +
+    `<div class="ev-sources-body">${entries}</div>` +
+    `</details>`
+  );
+}
+
+async function _loadEvidenceFull(el) {
+  if (el.dataset.loaded === '1' || el.dataset.loading === '1') return;
+  el.dataset.loading = '1';
+  const slot = el.querySelector('.ev-source-full-slot');
+  if (slot) slot.innerHTML = '<div class="ev-source-loading">טוען…</div>';
+  const ref  = el.dataset.resultRef;
+  const sid  = el.dataset.sessionId;
+  const tool = el.dataset.toolName || '';
+  try {
+    const resp = await fetch(`/api/research/${sid}/tool_result/${ref}`);
+    const json = await resp.json();
+    if (slot) slot.innerHTML = _renderEvidenceFull(json.full || '', tool);
+    el.dataset.loaded  = '1';
+    el.dataset.loading = '0';
+  } catch (err) {
+    if (slot) slot.innerHTML = `<div class="ev-source-error">שגיאה: ${esc(String(err))}</div>`;
+    el.dataset.loading = '0';
+  }
+}
+
+function _renderEvidenceFull(text, toolName) {
+  if (!text) return '<div class="ev-source-empty">אין תוכן</div>';
+  let data;
+  try { data = JSON.parse(text); } catch { return `<div class="ev-card-text">${esc(text)}</div>`; }
+  if (Array.isArray(data)) {
+    if (data.length === 0) return '<div class="ev-source-empty">אין תוצאות</div>';
+    const real      = data.filter(x => !(x && x._truncated));
+    const truncItem = data.find(x => x && x._truncated);
+    const cards     = real.map(item => _renderEvidenceCard(item)).join('');
+    const notice    = truncItem
+      ? `<div class="ev-truncated-notice">עוד ${truncItem.items_removed} פריטים לא הוצגו</div>`
+      : '';
+    return `<div class="ev-full-cards">${cards}${notice}</div>`;
+  }
+  if (typeof data === 'object' && data !== null) return _renderEvidenceCard(data);
+  return `<pre class="ev-full-json">${esc(JSON.stringify(data, null, 2))}</pre>`;
+}
+
+function _renderEvidenceCard(item) {
+  if (typeof item !== 'object' || item === null) {
+    return `<div class="ev-full-card"><pre class="ev-card-rest">${esc(String(item))}</pre></div>`;
+  }
+  const LABELS  = ['label', 'committee_name', 'committee', 'name', 'title', 'mk_name'];
+  const METAS   = ['meeting_id', 'session_id', 'date', 'knesset_num', 'score', 'relevance_score', 'bullet_idx'];
+  const TEXTS   = ['text', 'text_he', 'body', 'content', 'summary'];
+  const LISTS   = ['bullets', 'speeches'];
+  const SKIP    = new Set(['bullet_id', 'id', '_truncated', 'items_removed', 'source_url', 'result_ref']);
+  const seen    = new Set(Object.keys(item).filter(k => SKIP.has(k)));
+
+  let labelHtml = '';
+  for (const f of LABELS) {
+    if (item[f]) { labelHtml = `<span class="ev-card-label">${esc(String(item[f]))}</span>`; seen.add(f); break; }
+  }
+  let metaBadges = '';
+  for (const f of METAS) {
+    if (item[f] != null) {
+      const v = (f === 'score' || f === 'relevance_score') ? Number(item[f]).toFixed(3) : String(item[f]);
+      metaBadges += `<span class="ev-card-meta-badge">${esc(f.replace(/_/g, ' '))}: ${esc(v)}</span>`;
+      seen.add(f);
+    }
+  }
+  let bodyHtml = '';
+  for (const f of TEXTS) {
+    if (item[f] && !seen.has(f)) {
+      const t = String(item[f]);
+      bodyHtml += `<div class="ev-card-text">${esc(t.length > 600 ? t.slice(0, 600) + '…' : t)}</div>`;
+      seen.add(f); break;
+    }
+  }
+  for (const f of LISTS) {
+    if (Array.isArray(item[f]) && item[f].length > 0 && !seen.has(f)) {
+      const items = item[f].slice(0, 5);
+      const more  = item[f].length - items.length;
+      bodyHtml += `<div class="ev-card-bullets">` +
+        items.map(b => `<div class="ev-card-bullet">• ${esc(typeof b === 'string' ? b : JSON.stringify(b))}</div>`).join('') +
+        (more > 0 ? `<div class="ev-card-bullet ev-card-more">+${more} נוספים…</div>` : '') +
+        `</div>`;
+      seen.add(f);
+    }
+  }
+  const rest = Object.entries(item).filter(([k]) => !seen.has(k));
+  if (rest.length > 0) {
+    bodyHtml += `<pre class="ev-card-rest">${esc(JSON.stringify(Object.fromEntries(rest), null, 2))}</pre>`;
+  }
+  const headerHtml = (labelHtml || metaBadges)
+    ? `<div class="ev-card-header">${labelHtml}<span class="ev-card-metas">${metaBadges}</span></div>`
+    : '';
+  return (
+    `<div class="ev-full-card">` +
+    headerHtml +
+    (bodyHtml ? `<div class="ev-card-body">${bodyHtml}</div>` : '') +
+    `</div>`
   );
 }
 

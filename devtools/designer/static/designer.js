@@ -123,6 +123,20 @@ function initCy() {
           'height':           '44',
         },
       },
+      // ── Subgraph node — purple double-border ──
+      {
+        selector: 'node[type="subgraph"]',
+        style: {
+          'background-color': '#cba6f7',
+          'border-color':     '#7c3aed',
+          'border-width':     3,
+          'border-style':     'double',
+          'shape':            'round-rectangle',
+          'width':            '150',
+          'height':           '56',
+          'font-size':        '12px',
+        },
+      },
       // ── User Input node — purple ──
       {
         selector: 'node[type="user_input"]',
@@ -201,6 +215,26 @@ function initCy() {
           'text-rotation':      'autorotate',
         },
       },
+      // ── Hook edge (subgraph hook callbacks) — dashed orange, read-only ──
+      {
+        selector: 'edge[edgeType="hook"]',
+        style: {
+          'width':                2,
+          'line-color':           '#f9a03f',
+          'line-style':           'dashed',
+          'line-dash-pattern':    [6, 4],
+          'target-arrow-color':   '#f9a03f',
+          'target-arrow-shape':   'triangle',
+          'curve-style':          'bezier',
+          'label':                'data(label)',
+          'font-size':            '10px',
+          'color':                '#f9a03f',
+          'text-background-color':'#1e1e2e',
+          'text-background-opacity':0.85,
+          'text-background-padding':'2px',
+          'text-rotation':        'autorotate',
+        },
+      },
       // ── Selected edge ──
       {
         selector: 'edge:selected',
@@ -230,7 +264,12 @@ function initCy() {
   });
 
   cy.on('tap', 'edge', e => {
-    openEdgePanel(e.target.id());
+    const edgeId = e.target.id();
+    if (edgeId.startsWith('_hook_')) {
+      toast(`Hook: "${e.target.data('label')}" (read-only — edit data.hooks in JSON)`);
+    } else {
+      openEdgePanel(edgeId);
+    }
   });
 
   cy.on('tap', e => {
@@ -248,7 +287,12 @@ function initCy() {
   });
   cy.on('cxttap', 'edge', e => {
     e.originalEvent.preventDefault();
-    showCtxMenu(e.originalEvent, e.target.id(), 'edge');
+    const edgeId = e.target.id();
+    if (edgeId.startsWith('_hook_')) {
+      toast(`Hook edge (read-only): ${e.target.data('label')}`);
+      return;
+    }
+    showCtxMenu(e.originalEvent, edgeId, 'edge');
   });
 
   // Track position changes + optional snap to grid
@@ -311,9 +355,13 @@ function renderMachine() {
   cy.elements().remove();
 
   for (const n of machine.nodes) {
+    let displayLabel = n.label || n.type;
+    if (n.type === 'subgraph' && n.data?.implementation) {
+      displayLabel = `${displayLabel} [${n.data.implementation}]`;
+    }
     cy.add({
       group: 'nodes',
-      data: { id: n.id, label: n.label || n.type, type: n.type,
+      data: { id: n.id, label: displayLabel, type: n.type,
                terminal: n.terminal || false, imaginary: n.imaginary || false },
       position: { ...n.position },
     });
@@ -332,9 +380,46 @@ function renderMachine() {
     });
   }
 
-  cy.fit(undefined, 40);
+  // Render hook edges from subgraph nodes (read-only, derived from data.hooks)
+  for (const n of machine.nodes) {
+    if (n.type !== 'subgraph') continue;
+    const hooks = n.data?.hooks;
+    if (!hooks || typeof hooks !== 'object') continue;
+    for (const [hookName, targetId] of Object.entries(hooks)) {
+      cy.add({
+        group: 'edges',
+        data: {
+          id:       `_hook_${n.id}_${hookName}`,
+          source:   n.id,
+          target:   targetId,
+          label:    hookName,
+          edgeType: 'hook',
+        },
+      });
+    }
+  }
+
   machineNameEl.value = machine.name || '';
-  dirty = false;
+
+  // Auto-layout when nodes have no stored positions (e.g. freshly imported JSON)
+  const needsLayout = machine.nodes.some(n => !n.position || n.position.x == null);
+  if (needsLayout) {
+    cy.layout({
+      name: 'dagre', rankDir: 'LR', padding: 50,
+      nodeSep: 50, rankSep: 120, animate: false, fit: true,
+    }).run();
+    cy.nodes().forEach(n => {
+      const mNode = machine.nodes.find(x => x.id === n.id());
+      if (mNode) {
+        const p = n.position();
+        mNode.position = { x: Math.round(p.x), y: Math.round(p.y) };
+      }
+    });
+    dirty = true;  // positions changed — user should save
+  } else {
+    cy.fit(undefined, 40);
+    dirty = false;
+  }
 }
 
 
@@ -345,8 +430,8 @@ function openNodePanel(nodeId) {
   const mNode = machine.nodes.find(n => n.id === nodeId);
   if (!mNode) return;
 
-  const typeLabel = {begin:'Begin',llm_call:'LLM Call',tool:'Tool',user_input:'User Input'}[mNode.type] || mNode.type;
-  const badgeCls  = {begin:'badge-begin',llm_call:'badge-llm',tool:'badge-tool',user_input:'badge-userinput'}[mNode.type] || '';
+  const typeLabel = {begin:'Begin',llm_call:'LLM Call',tool:'Tool',user_input:'User Input',subgraph:'Subgraph'}[mNode.type] || mNode.type;
+  const badgeCls  = {begin:'badge-begin',llm_call:'badge-llm',tool:'badge-tool',user_input:'badge-userinput',subgraph:'badge-subgraph'}[mNode.type] || '';
 
   panelTitle.innerHTML = `<span class="badge ${badgeCls}">${typeLabel}</span> ${esc(mNode.label)}`;
 
@@ -499,6 +584,35 @@ function openNodePanel(nodeId) {
     </div>`;
   }
 
+  if (mNode.type === 'subgraph') {
+    const d = mNode.data || {};
+    html += `<div class="field">
+      <label>Implementation</label>
+      <input id="pf-impl" value="${esc(d.implementation || '')}" placeholder="e.g. research" />
+      <div class="hint">Maps to a SubgraphAgent subclass in the runner</div>
+    </div>`;
+    html += `<div class="field">
+      <label>Input Variables (comma-separated)</label>
+      <input id="pf-invars" value="${esc(Object.keys(d.input || {}).join(', ') || (d.input_vars||[]).join(', '))}" placeholder="e.g. question, intent_hint" />
+      <div class="hint">Context variables passed into the subgraph</div>
+    </div>`;
+    html += `<div class="field">
+      <label>Output Variables (comma-separated)</label>
+      <input id="pf-outvars" value="${esc((d.output_vars||[]).join(', '))}" placeholder="e.g. final_answer, footnotes" />
+    </div>`;
+    const hooksJson = d.hooks ? JSON.stringify(d.hooks, null, 2) : '';
+    html += `<div class="field">
+      <label>Hooks (JSON, read-only — edit in raw JSON)</label>
+      <textarea id="pf-hooks" rows="4" style="font-family:monospace;font-size:.78rem;direction:ltr;text-align:left;opacity:0.7"
+        readonly placeholder='{"cost_estimate_required":"cost_gate"}'>${esc(hooksJson)}</textarea>
+      <div class="hint">Each hook renders as a dashed orange edge in the graph</div>
+    </div>`;
+    html += `<div class="field">
+      <label>Notes</label>
+      <textarea id="pf-notes" dir="rtl" rows="3" placeholder="הערות...">${esc(d.notes || '')}</textarea>
+    </div>`;
+  }
+
   // Connected edges summary
   const connEdges = machine.edges.filter(e => e.source === nodeId || e.target === nodeId);
   if (connEdges.length) {
@@ -592,18 +706,33 @@ function applyNodePanel(nodeId) {
     }
   }
 
-  // Sync Cytoscape node data
+  if (mNode.type === 'subgraph') {
+    mNode.data = mNode.data || {};
+    mNode.data.implementation = document.getElementById('pf-impl')?.value || '';
+    const inRaw  = document.getElementById('pf-invars')?.value  || '';
+    const outRaw = document.getElementById('pf-outvars')?.value || '';
+    mNode.data.input_vars  = inRaw.split(',').map(s=>s.trim()).filter(Boolean);
+    mNode.data.output_vars = outRaw.split(',').map(s=>s.trim()).filter(Boolean);
+    mNode.data.notes       = document.getElementById('pf-notes')?.value || '';
+    // hooks are read-only in panel — do not overwrite from textarea
+  }
+
+  // Sync Cytoscape node data (subgraph shows [implementation] suffix)
+  let displayLabel = mNode.label;
+  if (mNode.type === 'subgraph' && mNode.data?.implementation) {
+    displayLabel = `${mNode.label} [${mNode.data.implementation}]`;
+  }
   const cyNode = cy.getElementById(nodeId);
   if (cyNode.length) {
-    cyNode.data('label',     mNode.label);
+    cyNode.data('label',     displayLabel);
     cyNode.data('terminal',  mNode.terminal  || false);
     cyNode.data('imaginary', mNode.imaginary || false);
   }
 
   // Refresh panel title to reflect updated label
-  panelTitle.innerHTML = `<span class="badge ${
-    {begin:'badge-begin',llm_call:'badge-llm',tool:'badge-tool',user_input:'badge-userinput'}[mNode.type]||''
-  }">${{begin:'Begin',llm_call:'LLM Call',tool:'Tool',user_input:'User Input'}[mNode.type]||mNode.type}</span> ${esc(mNode.label)}`;
+  const TYPE_LABELS = {begin:'Begin',llm_call:'LLM Call',tool:'Tool',user_input:'User Input',subgraph:'Subgraph'};
+  const BADGE_CLS   = {begin:'badge-begin',llm_call:'badge-llm',tool:'badge-tool',user_input:'badge-userinput',subgraph:'badge-subgraph'};
+  panelTitle.innerHTML = `<span class="badge ${BADGE_CLS[mNode.type]||''}">${TYPE_LABELS[mNode.type]||mNode.type}</span> ${esc(mNode.label)}`;
 
   markDirty();
   toast('Applied');
@@ -692,7 +821,7 @@ function deleteEdge(edgeId) {
 function addNode(type) {
   if (!machine) { toast('Create or load a machine first'); return; }
   const id = type + '_' + crypto.randomUUID().slice(0,8);
-  const labels = { llm_call: 'LLM Call', tool: 'Tool', user_input: 'User Input' };
+  const labels = { llm_call: 'LLM Call', tool: 'Tool', user_input: 'User Input', subgraph: 'Subgraph' };
   const label = labels[type] || type;
 
   // Place near center of current view
@@ -716,6 +845,7 @@ function addNode(type) {
 document.getElementById('add-llm').addEventListener('click',       () => addNode('llm_call'));
 document.getElementById('add-tool').addEventListener('click',      () => addNode('tool'));
 document.getElementById('add-userinput').addEventListener('click', () => addNode('user_input'));
+document.getElementById('add-subgraph').addEventListener('click',  () => addNode('subgraph'));
 
 
 // ═══════════════════════════════════════════════════════════════════════════

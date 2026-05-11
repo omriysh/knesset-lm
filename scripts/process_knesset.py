@@ -32,6 +32,7 @@ Notes
 import argparse
 import json
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -292,6 +293,24 @@ def _format_committee_summary(name: str, stats: dict) -> str:
     return f"  {name[:40]}: {body}"
 
 
+def _bm25_phase(knesset_num: int) -> None:
+    """Rebuild bullets + speeches BM25 indexes for knesset_num."""
+    bm25_script = Path(__file__).parent / "build_bm25_indexes.py"
+    for target in ("bullets", "speeches"):
+        tqdm.write(f"  BM25 [{target}] rebuilding…")
+        result = subprocess.run(
+            [sys.executable, str(bm25_script),
+             "--knesset-num", str(knesset_num),
+             "--target", target,
+             "--rebuild"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            tqdm.write(f"  [BM25 ERROR] {result.stderr[-500:]}")
+        elif result.stdout.strip():
+            tqdm.write(result.stdout.strip())
+
+
 def _print_stats(stats: dict) -> None:
     print(f"  Sessions          : {stats['total']}")
     if stats["classified"]:
@@ -334,6 +353,8 @@ def main() -> None:
                     help="Re-index even if already present in ChromaDB")
     ap.add_argument("--skip", nargs="*", default=[],
                     help="Committee name patterns to skip (substring match)")
+    ap.add_argument("--skip-bm25", action="store_true",
+                    help="Skip BM25 index rebuild after processing")
     args = ap.parse_args()
 
     tqdm.write(f"Fetching committee list for Knesset {args.knesset} …")
@@ -406,6 +427,10 @@ def main() -> None:
           f"({len(committees)} committees, {elapsed / 60:.1f} min)")
     print(f"{'='*60}")
     _print_stats(grand)
+
+    if not args.skip_bm25:
+        print("\nRebuilding BM25 indexes…")
+        _bm25_phase(args.knesset)
 
 
 if __name__ == "__main__":

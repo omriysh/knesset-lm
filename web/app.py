@@ -51,8 +51,173 @@ from pydantic import BaseModel
 
 import config
 from agent.llm.gemma import GemmaLlamaBackend
+
+# ── Tool-result lazy-load cache ───────────────────────────────────────────────
+# Maps ref_id → full tool result text.  Populated when subgraph step_completed
+# events are streamed; served by GET /api/research/{sid}/tool_result/{ref_id}.
+_TOOL_RESULT_CACHE: dict[str, str] = {}
+
+# ── Meeting info cache (meeting_id → {date, committee}) ───────────────────────
+_MEETING_INFO_CACHE: dict[str, dict] = {}
+
+
+def _get_meeting_info(meeting_id: str) -> dict:
+    """Resolve a meeting_id to {date: DD/MM/YYYY, committee: Hebrew name}.
+
+    Scans raw_transcriptions across all Knesset numbers; filenames are
+    DD_MM_YYYY_<session_id>.json, stored under <knesset_num>/<committee>/.
+    Result is cached in-process.  Returns {} if not found.
+    """
+    import glob as _glob
+    if meeting_id in _MEETING_INFO_CACHE:
+        return _MEETING_INFO_CACHE[meeting_id]
+    base = config.transcriptions_dir(25).parent  # Data/raw_transcriptions/
+    matches = _glob.glob(str(base / "**" / f"*_{meeting_id}.json"), recursive=True)
+    info: dict = {}
+    if matches:
+        p = Path(matches[0])
+        parts = p.stem.split("_")            # DD_MM_YYYY_session_id
+        if len(parts) >= 4:
+            info["date"] = f"{parts[0]}/{parts[1]}/{parts[2]}"
+        info["committee"] = p.parent.name.replace("_", " ")
+    _MEETING_INFO_CACHE[meeting_id] = info
+    return info
+
+
+def _enrich_citations(citations: list[dict], footnote_by_id: dict[str, dict]) -> list[dict]:
+    """Enrich citation quotes:
+    - Empty/null quote → inject provenance fields as a special _no_results marker
+    - meeting_id present in quote → resolve to DD/MM/YYYY date string
+    """
+    _PROV_QUERY_KEYS = ("query", "topic", "mk_query", "speaker", "committee")
+
+    enriched = []
+    for cit in citations:
+        ev_id = cit.get("ev_id", "")
+        fn = footnote_by_id.get(ev_id, {})
+        ui = fn.get("ui") or {}
+        enrich_fields = ui.get("enrich_fields", [])
+
+        quote = cit.get("quote")
+        if isinstance(quote, str):
+            try:
+                quote = json.loads(quote)
+            except Exception:
+                pass  # keep as string
+
+        # Empty quote → substitute provenance so UI can show what was queried
+        if quote is None or quote == "" or quote == [] or quote == {}:
+            prov = fn.get("provenance") or {}
+            useful = {k: v for k, v in prov.items() if k in _PROV_QUERY_KEYS and v}
+            if useful:
+                cit = {**cit, "quote": {"_no_results": True, **useful}}
+            enriched.append(cit)
+            continue
+
+        # meeting_id enrichment (date + committee)
+        if "meeting_id" not in enrich_fields:
+            enriched.append(cit)
+            continue
+
+        def _apply_meeting_info(obj: dict) -> dict:
+            mid = obj.get("meeting_id")
+            if mid is None:
+                return obj
+            info = _get_meeting_info(str(mid))
+            patch: dict = {}
+            if info.get("date") and "date" not in obj:
+                patch["date"] = info["date"]
+            if info.get("committee"):
+                patch["committee"] = info["committee"]
+            return {**obj, **patch} if patch else obj
+
+        if isinstance(quote, dict):
+            quote = _apply_meeting_info(quote)
+            cit = {**cit, "quote": quote}
+        elif isinstance(quote, list):
+            cit = {**cit, "quote": [
+                _apply_meeting_info(item) if isinstance(item, dict) else item
+                for item in quote
+            ]}
+        enriched.append(cit)
+    return enriched
+
+
+def _strip_footnote_fulls(ev_data: dict, registry=None) -> dict:
+    """Strip `full` from footnotes in node_result subgraph outputs; cache each one.
+    Also enriches footnotes with tool ui metadata and resolves meeting dates in citations.
+
+    Only mutates node_result events that carry subgraph outputs with footnotes.
+    All other events pass through unchanged.
+    """
+    subgraph = ev_data.get("subgraph")
+    if not subgraph:
+        return ev_data
+    outputs = subgraph.get("outputs") or {}
+    footnotes = outputs.get("footnotes")
+    if not isinstance(footnotes, list):
+        return ev_data
+
+    # Build tool_name → ui lookup from RESEARCH_TOOL_REGISTRY (list[ToolSpec])
+    ui_map: dict[str, dict] = {spec.name: spec.ui or {} for spec in RESEARCH_TOOL_REGISTRY}
+
+    patched = []
+    footnote_by_id: dict[str, dict] = {}
+    for fn in footnotes:
+        full = fn.get("full") or ""
+        tool_name = fn.get("tool_name", "")
+        ui = ui_map.get(tool_name, {})
+        base = {**fn, "ui": ui}
+        if full:
+            ref_id = uuid.uuid4().hex[:16]
+            _TOOL_RESULT_CACHE[ref_id] = full
+            enriched_fn = {**base, "full": "", "result_ref": ref_id}
+        else:
+            enriched_fn = {**base, "result_ref": None}
+        patched.append(enriched_fn)
+        footnote_by_id[fn.get("id", "")] = enriched_fn
+
+    citations = outputs.get("citations")
+    enriched_citations = (
+        _enrich_citations(citations, footnote_by_id)
+        if isinstance(citations, list) else citations
+    )
+
+    return {
+        **ev_data,
+        "subgraph": {
+            **subgraph,
+            "outputs": {
+                **outputs,
+                "footnotes": patched,
+                "citations": enriched_citations,
+            },
+        },
+    }
+
+
+def _strip_tool_result_fulls(ev_data: dict) -> dict:
+    """Strip full text from step_completed tool_call_results; store in cache.
+
+    Only mutates hook/step_completed payloads.  All other events pass through
+    unchanged.  Returns a shallow copy of ev_data so the original is untouched.
+    """
+    if ev_data.get("kind") != "hook" or ev_data.get("name") != "step_completed":
+        return ev_data
+    payload = ev_data.get("payload") or {}
+    results = payload.get("tool_call_results")
+    if not results:
+        return ev_data
+    patched_results = []
+    for tr in results:
+        full = tr.get("full") or ""
+        ref_id = uuid.uuid4().hex[:16]
+        _TOOL_RESULT_CACHE[ref_id] = full
+        patched_results.append({**tr, "full": "", "result_ref": ref_id})
+    return {**ev_data, "payload": {**payload, "tool_call_results": patched_results}}
 from agent.machine import StateMachine
 from agent.runner import MachineRunner, build_tool_registry
+from agent.research_agent.tools import RESEARCH_TOOL_REGISTRY
 from indexing.embedder import ProtocolEmbedder
 from indexing.parse_summary import parse_summary_bullets
 from retrieval.protocol_rag import query_retrieve
@@ -314,6 +479,13 @@ async def query(req: QueryRequest, request: Request):
                     yield _sse("thinking_token", {"text": ev_data})
                 elif ev_type == "node_result":
                     yield _sse("node_result",    ev_data)
+                elif ev_type == "subgraph_event":
+                    yield _sse("subgraph_event", {
+                        "type":    "subgraph_event",
+                        "kind":    ev_data.get("kind"),
+                        "name":    ev_data.get("name"),
+                        "payload": ev_data.get("payload", {}),
+                    })
                 elif ev_type == "done":
                     yield _sse("done",           {})
                 elif ev_type == "error":
@@ -420,7 +592,16 @@ async def research_start(req: ResearchStartRequest, request: Request):
                     yield _sse("thinking_token", {"text": ev_data})
 
                 elif ev_type == "node_result":
-                    yield _sse("node_result", ev_data)
+                    yield _sse("node_result", _strip_footnote_fulls(ev_data, registry=tool_registry))
+
+                elif ev_type == "subgraph_event":
+                    stripped = _strip_tool_result_fulls(ev_data)
+                    yield _sse("subgraph_event", {
+                        "type":    "subgraph_event",
+                        "kind":    stripped.get("kind"),
+                        "name":    stripped.get("name"),
+                        "payload": stripped.get("payload", {}),
+                    })
 
                 elif ev_type == "user_input_required":
                     # ev_data contains the full payload including "checkpoint"
@@ -645,7 +826,16 @@ async def research_respond(
                     yield _sse("thinking_token", {"text": ev_data})
 
                 elif ev_type == "node_result":
-                    yield _sse("node_result", ev_data)
+                    yield _sse("node_result", _strip_footnote_fulls(ev_data, registry=tool_registry))
+
+                elif ev_type == "subgraph_event":
+                    stripped = _strip_tool_result_fulls(ev_data)
+                    yield _sse("subgraph_event", {
+                        "type":    "subgraph_event",
+                        "kind":    stripped.get("kind"),
+                        "name":    stripped.get("name"),
+                        "payload": stripped.get("payload", {}),
+                    })
 
                 elif ev_type == "user_input_required":
                     new_checkpoint = ev_data.get("checkpoint", {})
@@ -741,6 +931,15 @@ async def research_delete(session_id: str, request: Request):
     # Return 204 regardless of whether the file existed (idempotent delete)
     from fastapi.responses import Response
     return Response(status_code=204)
+
+
+@app.get("/api/research/{session_id}/tool_result/{ref_id}")
+async def get_tool_result(session_id: str, ref_id: str):
+    """Return the full text for a lazily-loaded tool result panel."""
+    full = _TOOL_RESULT_CACHE.get(ref_id)
+    if full is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return JSONResponse({"full": full})
 
 
 # ── Workspace models ──────────────────────────────────────────────────────────

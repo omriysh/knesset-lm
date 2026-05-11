@@ -1,16 +1,28 @@
 """
 base.py
 
-LLMBackend protocol: abstracts one LLM deployment so that all model-specific
-code (Qwen3 thinking tokens, XML tool-call fallback, etc.) is isolated in a
-single implementation class.  Nothing else in the codebase imports anything
-model-specific.
+LLMBackend abstract base class: abstracts one LLM deployment so that all
+model-specific code (Qwen3 thinking tokens, XML tool-call fallback, etc.) is
+isolated in a single implementation class.  Nothing else in the codebase
+imports anything model-specific.
+
+Context injection
+-----------------
+``stream()`` is a concrete method on the ABC that prepends a lightweight
+system message with today's date and current Knesset context before every
+LLM call.  Subclasses implement ``_stream_impl()`` with the raw network /
+SDK logic.  The injection is idempotent — if a system message that already
+contains "Today's date:" is present, it is left unchanged.
 """
 
 from __future__ import annotations
 
+import datetime
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Generator, Protocol, runtime_checkable
+from typing import Generator
+
+import config
 from config import MAX_TOKENS
 
 
@@ -33,21 +45,50 @@ class ToolCallsEvent:
 
 @dataclass
 class DoneEvent:
-    pass
+    # Set by GoogleBackend when the cloud call failed and we transparently
+    # served the response from the local llama-server fallback instead.
+    cloud_failed_used_local: bool = False
 
 
 LLMEvent = TokenEvent | ThinkingEvent | ToolCallsEvent | DoneEvent
 
 
-# ── Backend protocol ──────────────────────────────────────────────────────────
+# ── Date-context injection ────────────────────────────────────────────────────
 
-@runtime_checkable
-class LLMBackend(Protocol):
+def _inject_date_context(messages: list[dict]) -> list[dict]:
+    """Prepend a system message with today's date and Knesset context.
+
+    Idempotent: if the first system message already contains "Today's date:"
+    it is left unchanged (handles re-entrant calls such as the Google local
+    fallback path).
+    """
+    knesset_num = getattr(config, "KNESSET_NUM", 25)
+    today = datetime.date.today().isoformat()
+    context = (
+        f"Today's date: {today}. "
+        f"The {knesset_num}th Knesset is currently active; "
+        "its data is available up to today. "
+        "Do not assume that data from the current year is unavailable or in the future."
+    )
+
+    if messages and messages[0].get("role") == "system":
+        existing = messages[0].get("content", "")
+        if "Today's date:" in existing:
+            return messages  # already injected
+        return [{"role": "system", "content": context + "\n\n" + existing}] + messages[1:]
+
+    return [{"role": "system", "content": context}] + list(messages)
+
+
+# ── Backend abstract base class ───────────────────────────────────────────────
+
+class LLMBackend(ABC):
     """
     Abstracts one LLM deployment.
 
     All Qwen3/llama.cpp specifics live in Qwen3LlamaBackend.
-    Adding a new model: implement this protocol; pass to MachineRunner.
+    Adding a new model: subclass this, implement _stream_impl() and the
+    remaining abstract methods; pass instance to MachineRunner.
     No changes needed in runner.py, context.py, or web/app.py.
     """
 
@@ -55,12 +96,32 @@ class LLMBackend(Protocol):
     ctx_size:          int   # model context window in tokens
     max_chunk_chars:   int   # max chars per transcript chunk for summarization
 
+    # ── Concrete stream wrapper (injects date context) ────────────────────
+
     def stream(
         self,
         messages: list[dict],
         tools: list[dict] | None = None,
-        temperature: float | None = None,  # None → use backend's TEMPERATURE class constant
-        max_tokens: int = MAX_TOKENS,    # override in implementations with config.MAX_TOKENS
+        temperature: float | None = None,
+        max_tokens: int = MAX_TOKENS,
+    ) -> Generator[LLMEvent, None, None]:
+        """Inject date/Knesset context then delegate to ``_stream_impl``."""
+        return self._stream_impl(
+            messages    = _inject_date_context(messages),
+            tools       = tools,
+            temperature = temperature,
+            max_tokens  = max_tokens,
+        )
+
+    # ── Abstract implementation hook ──────────────────────────────────────
+
+    @abstractmethod
+    def _stream_impl(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        temperature: float | None = None,
+        max_tokens: int = MAX_TOKENS,
     ) -> Generator[LLMEvent, None, None]:
         """
         Stream one completion.
@@ -72,6 +133,9 @@ class LLMBackend(Protocol):
         """
         ...
 
+    # ── Abstract helper methods ───────────────────────────────────────────
+
+    @abstractmethod
     def prepare_messages(
         self,
         messages: list[dict],
@@ -84,6 +148,7 @@ class LLMBackend(Protocol):
         """
         ...
 
+    @abstractmethod
     def extract_visible_content(self, raw_content: str) -> str:
         """
         Strip model-specific internal markup from the assembled content string.
@@ -92,6 +157,7 @@ class LLMBackend(Protocol):
         """
         ...
 
+    @abstractmethod
     def extract_tool_calls(
         self,
         message: dict,
@@ -105,6 +171,7 @@ class LLMBackend(Protocol):
         """
         ...
 
+    @abstractmethod
     def needs_thinking_retry(self, content: str, tool_calls: list) -> bool:
         """
         True if the model produced no usable output (thinking-only response).
@@ -113,6 +180,7 @@ class LLMBackend(Protocol):
         """
         ...
 
+    @abstractmethod
     def extract_thinking(self, raw_content: str) -> str:
         """
         Extract the thinking/reasoning text from raw model output (before stripping).

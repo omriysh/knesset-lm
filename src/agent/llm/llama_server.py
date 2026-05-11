@@ -22,7 +22,7 @@ from typing import Generator
 import requests
 
 import config
-from agent.llm.base import DoneEvent, LLMEvent, ThinkingEvent, TokenEvent, ToolCallsEvent
+from agent.llm.base import DoneEvent, LLMBackend, LLMEvent, ThinkingEvent, TokenEvent, ToolCallsEvent
 
 
 _XML_TOOL_RE = re.compile(
@@ -31,7 +31,7 @@ _XML_TOOL_RE = re.compile(
 )
 
 
-class LlamaServerBackend:
+class LlamaServerBackend(LLMBackend):
     """
     Generic llama-server backend.
 
@@ -103,7 +103,7 @@ class LlamaServerBackend:
 
     # ── Streaming ─────────────────────────────────────────────────────────────
 
-    def stream(
+    def _stream_impl(
         self,
         messages:    list[dict],
         tools:       list[dict] | None = None,

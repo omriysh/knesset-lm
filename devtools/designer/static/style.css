@@ -85,6 +85,7 @@ button.export-btn:hover{background:#94e2d5}
 .badge-llm{background:#89b4fa;color:#1e1e2e}
 .badge-tool{background:#fab387;color:#1e1e2e}
 .badge-userinput{background:#cba6f7;color:#1e1e2e}
+.badge-subgraph{background:#cba6f7;color:#1e1e2e;border:2px solid #7c3aed}
 
 /* ── Toolbar (floating over canvas) ────────────────────────────────── */
 .toolbar{
