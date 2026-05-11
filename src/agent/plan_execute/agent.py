@@ -436,8 +436,8 @@ class PlanExecuteAgent(SubgraphAgent):
             for s in pending_steps:
                 executed_step_ids.add(s.id)
 
-            # Skip answer validator when no more replans are available.
-            if post_replans >= max_replans:
+            # Skip answer validator when no more replans are available (-1 to address budget check later).
+            if post_replans >= max_replans - 1:
                 yield SubgraphEvent(
                     kind="progress",
                     name="critic_post_replan_capped",

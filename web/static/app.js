@@ -1185,6 +1185,7 @@ function _renderQuoteObj(obj) {
     const parts = [];
     if (obj.committee) parts.push(esc(String(obj.committee)));
     if (obj.date)      parts.push(esc(String(obj.date)));
+    if (obj.speaker)   parts.push(esc(String(obj.speaker)));
     const header = parts.length
       ? `<div class="ev-citation-meeting-header">${parts.join(' &middot; ')}</div>`
       : '';
@@ -1234,7 +1235,9 @@ function _showCitationPopup(supEl, quoteRaw, uiMeta) {
   const GAP = 8;
   let left = sr.left + sr.width / 2 - pr.width / 2;
   left = Math.max(8, Math.min(left, window.innerWidth - pr.width - 8));
-  const top = sr.top + window.scrollY - pr.height - GAP;
+  // Show above if room, otherwise show below.
+  const topAbove = sr.top + window.scrollY - pr.height - GAP;
+  const top = (sr.top - pr.height - GAP >= 0) ? topAbove : sr.bottom + window.scrollY + GAP;
   const tailLeft = (sr.left + sr.width / 2) - left;
   popup.style.left = left + 'px';
   popup.style.top  = top + 'px';
@@ -1286,7 +1289,16 @@ function _applyEvidenceCitations(bodyEl, footnotes, citations) {
       const quoteRaw = sup.dataset.quote || '';
       const evId     = sup.dataset.evId  || '';
       const fn       = footnotes.find(f => f.id === evId);
-      const uiMeta   = fn ? (fn.ui || {tool_name: fn.tool_name}) : {};
+      // For expand entries, resolve to the original evidence entry for display metadata.
+      let resolvedFn = fn;
+      if (fn && fn.tool_name === 'expand') {
+        const origId = (fn.metadata && fn.metadata.evidence_id) || (fn.provenance && fn.provenance.evidence_id);
+        if (origId) {
+          const origFn = footnotes.find(f => f.id === origId);
+          if (origFn) resolvedFn = origFn;
+        }
+      }
+      const uiMeta   = resolvedFn ? (resolvedFn.ui || {tool_name: resolvedFn.tool_name}) : {};
       if (quoteRaw) {
         _showCitationPopup(sup, quoteRaw, uiMeta);
       }
