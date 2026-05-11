@@ -38,14 +38,12 @@ Decision protocol:
    get the full raw results. Do this BEFORE calling any other tool.
 
 4. After each tool returns you will see its result. You may then call
-   another tool if more information is needed, or proceed to step 4.
+   another tool if more information is needed. When you have gathered
+   enough evidence, simply stop — do NOT call `record_evidence` with
+   decision='produced'. The system will automatically prompt you to
+   produce a structured summary after your tool calls finish.
 
-5. When you have gathered enough evidence, call `record_evidence` once:
-     - `decision`     = "produced"
-     - `summary`      = 1–3 sentences covering ALL tool results,
-                        focused on what is RELEVANT to `task`
-
-6. If any tool returns an error or zero results and no further tool can
+5. If any tool returns an error or zero results and no further tool can
    help, call `record_evidence` with:
      - `decision`     = "abort_step"
      - `summary`      = a short reason

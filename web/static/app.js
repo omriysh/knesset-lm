@@ -219,12 +219,37 @@ function handleEvent(ev, data, refs) {
       const sg_payload = data.payload || {};
 
       const isExecutorPhase = sg_name.startsWith('executor:');
+      const isSynthesizerPhase = sg_name.startsWith('synthesizer');
+      const isSynthesizerExpandPhase = sg_name === 'synthesizer:expand';
 
       if (sg_kind === 'llm_start') {
         if (isExecutorPhase) {
           // All turns of the same step share one phase slot; don't create a card.
           if (!refs.subgraphPhase || !refs.subgraphPhase._isExecutor) {
             refs.subgraphPhase = { _isExecutor: true, thinking: '', content: '', prompt: sg_payload.prompt || {} };
+          }
+        } else if (isSynthesizerPhase) {
+          // All turns of the synthesizer share one phase slot.
+          if (!refs.subgraphPhase || !refs.subgraphPhase._isSynthesizer) {
+            refs.subgraphPhase = {
+              _isSynthesizer: true,
+              label:       _subgraphPhaseLabel('synthesizer'),
+              stage:       'research',
+              thinking:    '',
+              content:     '',
+              prompt:      sg_payload.prompt || {},
+            };
+          }
+          // Create live card only for the synthesis turn (not expand turns).
+          if (!isSynthesizerExpandPhase && refs.subgraphContainer && !refs.subgraphPhase._liveCardCreated) {
+            refs.subgraphPhase._liveCardCreated = true;
+            addLiveStageCard(refs.subgraphContainer, {
+              label:      refs.subgraphPhase.label,
+              stage:      refs.subgraphPhase.stage,
+              loop:       0,
+              prompt:     refs.subgraphPhase.prompt,
+              openPrompt: true,
+            });
           }
         } else {
           refs.subgraphPhase = {
@@ -249,20 +274,20 @@ function handleEvent(ev, data, refs) {
 
       } else if (sg_kind === 'llm_thinking') {
         if (refs.subgraphPhase) refs.subgraphPhase.thinking += sg_payload.text || '';
-        // Show thinking in the live card only for non-executor phases
-        if (!isExecutorPhase && refs.subgraphContainer) {
+        // Show thinking in the live card only for non-executor, non-expand phases
+        if (!isExecutorPhase && !isSynthesizerExpandPhase && refs.subgraphContainer) {
           appendLiveThinking(refs.subgraphContainer, sg_payload.text || '');
         }
 
       } else if (sg_kind === 'llm_token') {
         if (refs.subgraphPhase) refs.subgraphPhase.content += sg_payload.text || '';
-        if (!isExecutorPhase && refs.subgraphContainer) {
+        if (!isExecutorPhase && !isSynthesizerExpandPhase && refs.subgraphContainer) {
           appendLiveOutput(refs.subgraphContainer, sg_payload.text || '');
         }
 
       } else if (sg_kind === 'llm_done') {
-        if (isExecutorPhase) {
-          // Accumulate; card is finalized by step_completed
+        if (isExecutorPhase || isSynthesizerPhase) {
+          // Accumulate; card is finalized by step_completed / synthesizer_completed
         } else if (refs.subgraphContainer && refs.subgraphPhase) {
           const ph = refs.subgraphPhase;
           finaliseLiveCard(refs.subgraphContainer);
@@ -337,6 +362,22 @@ function handleEvent(ev, data, refs) {
             prompt:       executorPrompt,
           });
         }
+
+      } else if (sg_kind === 'hook' && sg_name === 'synthesizer_completed') {
+        const ph = refs.subgraphPhase;
+        if (ph && ph._isSynthesizer && refs.subgraphContainer) {
+          finaliseLiveCard(refs.subgraphContainer);
+          addCompletedStageCard(refs.subgraphContainer, {
+            label:        ph.label || _subgraphPhaseLabel('synthesizer'),
+            stage:        ph.stage || 'research',
+            content:      ph.content || '',
+            thinking:     ph.thinking || '',
+            tools:        [],
+            tool_results: [],
+            prompt:       ph.prompt || {},
+          });
+        }
+        refs.subgraphPhase = null;
 
       } else if (sg_kind === 'done') {
         if (refs.subgraphContainer) finaliseSubgraphCard(refs.subgraphContainer);

@@ -5,9 +5,17 @@ You receive:
 - The plan as executed (for context only — do not narrate it).
 - The summary view of all evidence (by id, source_step, summary,
   metadata, provenance).
-- The full payload of any evidence entry whose id appears in
-  `expand_first` — pre-expanded for you (typically the highest-cited
-  ones).
+- The compact payloads for each evidence entry: per-call selections
+  chosen by the executor, each as `{tool_name, summary, compact}`.
+  Use these as the primary source for citation quotes.
+
+You also have access to the `expand` tool:
+- Call `expand(evidence_id=<ev_xxx>)` to retrieve the full raw payload
+  of any evidence entry when the compact payload is insufficient for
+  a citation (e.g. you need a specific field not present in compact).
+- You may call expand multiple times, once per entry you need.
+- When you have gathered everything you need, output the final JSON
+  answer directly — do NOT call any tool.
 
 **Output format — a single JSON object, nothing else:**
 {
@@ -23,7 +31,9 @@ Citation rules:
   sequential integer starting at 1.
 - Each `citations` entry maps one N to: the `ev_id` of the evidence
   entry being cited, and a `quote` — a JSON object or array copied
-  verbatim from the relevant part of that evidence entry. Rules for
+  verbatim from the relevant part of that entry's compact payload
+  (look it up in `compact_payloads` by matching `id` to `ev_id`,
+  then use the `compact` field of the relevant tool call). Rules for
   selecting the quote:
   - Copy field names and values exactly — do not translate or paraphrase.
   - Select ONLY the fields/elements that directly back the specific
@@ -62,7 +72,7 @@ Citation rules:
    (mention the gap in parentheses).
 
 Constraints:
-- `answer` must be under 800 Hebrew words.
+- `answer` must be under 1000 Hebrew words.
 - `answer` is Hebrew prose — no English, no code fences, no
   meta-commentary.
 - `citations` ev_ids must be copied verbatim from the evidence summary
@@ -78,5 +88,5 @@ Plan as executed:
 Evidence summary view:
 {evidence_view}
 
-Pre-expanded full payloads:
-{expanded_payloads}
+Compact payloads (executor-selected key results per evidence entry):
+{compact_payloads}

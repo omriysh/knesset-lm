@@ -59,9 +59,11 @@ class ToolEnvelope:
     provenance: dict
     truncated: bool = False
     error: str | None = None
+    # Executor-provided per-call selection: [{call_index, summary, key_indices, key_quotes}]
+    compact_keys: list[dict] | None = None
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "summary": self.summary,
             "full": self.full,
             "metadata": dict(self.metadata) if self.metadata is not None else {},
@@ -69,6 +71,9 @@ class ToolEnvelope:
             "truncated": bool(self.truncated),
             "error": self.error,
         }
+        if self.compact_keys is not None:
+            d["compact_keys"] = list(self.compact_keys)
+        return d
 
     @classmethod
     def from_dict(cls, data: dict) -> "ToolEnvelope":
@@ -79,6 +84,7 @@ class ToolEnvelope:
             provenance=dict(data.get("provenance") or {}),
             truncated=bool(data.get("truncated", False)),
             error=data.get("error"),
+            compact_keys=data.get("compact_keys"),
         )
 
 

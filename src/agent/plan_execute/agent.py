@@ -75,53 +75,6 @@ def _load_generic_prompt(name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Synthesizer output parsing
-# ---------------------------------------------------------------------------
-
-
-def _parse_synthesizer_output(raw: str) -> tuple[str, list[dict]]:
-    """Parse JSON from the synthesizer LLM output.
-
-    Returns (answer_text, citations_list). Falls back to (raw, []) if JSON
-    parsing fails so a broken synthesis still surfaces as plain text.
-    """
-    text = raw.strip()
-    # Strip optional ```json ... ``` fences the model might emit.
-    if text.startswith("```"):
-        text = re.sub(r"^```[a-z]*\n?", "", text)
-        text = re.sub(r"\n?```$", "", text.rstrip())
-        text = text.strip()
-    try:
-        obj = json.loads(text)
-        if isinstance(obj, dict) and "answer" in obj:
-            answer = str(obj.get("answer") or "")
-            citations = obj.get("citations") or []
-            if isinstance(citations, list):
-                print(
-                    f"[synthesizer] parsed ok: answer_len={len(answer)} citations={len(citations)}",
-                    flush=True,
-                )
-                return answer, citations
-            print(
-                f"[synthesizer] 'citations' field is not a list (type={type(citations).__name__}); falling back",
-                flush=True,
-            )
-        else:
-            keys = list(obj.keys()) if isinstance(obj, dict) else type(obj).__name__
-            print(
-                f"[synthesizer] JSON parsed but 'answer' key missing; keys={keys}; falling back",
-                flush=True,
-            )
-    except (json.JSONDecodeError, ValueError) as exc:
-        print(
-            f"[synthesizer] JSON parse failed ({exc}); raw_len={len(raw)} first_200={raw[:200]!r}",
-            flush=True,
-        )
-    # Fallback: treat entire output as answer text.
-    return raw, []
-
-
-# ---------------------------------------------------------------------------
 # Helpers for plan parsing
 # ---------------------------------------------------------------------------
 
@@ -812,74 +765,12 @@ class PlanExecuteAgent(SubgraphAgent):
         plan: Plan,
         store,
     ) -> Generator[SubgraphEvent, Any, tuple[str, list]]:
-        """Stream the synthesizer LLM, yielding SubgraphEvents, and return the answer."""
-        from pathlib import Path as _Path
-        _prompts_dir = _Path(__file__).parent / "prompts"
-        template = (_prompts_dir / "synthesizer.md").read_text(encoding="utf-8")
-
-        goal = (plan.goal if plan and plan.goal else query) or ""
-        plan_json = json.dumps(plan.to_dict() if plan else {}, ensure_ascii=False, indent=2)
-
-        view: list[dict] = []
-        expanded: list[dict] = []
-        if store is not None:
-            for entry in store.iter():
-                env = entry.envelope
-                view.append({
-                    "id": entry.id, "tool_name": entry.tool_name,
-                    "step_id": entry.step_id, "summary": env.summary or "",
-                    "metadata": env.metadata or {}, "provenance": env.provenance or {},
-                    "truncated": bool(env.truncated), "error": env.error,
-                })
-            for entry in store.iter():
-                if entry.envelope.error:
-                    continue
-                ev_entry = store.get(entry.id)
-                full = ev_entry.envelope.full if ev_entry else ""
-                expanded.append({"id": entry.id, "full": full or ""})
-                if len(expanded) >= 5:
-                    break
-
-        evidence_view_json = json.dumps(view, ensure_ascii=False, indent=2)
-        expanded_payloads_json = json.dumps(expanded, ensure_ascii=False, indent=2)
-        prompt = (
-            template
-            .replace("{goal}", goal)
-            .replace("{plan}", plan_json)
-            .replace("{evidence_view}", evidence_view_json)
-            .replace("{expanded_payloads}", expanded_payloads_json)
-        )
-
-        print(
-            f"[synthesizer] starting: evidence_entries={len(view)} expanded={len(expanded)} "
-            f"prompt_len={len(prompt)}",
-            flush=True,
-        )
-
-        phase = "synthesizer"
-        text_parts: list[str] = []
-        error_msg: str = ""
-        for sg_ev in self._llm.stream(
-            model=config.SYNTHESIZER_MODEL,
-            prompt=prompt,
-            phase=phase,
-        ):
-            if sg_ev.kind == "llm_token":
-                text_parts.append(sg_ev.payload.get("text", ""))
-            elif sg_ev.kind == "llm_done" and sg_ev.payload.get("error"):
-                error_msg = sg_ev.payload["error"]
-            yield sg_ev
-
-        raw_output = "".join(text_parts)
-        print(
-            f"[synthesizer] llm done: raw_len={len(raw_output)} error={error_msg!r} "
-            f"first_100={raw_output[:100]!r}",
-            flush=True,
-        )
-
-        if error_msg:
-            return f"שגיאה בסינתזה: {error_msg}", []
-        return _parse_synthesizer_output(raw_output)
+        """Delegate to synthesizer.synthesize_gen, forwarding LLM events."""
+        from agent.plan_execute.synthesizer import synthesize_gen
+        return (yield from synthesize_gen(
+            query, plan, store, self._llm,
+            registry=self.tool_registry(),
+        ))
 
     def _summary_view_dict(self) -> list[dict]:
         return self._store.summary_view() if self._store is not None else []

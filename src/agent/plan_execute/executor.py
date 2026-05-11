@@ -90,18 +90,20 @@ RECORD_EVIDENCE_SCHEMA: dict = {
     "function": {
         "name": "record_evidence",
         "description": (
-            "Record the outcome of this step. Call EXACTLY ONCE, after all "
-            "useful tool calls have returned. "
-            "decision='produced' means a fresh evidence entry will be minted. "
-            "decision='skip' means the step is satisfied by an existing entry "
-            "— set ref_evidence to its id. "
-            "decision='abort_step' means no usable result was obtained."
+            "Early-exit only. Use ONLY when you can decide immediately, "
+            "before calling any tool: "
+            "decision='skip' — a prior evidence entry already satisfies the "
+            "step (set ref_evidence to its id). "
+            "decision='abort_step' — the step is impossible (no useful tool "
+            "to call). "
+            "Do NOT call this with decision='produced' — that is handled "
+            "automatically after your tool calls finish."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "decision":     {"type": "string",
-                                 "enum": ["produced", "skip", "abort_step"]},
+                                 "enum": ["skip", "abort_step"]},
                 "summary":      {"type": "string"},
                 "ref_evidence": {"type": "string"},
             },
@@ -399,18 +401,20 @@ def execute_step(
             ref_evidence = skip_call["arguments"].get("ref_evidence")
 
             if decision == "skip":
-                return ToolEnvelope(
-                    summary=summary or "Step satisfied by existing evidence.",
-                    full="",
-                    metadata={
-                        "kind":         "skip",
-                        "source":       "executor",
-                        "count":        0,
-                        "ref_evidence": ref_evidence,
-                    },
-                    provenance={"step_id": step.id},
-                    error="skip",
-                )
+                if not collected:
+                    return ToolEnvelope(
+                        summary=summary or "Step satisfied by existing evidence.",
+                        full="",
+                        metadata={
+                            "kind":         "skip",
+                            "source":       "executor",
+                            "count":        0,
+                            "ref_evidence": ref_evidence,
+                        },
+                        provenance={"step_id": step.id},
+                        error="skip",
+                    )
+                # Tools already collected — fall through to record turn.
 
             if decision == "abort_step":
                 if collected:
@@ -426,28 +430,9 @@ def execute_step(
                 return _abort_envelope(summary or "Executor aborted the step.")
 
             if decision == "produced":
-                if not collected:
-                    if step.task_kind == "analyze":
-                        # analyze steps reason over existing evidence — no prior tool calls expected
-                        return ToolEnvelope(
-                            summary=summary or "No analysis produced.",
-                            full=summary or "",
-                            metadata={"kind": "analyze", "source": "executor", "count": 0},
-                            provenance={"step_id": step.id},
-                            error=None,
-                        )
-                    return _abort_envelope(
-                        "record_evidence(produced) called without any tool results"
-                    )
-                combined = _combine_envelopes(collected, step.id, call_args)
-                return ToolEnvelope(
-                    summary=summary or combined.summary,
-                    full=combined.full,
-                    metadata=combined.metadata,
-                    provenance=combined.provenance,
-                    truncated=combined.truncated,
-                    error=None,
-                )
+                # 'produced' is no longer a valid early-exit decision;
+                # treat it as a no-op and fall through to normal tool loop.
+                pass
 
         # Find the first real tool call
         real_call = _first_real_tool_call(parsed.tool_calls)
@@ -525,19 +510,16 @@ def execute_step(
             "executor produced no tool calls", error_kind="no_tool_call"
         )
 
-    # ─── record_evidence turn ────────────────────────────────────────────
-    record_prompt = (
-        f"All tool calls complete ({len(collected)} tool(s) called). "
-        "Now call `record_evidence` exactly once with decision='produced' "
-        "and a 1–3 sentence summary covering ALL results relevant to the task."
-    )
+    # ─── Record turn: structured JSON output (no tool schemas) ──────────
+    record_prompt = _build_record_prompt(collected, by_name)
     messages_for_record = messages + [{"role": "user", "content": record_prompt}]
 
     try:
         raw_second = llm_call(
             model=model,
             messages=messages_for_record,
-            tools=[RECORD_EVIDENCE_SCHEMA],
+            tools=None,
+            response_format={"type": "json_object"},
             phase=f"{phase_prefix}:{step.id}:record",
         )
     except Exception as exc:  # noqa: BLE001
@@ -551,28 +533,12 @@ def execute_step(
             error=combined.error or "llm_error_turn2",
         )
 
-    second = _parse_llm_response(raw_second)
-    record = _first_call_named(second.tool_calls, "record_evidence")
+    parsed_record = _parse_record_json(raw_second, len(collected))
     combined = _combine_envelopes(collected, step.id, call_args)
 
-    if record is None:
+    if parsed_record["decision"] == "abort_step":
         return ToolEnvelope(
-            summary=combined.summary or second.content or "",
-            full=combined.full,
-            metadata=combined.metadata,
-            provenance=combined.provenance,
-            truncated=combined.truncated,
-            error=combined.error,
-        )
-
-    decision = str(record["arguments"].get("decision") or "").lower()
-    record_summary = str(record["arguments"].get("summary") or "")
-    ref_evidence = record["arguments"].get("ref_evidence")
-
-    if decision == "abort_step":
-        # Preserve tool call data from combined so the UI can display what was called/returned.
-        return ToolEnvelope(
-            summary=record_summary or "executor aborted after tool calls.",
+            summary=parsed_record["summary"] or "executor aborted after tool calls.",
             full=combined.full,
             metadata=combined.metadata,
             provenance=combined.provenance,
@@ -580,34 +546,108 @@ def execute_step(
             error="abort_step",
         )
 
-    if decision == "skip":
-        return ToolEnvelope(
-            summary=record_summary or "Step satisfied by existing evidence.",
-            full="",
-            metadata={
-                "kind":         "skip",
-                "source":       "executor",
-                "count":        0,
-                "ref_evidence": ref_evidence,
-            },
-            provenance={"step_id": step.id},
-            error="skip",
-        )
-
     # produced
     merged_provenance = dict(combined.provenance or {})
     merged_provenance.setdefault("step_id", step.id)
-    if ref_evidence:
-        merged_provenance["ref_evidence"] = ref_evidence
 
     return ToolEnvelope(
-        summary=record_summary or combined.summary or "",
+        summary=parsed_record["summary"] or combined.summary or "",
         full=combined.full,
         metadata=combined.metadata,
         provenance=merged_provenance,
         truncated=combined.truncated,
         error=combined.error,
+        compact_keys=parsed_record["tool_results"] or None,
     )
+
+
+def _build_record_prompt(
+    collected: list[tuple[str, ToolEnvelope]],
+    by_name: dict[str, Any],
+) -> str:
+    """Build the record-turn user message requesting structured JSON output."""
+    lines = [
+        f"All {len(collected)} tool call(s) complete.",
+        "Output ONLY a JSON object (no tool call). Structure:",
+        "",
+        "{",
+        '  "decision": "produced",',
+        '  "summary": "<1–3 sentence overall summary of all findings>",',
+        '  "tool_results": [',
+    ]
+    for i, (tool_name, _) in enumerate(collected):
+        spec = by_name.get(tool_name)
+        cs = (spec.compact_spec if spec is not None else {}) or {}
+        needs_indices = cs.get("executor_selects") and cs.get("kind") != "text"
+        needs_quotes = cs.get("executor_selects") and cs.get("kind") == "text"
+        comma = "," if i < len(collected) - 1 else ""
+        list_path = cs.get("list_path")
+        where = f'"{list_path}" array' if list_path else "result array"
+        lines += [
+            "    {",
+            f'      "call_index": {i},',
+            f'      "summary": "<what call {i} ({tool_name}) found>",',
+            f'      "key_indices": {("[<0-based positions of the most relevant items in the " + where + ">]") if needs_indices else "null"},',
+            f'      "key_quotes": {("[<verbatim passages most relevant to the task>]") if needs_quotes else "null"}',
+            "    }" + comma,
+        ]
+    lines += [
+        "  ]",
+        "}",
+        "",
+        'If no useful result was obtained output: {"decision": "abort_step", "summary": "<reason>", "tool_results": []}',
+    ]
+    return "\n".join(lines)
+
+
+def _parse_record_json(raw: object, n_calls: int) -> dict:
+    """Parse the executor's structured JSON from the record turn.
+
+    Returns a validated dict with keys: decision, summary, tool_results.
+    Falls back gracefully on parse errors.
+    """
+    text: str = ""
+    if isinstance(raw, str):
+        text = raw.strip()
+    elif isinstance(raw, dict):
+        # Some backends return {"content": "..."} wrapper
+        content = raw.get("content") or ""
+        text = content if isinstance(content, str) else json.dumps(raw)
+
+    # Strip markdown fences
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text)
+
+    try:
+        data = json.loads(text)
+    except Exception:
+        return {"decision": "produced", "summary": str(raw)[:500], "tool_results": []}
+
+    if not isinstance(data, dict):
+        return {"decision": "produced", "summary": str(data)[:500], "tool_results": []}
+
+    validated: list[dict] = []
+    for item in (data.get("tool_results") or []):
+        if not isinstance(item, dict):
+            continue
+        ci = item.get("call_index")
+        if not isinstance(ci, int) or not (0 <= ci < n_calls):
+            continue
+        ki = item.get("key_indices")
+        kq = item.get("key_quotes")
+        validated.append({
+            "call_index":  ci,
+            "summary":     str(item.get("summary") or ""),
+            "key_indices": [x for x in ki if isinstance(x, int)] if isinstance(ki, list) else None,
+            "key_quotes":  [str(q) for q in kq] if isinstance(kq, list) else None,
+        })
+
+    return {
+        "decision":     str(data.get("decision") or "produced").lower(),
+        "summary":      str(data.get("summary") or "")[:1000],
+        "tool_results": validated,
+    }
 
 
 def _first_call_named(calls: list[dict], name: str) -> dict | None:
