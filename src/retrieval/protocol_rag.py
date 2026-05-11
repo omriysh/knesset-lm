@@ -117,7 +117,8 @@ def query_retrieve(
                 where={"meeting_id": {"$eq": mid}},
                 include=["metadatas", "documents"],
             )
-        except Exception:
+        except Exception as exc:
+            print(f"[protocol_rag] L2 chroma query failed for meeting_id={mid!r}: {exc}", flush=True)
             continue
 
         for pid, doc, meta in zip(rows["ids"], rows["documents"], rows["metadatas"]):
@@ -155,7 +156,8 @@ def query_retrieve(
                     "pass2_id":         pass2_id,
                     "topic_scores_vec": json.loads(p2["meta"].get("topic_scores_vec", "[]")),
                 })
-        except Exception:
+        except Exception as exc:
+            print(f"[protocol_rag] pass-1 chroma query failed for pass2_id={pass2_id!r}: {exc}", flush=True)
             # Fallback: use pass-2 text directly
             pass1_candidates.append({
                 "meta":            p2["meta"],

@@ -194,7 +194,8 @@ class LlamaServerBackend(LLMBackend):
                         fn = tcd.get("function", {})
                         tc["name"]      += fn.get("name",      "")
                         tc["arguments"] += fn.get("arguments", "")
-                except (json.JSONDecodeError, KeyError):
+                except (json.JSONDecodeError, KeyError) as exc:
+                    print(f"[llama_server] malformed tool call chunk skipped ({exc})", flush=True)
                     continue
         finally:
             if _dump_fh:

@@ -244,8 +244,8 @@ def _deep_dive_rerank(
                     "p2_score": p2["score"],
                 })
                 continue
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[deep_dive] pass-1 chroma query failed for pass2_id={p2['pass2_id']!r}: {exc}", flush=True)
         # Fallback: keep the pass-2 text directly.
         pass1_picks.append({
             "pass1_id": None,
@@ -553,8 +553,8 @@ def _parse_batch_response(raw: str, n: int) -> list[tuple[int, str]]:
                         out[idx] = resp
             # Fill any missing indices with empty string.
             return [(i, out.get(i, "")) for i in range(n)]
-    except (json.JSONDecodeError, TypeError, ValueError):
-        pass
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        print(f"[deep_dive] _parse_batch_response JSON parse failed ({exc}); trying marker fallback", flush=True)
 
     # Fallback: split on "--- CHUNK N ---" markers that appear in the response.
     segments = re.split(r"(?:idx[\"']?\s*:\s*(\d+)|CHUNK\s+(\d+))", text)
