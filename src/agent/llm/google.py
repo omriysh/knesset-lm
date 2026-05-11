@@ -86,7 +86,11 @@ def _convert_messages(messages: list[dict]) -> tuple[list[dict], str | None]:
             for tc in msg.get("tool_calls") or []:
                 fn   = tc["function"]
                 args = json.loads(fn["arguments"]) if isinstance(fn["arguments"], str) else fn["arguments"]
-                parts.append({"functionCall": {"name": fn["name"], "args": args}})
+                part_dict = {"functionCall": {"name": fn["name"], "args": args}}
+                ts = tc.get("thought_signature")
+                if ts is not None:
+                    part_dict["thought_signature"] = ts
+                parts.append(part_dict)
             if parts:
                 contents.append({"role": "model", "parts": parts})
 
@@ -359,14 +363,18 @@ class GoogleBackend(LLMBackend):
 
                     elif part.function_call:
                         fc = part.function_call
-                        tc_list.append({
+                        tc_entry = {
                             "id":   f"gemini_{len(tc_list)}",
                             "type": "function",
                             "function": {
                                 "name":      fc.name,
                                 "arguments": json.dumps(dict(fc.args), ensure_ascii=False),
                             },
-                        })
+                        }
+                        ts = getattr(part, "thought_signature", None)
+                        if ts is not None:
+                            tc_entry["thought_signature"] = ts
+                        tc_list.append(tc_entry)
 
                     elif part.text:
                         if not ttft:
