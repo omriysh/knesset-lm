@@ -151,6 +151,9 @@ def build_compact_view(
     out: list[dict] = []
     for i, cr in enumerate(call_results):
         tool_name: str = cr.get("name") or entry.tool_name
+        if tool_name == 'expand':
+            continue  # skip expand calls (compaction not relevant, and may be noisy)
+        
         full_str: str = cr.get("full") or ""
         ck: dict = ck_by_idx.get(i, {})
         call_summary: str = ck.get("summary") or cr.get("summary") or ""

@@ -56,6 +56,14 @@ from agent.llm.gemma import GemmaLlamaBackend
 # Maps ref_id → full tool result text.  Populated when subgraph step_completed
 # events are streamed; served by GET /api/research/{sid}/tool_result/{ref_id}.
 _TOOL_RESULT_CACHE: dict[str, str] = {}
+_TOOL_RESULT_LOCK = threading.Lock()
+_TOOL_RESULT_CAP  = 5000
+
+# ── Concurrency controls ──────────────────────────────────────────────────────
+# Limits simultaneous active research sessions so llama-server and the embedder
+# queue do not become saturated.  Clients that exceed this see a "queued" SSE
+# event and wait until a slot opens.
+_RESEARCH_SEM = threading.Semaphore(5)
 
 # ── Meeting info cache (meeting_id → {date, committee}) ───────────────────────
 _MEETING_INFO_CACHE: dict[str, dict] = {}
@@ -143,6 +151,14 @@ def _enrich_citations(citations: list[dict], footnote_by_id: dict[str, dict]) ->
     return enriched
 
 
+def _cache_tool_result(ref_id: str, full: str) -> None:
+    with _TOOL_RESULT_LOCK:
+        if len(_TOOL_RESULT_CACHE) >= _TOOL_RESULT_CAP:
+            for k in list(_TOOL_RESULT_CACHE.keys())[:500]:
+                del _TOOL_RESULT_CACHE[k]
+        _TOOL_RESULT_CACHE[ref_id] = full
+
+
 def _strip_footnote_fulls(ev_data: dict, registry=None) -> dict:
     """Strip `full` from footnotes in node_result subgraph outputs; cache each one.
     Also enriches footnotes with tool ui metadata and resolves meeting dates in citations.
@@ -170,7 +186,7 @@ def _strip_footnote_fulls(ev_data: dict, registry=None) -> dict:
         base = {**fn, "ui": ui}
         if full:
             ref_id = uuid.uuid4().hex[:16]
-            _TOOL_RESULT_CACHE[ref_id] = full
+            _cache_tool_result(ref_id, full)
             enriched_fn = {**base, "full": "", "result_ref": ref_id}
         else:
             enriched_fn = {**base, "result_ref": None}
@@ -212,7 +228,7 @@ def _strip_tool_result_fulls(ev_data: dict) -> dict:
     for tr in results:
         full = tr.get("full") or ""
         ref_id = uuid.uuid4().hex[:16]
-        _TOOL_RESULT_CACHE[ref_id] = full
+        _cache_tool_result(ref_id, full)
         patched_results.append({**tr, "full": "", "result_ref": ref_id})
     return {**ev_data, "payload": {**payload, "tool_call_results": patched_results}}
 from agent.machine import StateMachine
@@ -370,7 +386,8 @@ class ResearchRespondRequest(BaseModel):
 
 
 # ── Query log ─────────────────────────────────────────────────────────────────
-_QUERY_LOG = Path(__file__).parent / "query_log.jsonl"
+_QUERY_LOG      = Path(__file__).parent / "query_log.jsonl"
+_QUERY_LOG_LOCK = threading.Lock()
 
 def _log_query(question: str, ip: str) -> None:
     entry = json.dumps({
@@ -378,8 +395,9 @@ def _log_query(question: str, ip: str) -> None:
         "ip": ip,
         "q":  question,
     }, ensure_ascii=False)
-    with open(_QUERY_LOG, "a", encoding="utf-8") as f:
-        f.write(entry + "\n")
+    with _QUERY_LOG_LOCK:
+        with open(_QUERY_LOG, "a", encoding="utf-8") as f:
+            f.write(entry + "\n")
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -441,6 +459,9 @@ async def query(req: QueryRequest, request: Request):
         _SENTINEL = object()
 
         def _run_sync():
+            if not _RESEARCH_SEM.acquire(blocking=False):
+                loop.call_soon_threadsafe(queue.put_nowait, ("queued", {}))
+                _RESEARCH_SEM.acquire()
             try:
                 runner = MachineRunner(
                     machine       = machine,
@@ -458,6 +479,7 @@ async def query(req: QueryRequest, request: Request):
                     ("error", str(exc) + "\n" + traceback.format_exc()),
                 )
             finally:
+                _RESEARCH_SEM.release()
                 loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
 
         thread = threading.Thread(target=_run_sync, daemon=True)
@@ -486,6 +508,8 @@ async def query(req: QueryRequest, request: Request):
                         "name":    ev_data.get("name"),
                         "payload": ev_data.get("payload", {}),
                     })
+                elif ev_type == "queued":
+                    yield _sse("queued",         {})
                 elif ev_type == "done":
                     yield _sse("done",           {})
                 elif ev_type == "error":
@@ -555,6 +579,9 @@ async def research_start(req: ResearchStartRequest, request: Request):
         _event_log: list[dict] = []  # selective event log for reconnect replay
 
         def _run_sync():
+            if not _RESEARCH_SEM.acquire(blocking=False):
+                loop.call_soon_threadsafe(queue.put_nowait, ("queued", {}))
+                _RESEARCH_SEM.acquire()
             _final_token = ""
             _outcome: tuple | None = None  # ('done', answer) | ('error', msg) | ('user_paused',)
             try:
@@ -602,6 +629,7 @@ async def research_start(req: ResearchStartRequest, request: Request):
                 loop.call_soon_threadsafe(queue.put_nowait, ("error", _err))
                 _outcome = ("error", _err)
             finally:
+                _RESEARCH_SEM.release()
                 loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
                 # Safety net: generate() may be cancelled by client disconnect.
                 # _event_log is complete here (built above), so the saved session
@@ -662,6 +690,9 @@ async def research_start(req: ResearchStartRequest, request: Request):
 
                 elif ev_type == "subgraph_event":
                     yield _sse("subgraph_event", ev_data)
+
+                elif ev_type == "queued":
+                    yield _sse("queued", {})
 
                 elif ev_type == "user_input_required":
                     # ev_data contains the full payload including "checkpoint"
@@ -845,6 +876,9 @@ async def research_respond(
         _event_log: list[dict] = []  # selective event log for reconnect replay
 
         def _run_sync():
+            if not _RESEARCH_SEM.acquire(blocking=False):
+                loop.call_soon_threadsafe(queue.put_nowait, ("queued", {}))
+                _RESEARCH_SEM.acquire()
             _final_token = ""
             _outcome: tuple | None = None
             try:
@@ -896,6 +930,7 @@ async def research_respond(
                 loop.call_soon_threadsafe(queue.put_nowait, ("error", _err))
                 _outcome = ("error", _err)
             finally:
+                _RESEARCH_SEM.release()
                 loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
                 if _outcome and _outcome[0] != "user_paused":
                     try:
@@ -952,6 +987,9 @@ async def research_respond(
 
                 elif ev_type == "subgraph_event":
                     yield _sse("subgraph_event", ev_data)
+
+                elif ev_type == "queued":
+                    yield _sse("queued", {})
 
                 elif ev_type == "user_input_required":
                     new_checkpoint = ev_data.get("checkpoint", {})

@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +30,8 @@ _XML_TOOL_RE = re.compile(
     r"<tool_call>\s*<function=(\w+)>(.*?)</function>\s*</tool_call>",
     re.DOTALL,
 )
+
+_LLAMA_SEM = threading.Semaphore(1)  # single-threaded inference; serialise all callers
 
 
 class LlamaServerBackend(LLMBackend):
@@ -129,97 +132,101 @@ class LlamaServerBackend(LLMBackend):
         if tools:
             body["tools"] = tools
 
-        resp = requests.post(
-            f"{self._url}/v1/chat/completions",
-            json=body,
-            stream=True,
-            timeout=self._timeout,
-        )
-        resp.raise_for_status()
-
-        # ── Optional raw dump ─────────────────────────────────────────────────
-        _dump_fh = None
-        if os.environ.get("KNESSET_LLM_DUMP"):
-            _dump_dir  = Path.home() / ".knesset_debug"
-            _dump_dir.mkdir(exist_ok=True)
-            _dump_path = _dump_dir / f"llm_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.txt"
-            _dump_fh   = _dump_path.open("w", encoding="utf-8")
-            _dump_fh.write("=== REQUEST ===\n")
-            _dump_fh.write(json.dumps(body, ensure_ascii=False, indent=2))
-            _dump_fh.write("\n\n=== RESPONSE (raw SSE) ===\n")
-            print(f"[{self._log_prefix}] dumping to {_dump_path}", flush=True)
-
-        tc_acc:      dict[int, dict] = {}
-        t0           = time.monotonic()
-        ttft: float  = 0.0
-        token_count  = 0
-
+        _LLAMA_SEM.acquire()
         try:
-            for raw in resp.iter_lines():
-                if not raw:
-                    continue
-                line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+            resp = requests.post(
+                f"{self._url}/v1/chat/completions",
+                json=body,
+                stream=True,
+                timeout=self._timeout,
+            )
+            resp.raise_for_status()
+
+            # ── Optional raw dump ─────────────────────────────────────────────────
+            _dump_fh = None
+            if os.environ.get("KNESSET_LLM_DUMP"):
+                _dump_dir  = Path.home() / ".knesset_debug"
+                _dump_dir.mkdir(exist_ok=True)
+                _dump_path = _dump_dir / f"llm_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.txt"
+                _dump_fh   = _dump_path.open("w", encoding="utf-8")
+                _dump_fh.write("=== REQUEST ===\n")
+                _dump_fh.write(json.dumps(body, ensure_ascii=False, indent=2))
+                _dump_fh.write("\n\n=== RESPONSE (raw SSE) ===\n")
+                print(f"[{self._log_prefix}] dumping to {_dump_path}", flush=True)
+
+            tc_acc:      dict[int, dict] = {}
+            t0           = time.monotonic()
+            ttft: float  = 0.0
+            token_count  = 0
+
+            try:
+                for raw in resp.iter_lines():
+                    if not raw:
+                        continue
+                    line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+                    if _dump_fh:
+                        _dump_fh.write(line + "\n")
+                    if not line.startswith("data: "):
+                        continue
+                    payload = line[6:]
+                    if payload == "[DONE]":
+                        break
+                    try:
+                        chunk  = json.loads(payload)
+                        choice = chunk["choices"][0]
+                        delta  = choice.get("delta", {})
+
+                        thinking_text = delta.get("reasoning_content") or ""
+                        if thinking_text:
+                            if not ttft:
+                                ttft = time.monotonic() - t0
+                            yield ThinkingEvent(thinking_text)
+
+                        text = delta.get("content") or ""
+                        if text:
+                            if not ttft:
+                                ttft = time.monotonic() - t0
+                            token_count += 1
+                            yield TokenEvent(text)
+
+                        for tcd in delta.get("tool_calls") or []:
+                            idx = tcd.get("index", 0)
+                            if idx not in tc_acc:
+                                tc_acc[idx] = {"id": "", "name": "", "arguments": ""}
+                            tc = tc_acc[idx]
+                            if tcd.get("id"):
+                                tc["id"] = tcd["id"]
+                            fn = tcd.get("function", {})
+                            tc["name"]      += fn.get("name",      "")
+                            tc["arguments"] += fn.get("arguments", "")
+                    except (json.JSONDecodeError, KeyError) as exc:
+                        print(f"[llama_server] malformed tool call chunk skipped ({exc})", flush=True)
+                        continue
+            finally:
                 if _dump_fh:
-                    _dump_fh.write(line + "\n")
-                if not line.startswith("data: "):
-                    continue
-                payload = line[6:]
-                if payload == "[DONE]":
-                    break
-                try:
-                    chunk  = json.loads(payload)
-                    choice = chunk["choices"][0]
-                    delta  = choice.get("delta", {})
+                    _dump_fh.close()
 
-                    thinking_text = delta.get("reasoning_content") or ""
-                    if thinking_text:
-                        if not ttft:
-                            ttft = time.monotonic() - t0
-                        yield ThinkingEvent(thinking_text)
+            total = time.monotonic() - t0
+            gen   = total - ttft
+            tps   = token_count / gen if gen > 0 else 0.0
+            print(
+                f"[{self._log_prefix}] ttft={ttft:.2f}s tokens={token_count} "
+                f"gen={gen:.2f}s tps={tps:.1f}",
+                flush=True,
+            )
 
-                    text = delta.get("content") or ""
-                    if text:
-                        if not ttft:
-                            ttft = time.monotonic() - t0
-                        token_count += 1
-                        yield TokenEvent(text)
-
-                    for tcd in delta.get("tool_calls") or []:
-                        idx = tcd.get("index", 0)
-                        if idx not in tc_acc:
-                            tc_acc[idx] = {"id": "", "name": "", "arguments": ""}
-                        tc = tc_acc[idx]
-                        if tcd.get("id"):
-                            tc["id"] = tcd["id"]
-                        fn = tcd.get("function", {})
-                        tc["name"]      += fn.get("name",      "")
-                        tc["arguments"] += fn.get("arguments", "")
-                except (json.JSONDecodeError, KeyError) as exc:
-                    print(f"[llama_server] malformed tool call chunk skipped ({exc})", flush=True)
-                    continue
+            if tc_acc:
+                yield ToolCallsEvent([
+                    {
+                        "id":   tc["id"] or f"tc_{i}",
+                        "type": "function",
+                        "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                    }
+                    for i, tc in sorted(tc_acc.items())
+                ])
+            yield DoneEvent()
         finally:
-            if _dump_fh:
-                _dump_fh.close()
-
-        total = time.monotonic() - t0
-        gen   = total - ttft
-        tps   = token_count / gen if gen > 0 else 0.0
-        print(
-            f"[{self._log_prefix}] ttft={ttft:.2f}s tokens={token_count} "
-            f"gen={gen:.2f}s tps={tps:.1f}",
-            flush=True,
-        )
-
-        if tc_acc:
-            yield ToolCallsEvent([
-                {
-                    "id":   tc["id"] or f"tc_{i}",
-                    "type": "function",
-                    "function": {"name": tc["name"], "arguments": tc["arguments"]},
-                }
-                for i, tc in sorted(tc_acc.items())
-            ])
-        yield DoneEvent()
+            _LLAMA_SEM.release()
 
     # ── Internal helpers ───────────────────────────────────────────────────────
 

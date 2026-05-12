@@ -1492,7 +1492,7 @@ async function _attemptReconnect() {
   try {
     for (let attempt = 0; attempt < 30 && _reconnectSessionId; attempt++) {
       if (attempt > 0) {
-        setStatusMsg(statusEl, 'עדיין מעבד — בודק שוב...');
+        setStatusMsg(statusEl, 'עדיין מעבד...');
         await new Promise(r => setTimeout(r, attempt < 5 ? 3000 : 8000));
         if (!_reconnectSessionId) break;
       }

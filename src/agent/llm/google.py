@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from typing import Generator
 
@@ -153,6 +154,9 @@ def _is_connection_error(exc: Exception) -> bool:
     ))
 
 
+_GOOGLE_SEM = threading.Semaphore(5)  # cap concurrent Google API generations
+
+
 def _model_supports_thinking(model: str) -> bool:
     """True for Gemini 2.5+ models that can emit thought tokens."""
     return model.startswith("gemini-2.5")
@@ -250,67 +254,71 @@ class GoogleBackend(LLMBackend):
         yielded, we do not retry — the partial output has already been
         consumed downstream.
         """
-        last_exc: Exception | None = None
+        _GOOGLE_SEM.acquire()
+        try:
+            last_exc: Exception | None = None
 
-        # Backoff schedule: index 0 = first retry wait, etc.
-        # 429 path uses [2.0]; 5xx/connection path uses [2.0, 5.0, 15.0].
-        # We try the request once before any sleeps.
-        for attempt in range(4):  # 1 initial + up to 3 retries
-            try:
-                yield from self._stream_once(
+            # Backoff schedule: index 0 = first retry wait, etc.
+            # 429 path uses [2.0]; 5xx/connection path uses [2.0, 5.0, 15.0].
+            # We try the request once before any sleeps.
+            for attempt in range(4):  # 1 initial + up to 3 retries
+                try:
+                    yield from self._stream_once(
+                        messages    = messages,
+                        tools       = tools,
+                        temperature = temperature,
+                        max_tokens  = max_tokens,
+                    )
+                    return
+                except Exception as exc:  # noqa: BLE001 — categorize below
+                    last_exc = exc
+                    status   = _extract_status_code(exc)
+
+                    if status == 429:
+                        # 429: at most one retry, 2 s wait, then fall back.
+                        if attempt >= 1:
+                            break
+                        print(f"[{self._log_prefix}] 429 quota — retrying in 2.0s", flush=True)
+                        time.sleep(2.0)
+                        continue
+
+                    if (status is not None and 500 <= status < 600) or _is_connection_error(exc):
+                        # 5xx / connection: up to 3 retries with 2 / 5 / 15 s backoff.
+                        backoff = (2.0, 5.0, 15.0)
+                        if attempt >= 3:
+                            break
+                        wait = backoff[attempt]
+                        label = f"{status}" if status is not None else type(exc).__name__
+                        print(
+                            f"[{self._log_prefix}] {label} — retrying in {wait:.0f}s "
+                            f"(attempt {attempt + 1}/3)",
+                            flush=True,
+                        )
+                        time.sleep(wait)
+                        continue
+
+                    # Anything else: don't retry.
+                    raise
+
+            # Retries exhausted — fall back or re-raise.
+            if config.GOOGLE_API_FALLBACK_TO_LOCAL:
+                print(
+                    f"[{self._log_prefix}] retries exhausted ({type(last_exc).__name__}: "
+                    f"{last_exc}); falling back to llama-server",
+                    flush=True,
+                )
+                yield from self._stream_local_fallback(
                     messages    = messages,
                     tools       = tools,
                     temperature = temperature,
                     max_tokens  = max_tokens,
                 )
                 return
-            except Exception as exc:  # noqa: BLE001 — categorize below
-                last_exc = exc
-                status   = _extract_status_code(exc)
 
-                if status == 429:
-                    # 429: at most one retry, 2 s wait, then fall back.
-                    if attempt >= 1:
-                        break
-                    print(f"[{self._log_prefix}] 429 quota — retrying in 2.0s", flush=True)
-                    time.sleep(2.0)
-                    continue
-
-                if (status is not None and 500 <= status < 600) or _is_connection_error(exc):
-                    # 5xx / connection: up to 3 retries with 2 / 5 / 15 s backoff.
-                    backoff = (2.0, 5.0, 15.0)
-                    if attempt >= 3:
-                        break
-                    wait = backoff[attempt]
-                    label = f"{status}" if status is not None else type(exc).__name__
-                    print(
-                        f"[{self._log_prefix}] {label} — retrying in {wait:.0f}s "
-                        f"(attempt {attempt + 1}/3)",
-                        flush=True,
-                    )
-                    time.sleep(wait)
-                    continue
-
-                # Anything else: don't retry.
-                raise
-
-        # Retries exhausted — fall back or re-raise.
-        if config.GOOGLE_API_FALLBACK_TO_LOCAL:
-            print(
-                f"[{self._log_prefix}] retries exhausted ({type(last_exc).__name__}: "
-                f"{last_exc}); falling back to llama-server",
-                flush=True,
-            )
-            yield from self._stream_local_fallback(
-                messages    = messages,
-                tools       = tools,
-                temperature = temperature,
-                max_tokens  = max_tokens,
-            )
-            return
-
-        assert last_exc is not None
-        raise last_exc
+            assert last_exc is not None
+            raise last_exc
+        finally:
+            _GOOGLE_SEM.release()
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
