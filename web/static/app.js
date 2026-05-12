@@ -714,13 +714,13 @@ function addLiveStageCard(stagesEl, nodeStart) {
   const card = document.createElement('div');
   card.className = 'stage-card live-stage-card';
   card.innerHTML =
-    `<div class="stage-header open" onclick="toggleStageCard(this)">` +
+    `<div class="stage-header" onclick="toggleStageCard(this)">` +
       `<span class="stage-arrow">▶</span>` +
       `<span class="stage-dot ${esc(stage)}"></span>` +
       `<span class="stage-name">${esc(label)}</span>` +
       `<span class="stage-meta"><span class="live-thinking-dot"></span>${loopHtml}</span>` +
     `</div>` +
-    `<div class="stage-body visible">` +
+    `<div class="stage-body">` +
       renderPromptHtml(nodeStart.prompt || {}, openPrompt) +
       `<details class="sub-details open">` +
         `<summary class="sub-summary thinking-summary">תהליך עבודה…</summary>` +
@@ -833,13 +833,13 @@ function addSubgraphWrapperCard(stagesEl, nodeStart) {
   card.className = 'stage-card subgraph-card live-stage-card';
   card.dataset.startTs = String(Date.now());
   card.innerHTML =
-    `<div class="stage-header open" onclick="toggleStageCard(this)">` +
+    `<div class="stage-header" onclick="toggleStageCard(this)">` +
       `<span class="stage-arrow">▶</span>` +
       `<span class="stage-dot research"></span>` +
       `<span class="stage-name">${esc(label)}</span>` +
       `<span class="stage-meta"><span class="live-thinking-dot"></span>${loopHtml}</span>` +
     `</div>` +
-    `<div class="stage-body visible">` +
+    `<div class="stage-body">` +
       `<div class="subgraph-inner-stages"></div>` +
     `</div>`;
 
