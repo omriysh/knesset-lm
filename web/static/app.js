@@ -270,9 +270,18 @@ function handleEvent(ev, data, refs) {
 
       if (sg_kind === 'llm_start') {
         if (isExecutorPhase) {
-          // All turns of the same step share one phase slot; don't create a card.
-          if (!refs.subgraphPhase || !refs.subgraphPhase._isExecutor) {
-            refs.subgraphPhase = { _isExecutor: true, thinking: '', content: '', prompt: sg_payload.prompt || {} };
+          // Each step gets one live card for its first LLM turn; subsequent turns share it.
+          // Parallel steps share a single live card — recreated after each step_completed.
+          const _stepKey = sg_name.split(':')[1] || sg_name;
+          if (!refs.executorActiveSteps) refs.executorActiveSteps = new Set();
+          if (!refs.executorActiveSteps.has(_stepKey)) {
+            refs.executorActiveSteps.add(_stepKey);
+            if (!refs.subgraphPhase || !refs.subgraphPhase._isExecutor) {
+              refs.subgraphPhase = { _isExecutor: true, thinking: '', content: '', prompt: sg_payload.prompt || {} };
+            }
+            if (refs.subgraphContainer && !refs.subgraphContainer.querySelector('.live-stage-card')) {
+              addLiveStageCard(refs.subgraphContainer, { label: 'מחפש מידע...', stage: 'tool', loop: 0 });
+            }
           }
         } else if (isSynthesizerPhase) {
           // All turns of the synthesizer share one phase slot.
@@ -353,6 +362,7 @@ function handleEvent(ev, data, refs) {
         }
 
       } else if (sg_kind === 'progress') {
+        if (sg_name === 'executing') refs.executorActiveSteps = new Set();
         const _PROGRESS_MSGS = {
           planning_started:         'מתכנן שלבי חקר...',
           executing:                'מבצע שלבי חקר...',
@@ -367,12 +377,18 @@ function handleEvent(ev, data, refs) {
         if (msg) setStatusMsg(refs.statusEl, msg);
 
       } else if (sg_kind === 'hook' && sg_name === 'step_completed') {
-        // Save prompt before clearing phase
+        // Track which steps are still running (for parallel step live-card management).
+        if (!refs.executorActiveSteps) refs.executorActiveSteps = new Set();
+        refs.executorActiveSteps.delete(sg_payload.step_id || '');
+        const _stillActive = refs.executorActiveSteps.size > 0;
+
         const executorPrompt = refs.subgraphPhase ? (refs.subgraphPhase.prompt || {}) : {};
         refs.subgraphPhase = null;
         const task = sg_payload.step_task ? `: ${sg_payload.step_task.slice(0, 40)}` : '';
         setStatusMsg(refs.statusEl, `שלב הושלם${task}`);
         if (refs.subgraphContainer) {
+          finaliseLiveCard(refs.subgraphContainer);
+
           const stepTask        = sg_payload.step_task || 'שלב';
           const toolName        = sg_payload.tool_name || '';
           const hasError        = !!(sg_payload.error && sg_payload.error !== 'skip');
@@ -407,6 +423,12 @@ function handleEvent(ev, data, refs) {
             tool_results: toolResults,
             prompt:       executorPrompt,
           });
+
+          // If other steps are still executing in parallel, restore the live card.
+          if (_stillActive) {
+            refs.subgraphPhase = { _isExecutor: true, thinking: '', content: '', prompt: {} };
+            addLiveStageCard(refs.subgraphContainer, { label: 'מחפש מידע...', stage: 'tool', loop: 0 });
+          }
         }
 
       } else if (sg_kind === 'hook' && sg_name === 'synthesizer_completed') {
