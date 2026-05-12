@@ -317,6 +317,8 @@ details[open] > .sub-summary::before { transform: rotate(90deg); }
   direction: rtl;
 }
 
+.input-error { color: #b02500; font-size: 0.75rem; }
+
 .msg-error {
   background: #fff0ee;
   border: 1px solid #f95630;

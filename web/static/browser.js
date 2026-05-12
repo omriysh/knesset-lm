@@ -675,8 +675,26 @@ async function _browserAsk() {
   const input = _panel.querySelector('#browser-chat-input');
   const q = input?.value?.trim();
   if (!q) return;
-  input.value = '';
 
+  // _validateQuestion defined in app.js (loaded before browser.js)
+  const _err = typeof _validateQuestion === 'function' ? _validateQuestion(q) : null;
+  if (_err) {
+    let hint = _panel.querySelector('#browser-chat-error');
+    if (!hint) {
+      hint = document.createElement('span');
+      hint.id = 'browser-chat-error';
+      hint.className = 'input-error';
+      input.parentElement?.appendChild(hint);
+    }
+    hint.textContent = _err;
+    setTimeout(() => { hint.textContent = ''; }, 4000);
+    return;
+  }
+
+  const hint = _panel.querySelector('#browser-chat-error');
+  if (hint) hint.textContent = '';
+
+  input.value = '';
   _streamWorkspaceAsk(q, _activeId);
 }
 

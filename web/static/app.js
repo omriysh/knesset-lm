@@ -15,6 +15,38 @@ const chatColumn  = document.getElementById('chat-column');
 const welcomeEl   = document.getElementById('welcome-state');
 const queryInput  = document.getElementById('query-input');
 const submitBtn   = document.getElementById('submit-btn');
+const queryErrorEl = document.getElementById('query-error');
+
+/* ── Input validation ───────────────────────────────────────── */
+// Mirrors server-side _QUESTION_RE: Hebrew block + whitespace + digits + basic punctuation
+const _QUESTION_RE = /^[֐-׿\s\d.,?!:\-"']+$/;
+const _MAX_QUESTION = 2000;
+
+function _validateQuestion(q) {
+  if (!q) return null;
+  if (q.length > _MAX_QUESTION) return `השאלה ארוכה מדי (מקסימום ${_MAX_QUESTION} תווים)`;
+  if (!_QUESTION_RE.test(q)) return 'יש להזין שאלה בעברית בלבד';
+  return null;  // valid
+}
+
+let _queryErrorTimer = null;
+function _showQueryError(msg) {
+  if (!queryErrorEl) return;
+  queryErrorEl.textContent = msg;
+  queryErrorEl.classList.remove('hidden');
+  clearTimeout(_queryErrorTimer);
+  _queryErrorTimer = setTimeout(() => {
+    queryErrorEl.classList.add('hidden');
+    queryErrorEl.textContent = '';
+  }, 4000);
+}
+
+function _clearQueryError() {
+  if (!queryErrorEl) return;
+  clearTimeout(_queryErrorTimer);
+  queryErrorEl.classList.add('hidden');
+  queryErrorEl.textContent = '';
+}
 
 marked.use({ breaks: true, gfm: true });
 
@@ -65,6 +97,7 @@ let _currentStagesEl    = null;   // .ai-stages-card of the active session (for 
 queryInput.addEventListener('input', () => {
   queryInput.style.height = 'auto';
   queryInput.style.height = Math.min(queryInput.scrollHeight, 160) + 'px';
+  _clearQueryError();
 });
 
 /* ── Submit on Ctrl+Enter ───────────────────────────────────────── */
@@ -83,6 +116,9 @@ submitBtn.addEventListener('click', () => { if (!running) startQuery(); });
 async function startQuery() {
   const question = queryInput.value.trim();
   if (!question) return;
+  const _qErr = _validateQuestion(question);
+  if (_qErr) { _showQueryError(_qErr); return; }
+  _clearQueryError();
 
   _lastQuestion = question;
   running = true;
@@ -968,16 +1004,28 @@ function renderTextInput(data, outputVar) {
   textarea.placeholder = 'הקלד כאן...';
   card.appendChild(textarea);
 
+  const errHint = document.createElement('span');
+  errHint.className = 'input-error hidden';
+  card.appendChild(errHint);
+
   const submitEl = document.createElement('button');
   submitEl.className = 'text-input-submit';
   submitEl.textContent = 'שלח';
   submitEl.addEventListener('click', () => {
     const val = textarea.value.trim();
     if (!val) return;
+    const _err = _validateQuestion(val);
+    if (_err) {
+      errHint.textContent = _err;
+      errHint.classList.remove('hidden');
+      return;
+    }
+    errHint.classList.add('hidden');
     textarea.disabled = true;
     submitEl.disabled = true;
     submitResponse(outputVar, val);
   });
+  textarea.addEventListener('input', () => errHint.classList.add('hidden'));
   card.appendChild(submitEl);
 
   wrap.appendChild(card);
