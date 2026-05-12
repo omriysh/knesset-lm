@@ -631,7 +631,7 @@ async def research_start(req: ResearchStartRequest, request: Request):
                     elif _t == "error":
                         _outcome = ("error", _d)
                     elif _t == "user_input_required":
-                        _outcome = ("user_paused",)
+                        _outcome = ("user_paused", _d)  # store checkpoint so finally can save it
                     elif _t == "node_start":
                         if isinstance(_d, dict) and _d.get("subgraph"):
                             _event_log.append({"type": "node_start", "data": _d})
@@ -663,7 +663,32 @@ async def research_start(req: ResearchStartRequest, request: Request):
                 # Safety net: generate() may be cancelled by client disconnect.
                 # _event_log is complete here (built above), so the saved session
                 # has full footnotes/citations for reconnect replay.
-                if _outcome and _outcome[0] != "user_paused":
+                if not _outcome:
+                    pass
+                elif _outcome[0] == "user_paused":
+                    # Client disconnected while agent reached a user-input node.
+                    # Save awaiting_user so the session can be resumed on reconnect.
+                    try:
+                        _ts = _now()
+                        _chk = _outcome[1]
+                        _cv  = _chk.get("ctx_snapshot", {}).get("vars", {})
+                        _mp  = _cv.get("meeting_paths") or {}
+                        _rcbm = _cv.get("rag_chunks_by_meeting") or {}
+                        _ws: dict = {}
+                        if _mp:
+                            register_meeting_paths(_mp)
+                            _ws = {"meeting_paths": _mp, "rag_chunks_by_meeting": _rcbm,
+                                   "selected_chunks": []}
+                        save_session(ResearchSession(
+                            session_id=session_id, status="awaiting_user",
+                            original_question=question,
+                            created_at=_run_ts, updated_at=_ts,
+                            machine_checkpoint=_chk,
+                            workspace_data=_ws or None,
+                        ), sessions_dir)
+                    except Exception as exc:
+                        print(f"[research_start] safety-net save failed: {exc}", flush=True)
+                else:
                     try:
                         _ts = _now()
                         if _outcome[0] == "done":
@@ -938,7 +963,7 @@ async def research_respond(
                     elif _t == "error":
                         _outcome = ("error", _d)
                     elif _t == "user_input_required":
-                        _outcome = ("user_paused",)
+                        _outcome = ("user_paused", _d)  # store checkpoint so finally can save it
                     elif _t == "node_start":
                         if isinstance(_d, dict) and _d.get("subgraph"):
                             _event_log.append({"type": "node_start", "data": _d})
@@ -967,7 +992,36 @@ async def research_respond(
             finally:
                 _RESEARCH_SEM.release()
                 loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
-                if _outcome and _outcome[0] != "user_paused":
+                if not _outcome:
+                    pass
+                elif _outcome[0] == "user_paused":
+                    try:
+                        _ts = _now()
+                        _chk = _outcome[1]
+                        _cv  = _chk.get("ctx_snapshot", {}).get("vars", {})
+                        _mp  = _cv.get("meeting_paths") or {}
+                        _rcbm = _cv.get("rag_chunks_by_meeting") or {}
+                        _prev = session.workspace_data or {}
+                        if _mp:
+                            register_meeting_paths(_mp)
+                            _ws = {
+                                **_prev,
+                                "meeting_paths":         {**_prev.get("meeting_paths", {}), **_mp},
+                                "rag_chunks_by_meeting": {**_prev.get("rag_chunks_by_meeting", {}), **_rcbm},
+                            }
+                            _ws.setdefault("selected_chunks", [])
+                        else:
+                            _ws = _prev or None
+                        save_session(ResearchSession(
+                            session_id=session_id, status="awaiting_user",
+                            original_question=question,
+                            created_at=session.created_at, updated_at=_ts,
+                            machine_checkpoint=_chk,
+                            workspace_data=_ws or None,
+                        ), sessions_dir)
+                    except Exception as exc:
+                        print(f"[research_respond] safety-net save failed: {exc}", flush=True)
+                else:
                     try:
                         _ts = _now()
                         if _outcome[0] == "done":
