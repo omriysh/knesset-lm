@@ -344,12 +344,17 @@ def _embed_bullet_ranking(*, query: str, top_k: int) -> list[str]:
     embedding side is unavailable.
     """
     import chromadb
+    from contextlib import nullcontext
 
     client = chromadb.PersistentClient(path=str(config.CHROMA_DIR))
     coll = client.get_collection(config.BULLETS_COLLECTION)
-    from indexing.embedder import ProtocolEmbedder
-    embedder = ProtocolEmbedder()
-    q_emb = embedder.embed([query], ProtocolEmbedder.INSTR_QUERY)
+    from indexing.embedder import ProtocolEmbedder, get_global_embedder
+    embedder, embed_lock = get_global_embedder()
+    if embedder is None:
+        embedder = ProtocolEmbedder()
+        embed_lock = None
+    with embed_lock if embed_lock is not None else nullcontext():
+        q_emb = embedder.embed([query], ProtocolEmbedder.INSTR_QUERY)
     res = coll.query(
         query_embeddings=q_emb.tolist(),
         n_results=top_k,

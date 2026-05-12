@@ -285,6 +285,8 @@ async def lifespan(app: FastAPI):
         batch_size=1,
     )
     embed_lock  = threading.Lock()
+    from indexing.embedder import set_global_embedder
+    set_global_embedder(embedder, embed_lock)
 
     print("[web] Loading ChromaDB …", flush=True)
     chroma = chromadb.PersistentClient(path=str(settings.CHROMA_DIR))

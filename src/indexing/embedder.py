@@ -34,10 +34,32 @@ Requirements
 """
 
 import sys
+import threading
 from pathlib import Path
 from typing import List
 
 import numpy as np
+
+# ---------------------------------------------------------------------------
+# Process-level singleton — set once by the web app at startup so tool
+# handlers can reuse the already-loaded model instead of re-loading it.
+# ---------------------------------------------------------------------------
+
+_global_embedder: "ProtocolEmbedder | None" = None
+_global_embed_lock: threading.Lock | None = None
+
+
+def set_global_embedder(
+    embedder: "ProtocolEmbedder",
+    lock: threading.Lock | None = None,
+) -> None:
+    global _global_embedder, _global_embed_lock
+    _global_embedder = embedder
+    _global_embed_lock = lock or threading.Lock()
+
+
+def get_global_embedder() -> "tuple[ProtocolEmbedder | None, threading.Lock | None]":
+    return _global_embedder, _global_embed_lock
 import torch
 import torch.nn.functional as F
 
