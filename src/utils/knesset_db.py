@@ -190,16 +190,16 @@ def _extract_pdf_text(pdf_bytes: bytes) -> str:
         text = _extract_pdf_text_pymupdf(pdf_bytes)
         if text and not _is_garbage(text):
             return text
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"[knesset_db] PyMuPDF extraction failed ({exc}); trying pdfplumber", flush=True)
 
     # Fall back to pdfplumber
     try:
         text = _extract_pdf_text_pdfplumber(pdf_bytes)
         if text and not _is_garbage(text):
             return text
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"[knesset_db] pdfplumber extraction failed ({exc}); returning empty", flush=True)
 
     return ""
 
@@ -624,7 +624,8 @@ def _get_bill_text_by_id(bill_id: int, max_chars: int = 8000) -> dict | None:
                 "truncated": len(full_text) > max_chars,
             }
 
-        except Exception:
+        except Exception as exc:
+            print(f"[knesset_db] _get_bill_text_by_id: doc {doc.get('url')!r} failed ({exc}); trying next", flush=True)
             continue
 
     return None
@@ -770,7 +771,8 @@ def _extract_docx_text(docx_bytes: bytes) -> str:
         doc = docx.Document(io.BytesIO(docx_bytes))
         paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
         return "\n".join(paragraphs).strip()
-    except Exception:
+    except Exception as exc:
+        print(f"[knesset_db] _extract_docx_text failed ({exc})", flush=True)
         return ""
 
 
@@ -795,7 +797,8 @@ def _extract_doc_text(doc_bytes: bytes) -> str:
         com_doc = word.Documents.Open(doc_path, ReadOnly=True)
         text    = com_doc.Content.Text
         return text.strip()
-    except Exception:
+    except Exception as exc:
+        print(f"[knesset_db] _extract_doc_text (Word COM) failed ({exc})", flush=True)
         return ""
     finally:
         if com_doc:

@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass, field
+import uuid
+from dataclasses import asdict, dataclass, field, fields as dc_fields
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -29,6 +30,7 @@ class ResearchSession:
     final_answer: str | None = None
     error: str | None = None
     workspace_data: dict | None = None  # {meeting_paths, selected_chunks}
+    event_log: list | None = None       # selective SSE event log for reconnect replay
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -48,10 +50,18 @@ def save_session(session: ResearchSession, sessions_dir: Path) -> None:
     sessions_dir.mkdir(parents=True, exist_ok=True)
     data = asdict(session)
     target = _session_path(session.session_id, sessions_dir)
-    # Write to a temp file then rename for atomicity
-    tmp = target.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(target)
+    # Write to a unique temp file then rename for atomicity.
+    # Unique suffix avoids WinError 32 when two threads save the same session concurrently.
+    tmp = target.with_name(target.stem + f"_{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(target)
+    except Exception:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 def load_session(session_id: str, sessions_dir: Path) -> ResearchSession | None:
@@ -61,8 +71,10 @@ def load_session(session_id: str, sessions_dir: Path) -> ResearchSession | None:
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return ResearchSession(**data)
-    except Exception:
+        known = {f.name for f in dc_fields(ResearchSession)}
+        return ResearchSession(**{k: v for k, v in data.items() if k in known})
+    except Exception as exc:
+        print(f"[session] load_session failed for {session_id!r}: {exc}", flush=True)
         return None
 
 

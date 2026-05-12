@@ -75,8 +75,8 @@ def lemmatize(text: str) -> str:
         tokens = [r["word"] for r in results if r.get("word")]
         if tokens:
             return " ".join(tokens)
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"[lemmatize] pipeline failed ({exc}); using fallback", flush=True)
 
     # Fallback
     return _strip_niqqud(text).lower()

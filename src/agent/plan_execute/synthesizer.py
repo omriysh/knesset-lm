@@ -196,7 +196,7 @@ def synthesize_gen(
         flush=True,
     )
 
-    max_expands = int(getattr(config, "SYNTHESIZER_MAX_EXPANDS", 5))
+    max_expands = int(getattr(config, "SYNTHESIZER_MAX_EXPANDS", 10))
     messages: list[dict] = [{"role": "user", "content": prompt}]
     expand_count = 0
 
@@ -210,6 +210,10 @@ def synthesize_gen(
                 phase="synthesizer:expand",
             )
         except Exception as exc:  # noqa: BLE001
+            print(
+                f"[synthesizer] expand {expand_count + 1} failed: {exc}",
+                flush=True,
+            )
             yield from llm_bridge.drain_events()
             yield SubgraphEvent(kind="hook", name="synthesizer_completed", payload={})
             return f"שגיאה בסינתזה (expand): {exc}", []

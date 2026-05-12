@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sys
 import threading
 import traceback
@@ -56,6 +57,36 @@ from agent.llm.gemma import GemmaLlamaBackend
 # Maps ref_id → full tool result text.  Populated when subgraph step_completed
 # events are streamed; served by GET /api/research/{sid}/tool_result/{ref_id}.
 _TOOL_RESULT_CACHE: dict[str, str] = {}
+_TOOL_RESULT_LOCK = threading.Lock()
+_TOOL_RESULT_CAP  = 5000
+
+# ── Concurrency controls ──────────────────────────────────────────────────────
+# Limits simultaneous active research sessions so llama-server and the embedder
+# queue do not become saturated.  Clients that exceed this see a "queued" SSE
+# event and wait until a slot opens.
+_RESEARCH_SEM = threading.Semaphore(5)
+
+# ── Input validators ──────────────────────────────────────────────────────────
+_UUID_RE     = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
+# Hebrew block + whitespace + digits + dots/commas/question marks (user spec) + !/:-"'  (natural Hebrew punctuation)
+_QUESTION_RE = re.compile(r'[֐-׿\s\d.,?!:\-"\']+')
+_REF_ID_RE   = re.compile(r'[0-9a-f]{16}')
+_MAX_QUESTION = 2000
+_MAX_TOP_K    = 500
+_MAX_TOP_N    = 500
+
+
+def _ok_session_id(sid: str) -> bool:
+    return bool(_UUID_RE.fullmatch(sid))
+
+
+def _ok_question(q: str) -> bool:
+    return bool(q) and len(q) <= _MAX_QUESTION and bool(_QUESTION_RE.fullmatch(q))
+
+
+def _ok_ref_id(rid: str) -> bool:
+    return bool(_REF_ID_RE.fullmatch(rid))
+
 
 # ── Meeting info cache (meeting_id → {date, committee}) ───────────────────────
 _MEETING_INFO_CACHE: dict[str, dict] = {}
@@ -69,6 +100,8 @@ def _get_meeting_info(meeting_id: str) -> dict:
     Result is cached in-process.  Returns {} if not found.
     """
     import glob as _glob
+    if not meeting_id.isdigit():
+        return {}
     if meeting_id in _MEETING_INFO_CACHE:
         return _MEETING_INFO_CACHE[meeting_id]
     base = config.transcriptions_dir(25).parent  # Data/raw_transcriptions/
@@ -143,6 +176,14 @@ def _enrich_citations(citations: list[dict], footnote_by_id: dict[str, dict]) ->
     return enriched
 
 
+def _cache_tool_result(ref_id: str, full: str) -> None:
+    with _TOOL_RESULT_LOCK:
+        if len(_TOOL_RESULT_CACHE) >= _TOOL_RESULT_CAP:
+            for k in list(_TOOL_RESULT_CACHE.keys())[:500]:
+                del _TOOL_RESULT_CACHE[k]
+        _TOOL_RESULT_CACHE[ref_id] = full
+
+
 def _strip_footnote_fulls(ev_data: dict, registry=None) -> dict:
     """Strip `full` from footnotes in node_result subgraph outputs; cache each one.
     Also enriches footnotes with tool ui metadata and resolves meeting dates in citations.
@@ -170,7 +211,7 @@ def _strip_footnote_fulls(ev_data: dict, registry=None) -> dict:
         base = {**fn, "ui": ui}
         if full:
             ref_id = uuid.uuid4().hex[:16]
-            _TOOL_RESULT_CACHE[ref_id] = full
+            _cache_tool_result(ref_id, full)
             enriched_fn = {**base, "full": "", "result_ref": ref_id}
         else:
             enriched_fn = {**base, "result_ref": None}
@@ -212,7 +253,7 @@ def _strip_tool_result_fulls(ev_data: dict) -> dict:
     for tr in results:
         full = tr.get("full") or ""
         ref_id = uuid.uuid4().hex[:16]
-        _TOOL_RESULT_CACHE[ref_id] = full
+        _cache_tool_result(ref_id, full)
         patched_results.append({**tr, "full": "", "result_ref": ref_id})
     return {**ev_data, "payload": {**payload, "tool_call_results": patched_results}}
 from agent.machine import StateMachine
@@ -370,7 +411,8 @@ class ResearchRespondRequest(BaseModel):
 
 
 # ── Query log ─────────────────────────────────────────────────────────────────
-_QUERY_LOG = Path(__file__).parent / "query_log.jsonl"
+_QUERY_LOG      = Path(__file__).parent / "query_log.jsonl"
+_QUERY_LOG_LOCK = threading.Lock()
 
 def _log_query(question: str, ip: str) -> None:
     entry = json.dumps({
@@ -378,8 +420,9 @@ def _log_query(question: str, ip: str) -> None:
         "ip": ip,
         "q":  question,
     }, ensure_ascii=False)
-    with open(_QUERY_LOG, "a", encoding="utf-8") as f:
-        f.write(entry + "\n")
+    with _QUERY_LOG_LOCK:
+        with open(_QUERY_LOG, "a", encoding="utf-8") as f:
+            f.write(entry + "\n")
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -422,7 +465,9 @@ async def health(request: Request):
 async def query(req: QueryRequest, request: Request):
     question = req.question.strip()
     if not question:
-        return {"error": "שאלה ריקה"}, 400
+        return JSONResponse({"error": "שאלה ריקה"}, status_code=400)
+    if not _ok_question(question):
+        return JSONResponse({"error": "שאלה מכילה תווים לא חוקיים או ארוכה מדי"}, status_code=400)
 
     _log_query(question, request.client.host if request.client else "unknown")
 
@@ -432,8 +477,8 @@ async def query(req: QueryRequest, request: Request):
     retriever     = request.app.state.retriever
     tool_registry = request.app.state.tool_registry
 
-    top_k = req.top_k or settings.TOP_K_MEETINGS
-    top_n = req.top_n or settings.TOP_N_DIALOGS
+    top_k = min(req.top_k or settings.TOP_K_MEETINGS, _MAX_TOP_K)
+    top_n = min(req.top_n or settings.TOP_N_DIALOGS, _MAX_TOP_N)
 
     async def generate():
         loop      = asyncio.get_event_loop()
@@ -441,6 +486,9 @@ async def query(req: QueryRequest, request: Request):
         _SENTINEL = object()
 
         def _run_sync():
+            if not _RESEARCH_SEM.acquire(blocking=False):
+                loop.call_soon_threadsafe(queue.put_nowait, ("queued", {}))
+                _RESEARCH_SEM.acquire()
             try:
                 runner = MachineRunner(
                     machine       = machine,
@@ -458,6 +506,7 @@ async def query(req: QueryRequest, request: Request):
                     ("error", str(exc) + "\n" + traceback.format_exc()),
                 )
             finally:
+                _RESEARCH_SEM.release()
                 loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
 
         thread = threading.Thread(target=_run_sync, daemon=True)
@@ -486,6 +535,8 @@ async def query(req: QueryRequest, request: Request):
                         "name":    ev_data.get("name"),
                         "payload": ev_data.get("payload", {}),
                     })
+                elif ev_type == "queued":
+                    yield _sse("queued",         {})
                 elif ev_type == "done":
                     yield _sse("done",           {})
                 elif ev_type == "error":
@@ -519,6 +570,8 @@ async def research_start(req: ResearchStartRequest, request: Request):
     question = req.question.strip()
     if not question:
         return JSONResponse({"error": "שאלה ריקה"}, status_code=400)
+    if not _ok_question(question):
+        return JSONResponse({"error": "שאלה מכילה תווים לא חוקיים או ארוכה מדי"}, status_code=400)
 
     settings      = request.app.state.settings
     machine       = request.app.state.machine
@@ -527,8 +580,8 @@ async def research_start(req: ResearchStartRequest, request: Request):
     tool_registry = request.app.state.tool_registry
     sessions_dir  = request.app.state.sessions_dir
 
-    top_k = req.top_k or settings.TOP_K_MEETINGS
-    top_n = req.top_n or settings.TOP_N_DIALOGS
+    top_k = min(req.top_k or settings.TOP_K_MEETINGS, _MAX_TOP_K)
+    top_n = min(req.top_n or settings.TOP_N_DIALOGS, _MAX_TOP_N)
 
     session_id = str(uuid.uuid4())
 
@@ -541,11 +594,25 @@ async def research_start(req: ResearchStartRequest, request: Request):
         # First event: session_id
         yield _sse("session_id", {"session_id": session_id})
 
+        # Persist "running" status immediately — reconnect endpoint uses this
+        # to signal still-in-progress to clients that reconnect mid-execution.
+        _run_ts = _now()
+        save_session(ResearchSession(
+            session_id=session_id, status="running",
+            original_question=question, created_at=_run_ts, updated_at=_run_ts,
+        ), sessions_dir)
+
         loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
         queue: asyncio.Queue = asyncio.Queue()
         _SENTINEL = object()
+        _event_log: list[dict] = []  # selective event log for reconnect replay
 
         def _run_sync():
+            if not _RESEARCH_SEM.acquire(blocking=False):
+                loop.call_soon_threadsafe(queue.put_nowait, ("queued", {}))
+                _RESEARCH_SEM.acquire()
+            _final_token = ""
+            _outcome: tuple | None = None  # ('done', answer) | ('error', msg) | ('user_paused',)
             try:
                 runner = MachineRunner(
                     machine       = machine,
@@ -556,14 +623,91 @@ async def research_start(req: ResearchStartRequest, request: Request):
                     top_n         = top_n,
                 )
                 for event in runner.run_stream(question):
+                    _t, _d = event
+                    if _t == "token":
+                        _final_token += _d
+                    elif _t == "done":
+                        _outcome = ("done", _final_token)
+                    elif _t == "error":
+                        _outcome = ("error", _d)
+                    elif _t == "user_input_required":
+                        _outcome = ("user_paused", _d)  # store checkpoint so finally can save it
+                    elif _t == "node_start":
+                        if isinstance(_d, dict) and _d.get("subgraph"):
+                            _event_log.append({"type": "node_start", "data": _d})
+                    elif _t == "node_result":
+                        _d = _strip_footnote_fulls(_d, registry=tool_registry)
+                        event = (_t, _d)
+                        if isinstance(_d, dict) and _d.get("subgraph"):
+                            _event_log.append({"type": "node_result", "data": _d})
+                    elif _t == "subgraph_event":
+                        _stripped = _strip_tool_result_fulls(_d)
+                        _d = {
+                            "type":    "subgraph_event",
+                            "kind":    _stripped.get("kind"),
+                            "name":    _stripped.get("name"),
+                            "payload": _stripped.get("payload", {}),
+                        }
+                        event = (_t, _d)
+                        _k, _n = _d["kind"], _d["name"]
+                        if _k == "done" or (_k == "hook" and _n in ("step_completed", "synthesizer_completed")):
+                            _event_log.append({"type": "subgraph_event", "data": _d})
                     loop.call_soon_threadsafe(queue.put_nowait, event)
             except Exception as exc:
-                loop.call_soon_threadsafe(
-                    queue.put_nowait,
-                    ("error", str(exc) + "\n" + traceback.format_exc()),
-                )
+                _err = str(exc) + "\n" + traceback.format_exc()
+                loop.call_soon_threadsafe(queue.put_nowait, ("error", _err))
+                _outcome = ("error", _err)
             finally:
+                _RESEARCH_SEM.release()
                 loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
+                # Safety net: generate() may be cancelled by client disconnect.
+                # _event_log is complete here (built above), so the saved session
+                # has full footnotes/citations for reconnect replay.
+                if not _outcome:
+                    pass
+                elif _outcome[0] == "user_paused":
+                    # Client disconnected while agent reached a user-input node.
+                    # Save awaiting_user so the session can be resumed on reconnect.
+                    try:
+                        _ts = _now()
+                        _chk = _outcome[1]
+                        _cv  = _chk.get("ctx_snapshot", {}).get("vars", {})
+                        _mp  = _cv.get("meeting_paths") or {}
+                        _rcbm = _cv.get("rag_chunks_by_meeting") or {}
+                        _ws: dict = {}
+                        if _mp:
+                            register_meeting_paths(_mp)
+                            _ws = {"meeting_paths": _mp, "rag_chunks_by_meeting": _rcbm,
+                                   "selected_chunks": []}
+                        save_session(ResearchSession(
+                            session_id=session_id, status="awaiting_user",
+                            original_question=question,
+                            created_at=_run_ts, updated_at=_ts,
+                            machine_checkpoint=_chk,
+                            workspace_data=_ws or None,
+                        ), sessions_dir)
+                    except Exception as exc:
+                        print(f"[research_start] safety-net save failed: {exc}", flush=True)
+                else:
+                    try:
+                        _ts = _now()
+                        if _outcome[0] == "done":
+                            save_session(ResearchSession(
+                                session_id=session_id, status="done",
+                                original_question=question,
+                                created_at=_run_ts, updated_at=_ts,
+                                final_answer=_outcome[1],
+                                event_log=list(_event_log) or None,
+                            ), sessions_dir)
+                        else:
+                            save_session(ResearchSession(
+                                session_id=session_id, status="error",
+                                original_question=question,
+                                created_at=_run_ts, updated_at=_ts,
+                                error=str(_outcome[1]),
+                            ), sessions_dir)
+                    except Exception as exc:
+                        print(f"[research_start] safety-net save failed: {exc}", flush=True)
 
         thread = threading.Thread(target=_run_sync, daemon=True)
         thread.start()
@@ -573,7 +717,11 @@ async def research_start(req: ResearchStartRequest, request: Request):
 
         try:
             while True:
-                item = await queue.get()
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield ": keep-alive\n\n"
+                    continue
                 if item is _SENTINEL:
                     break
                 ev_type, ev_data = item
@@ -592,16 +740,13 @@ async def research_start(req: ResearchStartRequest, request: Request):
                     yield _sse("thinking_token", {"text": ev_data})
 
                 elif ev_type == "node_result":
-                    yield _sse("node_result", _strip_footnote_fulls(ev_data, registry=tool_registry))
+                    yield _sse("node_result", ev_data)
 
                 elif ev_type == "subgraph_event":
-                    stripped = _strip_tool_result_fulls(ev_data)
-                    yield _sse("subgraph_event", {
-                        "type":    "subgraph_event",
-                        "kind":    stripped.get("kind"),
-                        "name":    stripped.get("name"),
-                        "payload": stripped.get("payload", {}),
-                    })
+                    yield _sse("subgraph_event", ev_data)
+
+                elif ev_type == "queued":
+                    yield _sse("queued", {})
 
                 elif ev_type == "user_input_required":
                     # ev_data contains the full payload including "checkpoint"
@@ -650,6 +795,7 @@ async def research_start(req: ResearchStartRequest, request: Request):
                         machine_checkpoint  = None,
                         final_answer        = final_token,
                         error               = None,
+                        event_log           = _event_log or None,
                     )
                     save_session(session, sessions_dir)
                     yield _sse("done", {})
@@ -694,6 +840,9 @@ async def research_stream(session_id: str, request: Request):
     - done          → re-emits ``token`` (full answer) + ``done``
     - error         → re-emits ``error``
     """
+    if not _ok_session_id(session_id):
+        return JSONResponse({"error": "Invalid session ID"}, status_code=400)
+
     from web.session import load_session
 
     sessions_dir = request.app.state.sessions_dir
@@ -710,7 +859,13 @@ async def research_stream(session_id: str, request: Request):
             ui_event["session_id"] = session_id
             yield _sse("user_input_required", ui_event)
 
+        elif session.status == "running":
+            yield _sse("still_running", {"session_id": session_id})
+
         elif session.status == "done":
+            if session.event_log:
+                for item in session.event_log:
+                    yield _sse(item["type"], item["data"])
             yield _sse("token", {"text": session.final_answer or ""})
             yield _sse("done", {})
 
@@ -738,6 +893,9 @@ async def research_respond(
 
     Streams SSE events exactly like ``/api/research/start``.
     """
+    if not _ok_session_id(session_id):
+        return JSONResponse({"error": "Invalid session ID"}, status_code=400)
+
     from web.session import load_session, save_session, ResearchSession
 
     sessions_dir  = request.app.state.sessions_dir
@@ -775,8 +933,14 @@ async def research_respond(
         loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
         queue: asyncio.Queue = asyncio.Queue()
         _SENTINEL = object()
+        _event_log: list[dict] = []  # selective event log for reconnect replay
 
         def _run_sync():
+            if not _RESEARCH_SEM.acquire(blocking=False):
+                loop.call_soon_threadsafe(queue.put_nowait, ("queued", {}))
+                _RESEARCH_SEM.acquire()
+            _final_token = ""
+            _outcome: tuple | None = None
             try:
                 runner = MachineRunner(
                     machine       = machine,
@@ -791,14 +955,92 @@ async def research_respond(
                     resume        = checkpoint,
                     user_response = user_response,
                 ):
+                    _t, _d = event
+                    if _t == "token":
+                        _final_token += _d
+                    elif _t == "done":
+                        _outcome = ("done", _final_token)
+                    elif _t == "error":
+                        _outcome = ("error", _d)
+                    elif _t == "user_input_required":
+                        _outcome = ("user_paused", _d)  # store checkpoint so finally can save it
+                    elif _t == "node_start":
+                        if isinstance(_d, dict) and _d.get("subgraph"):
+                            _event_log.append({"type": "node_start", "data": _d})
+                    elif _t == "node_result":
+                        _d = _strip_footnote_fulls(_d, registry=tool_registry)
+                        event = (_t, _d)
+                        if isinstance(_d, dict) and _d.get("subgraph"):
+                            _event_log.append({"type": "node_result", "data": _d})
+                    elif _t == "subgraph_event":
+                        _stripped = _strip_tool_result_fulls(_d)
+                        _d = {
+                            "type":    "subgraph_event",
+                            "kind":    _stripped.get("kind"),
+                            "name":    _stripped.get("name"),
+                            "payload": _stripped.get("payload", {}),
+                        }
+                        event = (_t, _d)
+                        _k, _n = _d["kind"], _d["name"]
+                        if _k == "done" or (_k == "hook" and _n in ("step_completed", "synthesizer_completed")):
+                            _event_log.append({"type": "subgraph_event", "data": _d})
                     loop.call_soon_threadsafe(queue.put_nowait, event)
             except Exception as exc:
-                loop.call_soon_threadsafe(
-                    queue.put_nowait,
-                    ("error", str(exc) + "\n" + traceback.format_exc()),
-                )
+                _err = str(exc) + "\n" + traceback.format_exc()
+                loop.call_soon_threadsafe(queue.put_nowait, ("error", _err))
+                _outcome = ("error", _err)
             finally:
+                _RESEARCH_SEM.release()
                 loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
+                if not _outcome:
+                    pass
+                elif _outcome[0] == "user_paused":
+                    try:
+                        _ts = _now()
+                        _chk = _outcome[1]
+                        _cv  = _chk.get("ctx_snapshot", {}).get("vars", {})
+                        _mp  = _cv.get("meeting_paths") or {}
+                        _rcbm = _cv.get("rag_chunks_by_meeting") or {}
+                        _prev = session.workspace_data or {}
+                        if _mp:
+                            register_meeting_paths(_mp)
+                            _ws = {
+                                **_prev,
+                                "meeting_paths":         {**_prev.get("meeting_paths", {}), **_mp},
+                                "rag_chunks_by_meeting": {**_prev.get("rag_chunks_by_meeting", {}), **_rcbm},
+                            }
+                            _ws.setdefault("selected_chunks", [])
+                        else:
+                            _ws = _prev or None
+                        save_session(ResearchSession(
+                            session_id=session_id, status="awaiting_user",
+                            original_question=question,
+                            created_at=session.created_at, updated_at=_ts,
+                            machine_checkpoint=_chk,
+                            workspace_data=_ws or None,
+                        ), sessions_dir)
+                    except Exception as exc:
+                        print(f"[research_respond] safety-net save failed: {exc}", flush=True)
+                else:
+                    try:
+                        _ts = _now()
+                        if _outcome[0] == "done":
+                            save_session(ResearchSession(
+                                session_id=session_id, status="done",
+                                original_question=question,
+                                created_at=session.created_at, updated_at=_ts,
+                                final_answer=_outcome[1],
+                                event_log=list(_event_log) or None,
+                            ), sessions_dir)
+                        else:
+                            save_session(ResearchSession(
+                                session_id=session_id, status="error",
+                                original_question=question,
+                                created_at=session.created_at, updated_at=_ts,
+                                error=str(_outcome[1]),
+                            ), sessions_dir)
+                    except Exception as exc:
+                        print(f"[research_respond] safety-net save failed: {exc}", flush=True)
 
         thread = threading.Thread(target=_run_sync, daemon=True)
         thread.start()
@@ -807,7 +1049,11 @@ async def research_respond(
 
         try:
             while True:
-                item = await queue.get()
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield ": keep-alive\n\n"
+                    continue
                 if item is _SENTINEL:
                     break
                 ev_type, ev_data = item
@@ -826,16 +1072,13 @@ async def research_respond(
                     yield _sse("thinking_token", {"text": ev_data})
 
                 elif ev_type == "node_result":
-                    yield _sse("node_result", _strip_footnote_fulls(ev_data, registry=tool_registry))
+                    yield _sse("node_result", ev_data)
 
                 elif ev_type == "subgraph_event":
-                    stripped = _strip_tool_result_fulls(ev_data)
-                    yield _sse("subgraph_event", {
-                        "type":    "subgraph_event",
-                        "kind":    stripped.get("kind"),
-                        "name":    stripped.get("name"),
-                        "payload": stripped.get("payload", {}),
-                    })
+                    yield _sse("subgraph_event", ev_data)
+
+                elif ev_type == "queued":
+                    yield _sse("queued", {})
 
                 elif ev_type == "user_input_required":
                     new_checkpoint = ev_data.get("checkpoint", {})
@@ -887,6 +1130,7 @@ async def research_respond(
                         machine_checkpoint  = None,
                         final_answer        = final_token,
                         error               = None,
+                        event_log           = _event_log or None,
                     )
                     save_session(updated, sessions_dir)
                     yield _sse("done", {})
@@ -924,6 +1168,10 @@ async def research_respond(
 @app.delete("/api/research/{session_id}")
 async def research_delete(session_id: str, request: Request):
     """Delete a research session file from disk."""
+    if not _ok_session_id(session_id):
+        from fastapi.responses import Response
+        return Response(status_code=400)
+
     from web.session import delete_session
 
     sessions_dir = request.app.state.sessions_dir
@@ -936,6 +1184,8 @@ async def research_delete(session_id: str, request: Request):
 @app.get("/api/research/{session_id}/tool_result/{ref_id}")
 async def get_tool_result(session_id: str, ref_id: str):
     """Return the full text for a lazily-loaded tool result panel."""
+    if not _ok_session_id(session_id) or not _ok_ref_id(ref_id):
+        return JSONResponse({"error": "Invalid parameters"}, status_code=400)
     full = _TOOL_RESULT_CACHE.get(ref_id)
     if full is None:
         return JSONResponse({"error": "not found"}, status_code=404)
@@ -968,6 +1218,9 @@ async def research_rag(session_id: str, query: str, request: Request, top_k: int
     Returns a ranked list of meetings with excerpt and score.
     Saves meeting_paths into session workspace_data for subsequent endpoints.
     """
+    if not _ok_session_id(session_id):
+        return JSONResponse({"error": "Invalid session ID"}, status_code=400)
+
     from web.session import load_session, save_session
 
     sessions_dir = request.app.state.sessions_dir
@@ -978,10 +1231,12 @@ async def research_rag(session_id: str, query: str, request: Request, top_k: int
     query = query.strip()
     if not query:
         return JSONResponse({"error": "שאלה ריקה"}, status_code=400)
+    if not _ok_question(query):
+        return JSONResponse({"error": "שאלה מכילה תווים לא חוקיים או ארוכה מדי"}, status_code=400)
 
     settings = request.app.state.settings
     retriever = request.app.state.retriever
-    top_k = top_k if top_k > 0 else settings.TOP_K_MEETINGS
+    top_k = min(top_k, _MAX_TOP_K) if top_k > 0 else settings.TOP_K_MEETINGS
     top_n = settings.TOP_N_DIALOGS
 
     loop = asyncio.get_event_loop()
@@ -1090,6 +1345,9 @@ async def research_meeting_summary(session_id: str, meeting_id: str, request: Re
     """
     Return the parsed summary of a retrieved meeting, grouped by topic section.
     """
+    if not _ok_session_id(session_id) or not meeting_id.isdigit():
+        return JSONResponse({"error": "Invalid parameters"}, status_code=400)
+
     from web.session import load_session
 
     sessions_dir = request.app.state.sessions_dir
@@ -1179,6 +1437,9 @@ async def research_meeting_transcript(session_id: str, meeting_id: str, request:
     """
     Return the transcript of a retrieved meeting as a list of chunks.
     """
+    if not _ok_session_id(session_id) or not meeting_id.isdigit():
+        return JSONResponse({"error": "Invalid parameters"}, status_code=400)
+
     from web.session import load_session
 
     sessions_dir = request.app.state.sessions_dir
@@ -1220,6 +1481,9 @@ async def research_meeting_transcript(session_id: str, meeting_id: str, request:
 @app.get("/api/research/{session_id}/meeting/{meeting_id}/pass2_chunks")
 async def research_meeting_pass2_chunks(session_id: str, meeting_id: str, request: Request):
     """Return pass-2 chunk metadata for a meeting (no scoring — fast)."""
+    if not _ok_session_id(session_id) or not meeting_id.isdigit():
+        return JSONResponse({"error": "Invalid parameters"}, status_code=400)
+
     import config as _cfg
     chroma = request.app.state.chroma
     try:
@@ -1252,6 +1516,11 @@ async def research_meeting_score_pass2(
     session_id: str, meeting_id: str, req: ScorePass2Request, request: Request
 ):
     """Embed query and cosine-score all pass-2 chunks for a meeting."""
+    if not _ok_session_id(session_id) or not meeting_id.isdigit():
+        return JSONResponse({"error": "Invalid parameters"}, status_code=400)
+    if not _ok_question(req.query.strip()):
+        return JSONResponse({"error": "שאלה מכילה תווים לא חוקיים או ארוכה מדי"}, status_code=400)
+
     import json as _json
     import numpy as _np
     import config as _cfg
@@ -1304,6 +1573,9 @@ async def research_meeting_score_pass2(
 @app.get("/api/research/{session_id}/meeting/{meeting_id}/participants")
 async def research_meeting_participants(session_id: str, meeting_id: str, request: Request):
     """Return the list of speakers / attendees for a meeting."""
+    if not _ok_session_id(session_id) or not meeting_id.isdigit():
+        return JSONResponse({"error": "Invalid parameters"}, status_code=400)
+
     from web.session import load_session
 
     sessions_dir = request.app.state.sessions_dir
@@ -1331,6 +1603,9 @@ async def workspace_select(
     request: Request,
 ):
     """Append a transcript chunk to the session workspace for later querying."""
+    if not _ok_session_id(session_id):
+        return JSONResponse({"error": "Invalid session ID"}, status_code=400)
+
     from web.session import load_session, save_session
     from datetime import datetime, timezone
     from dataclasses import replace as _dc_replace
@@ -1371,6 +1646,9 @@ async def workspace_ask(
 
     Streams SSE token/done/error events.
     """
+    if not _ok_session_id(session_id):
+        return JSONResponse({"error": "Invalid session ID"}, status_code=400)
+
     from web.session import load_session
     from agent.llm.base import TokenEvent
 
@@ -1383,6 +1661,8 @@ async def workspace_ask(
     question = req.question.strip()
     if not question:
         return JSONResponse({"error": "שאלה ריקה"}, status_code=400)
+    if not _ok_question(question):
+        return JSONResponse({"error": "שאלה מכילה תווים לא חוקיים או ארוכה מדי"}, status_code=400)
 
     workspace = session.workspace_data or {}
     register_meeting_paths(workspace.get("meeting_paths", {}))

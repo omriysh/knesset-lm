@@ -15,6 +15,38 @@ const chatColumn  = document.getElementById('chat-column');
 const welcomeEl   = document.getElementById('welcome-state');
 const queryInput  = document.getElementById('query-input');
 const submitBtn   = document.getElementById('submit-btn');
+const queryErrorEl = document.getElementById('query-error');
+
+/* ── Input validation ───────────────────────────────────────── */
+// Mirrors server-side _QUESTION_RE: Hebrew block + whitespace + digits + basic punctuation
+const _QUESTION_RE = /^[֐-׿\s\d.,?!:\-"']+$/;
+const _MAX_QUESTION = 2000;
+
+function _validateQuestion(q) {
+  if (!q) return null;
+  if (q.length > _MAX_QUESTION) return `השאלה ארוכה מדי (מקסימום ${_MAX_QUESTION} תווים)`;
+  if (!_QUESTION_RE.test(q)) return 'יש להזין שאלה בעברית בלבד';
+  return null;  // valid
+}
+
+let _queryErrorTimer = null;
+function _showQueryError(msg) {
+  if (!queryErrorEl) return;
+  queryErrorEl.textContent = msg;
+  queryErrorEl.classList.remove('hidden');
+  clearTimeout(_queryErrorTimer);
+  _queryErrorTimer = setTimeout(() => {
+    queryErrorEl.classList.add('hidden');
+    queryErrorEl.textContent = '';
+  }, 4000);
+}
+
+function _clearQueryError() {
+  if (!queryErrorEl) return;
+  clearTimeout(_queryErrorTimer);
+  queryErrorEl.classList.add('hidden');
+  queryErrorEl.textContent = '';
+}
 
 marked.use({ breaks: true, gfm: true });
 
@@ -53,14 +85,19 @@ function onStagesAlwaysToggle(el) {
 }
 
 /* ── State ─────────────────────────────────────────────────────── */
-let running       = false;
-let sessionId     = null;   // current or last session id
-let _lastQuestion = '';     // most recent user question (for explore-sources)
+let running             = false;
+let sessionId           = null;   // current or last session id
+let _lastQuestion       = '';     // most recent user question (for explore-sources)
+let _reconnectSessionId = null;   // set on stream start, cleared on clean done/error
+let _reconnecting       = false;  // true while _attemptReconnect is looping
+let _reconnectErrorEl   = null;   // the red error card shown on disconnect (removed on reconnect)
+let _currentStagesEl    = null;   // .ai-stages-card of the active session (for reconnect cleanup)
 
 /* ── Textarea auto-resize ───────────────────────────────────────── */
 queryInput.addEventListener('input', () => {
   queryInput.style.height = 'auto';
   queryInput.style.height = Math.min(queryInput.scrollHeight, 160) + 'px';
+  _clearQueryError();
 });
 
 /* ── Submit on Ctrl+Enter ───────────────────────────────────────── */
@@ -79,6 +116,9 @@ submitBtn.addEventListener('click', () => { if (!running) startQuery(); });
 async function startQuery() {
   const question = queryInput.value.trim();
   if (!question) return;
+  const _qErr = _validateQuestion(question);
+  if (_qErr) { _showQueryError(_qErr); return; }
+  _clearQueryError();
 
   _lastQuestion = question;
   running = true;
@@ -96,6 +136,7 @@ async function startQuery() {
   // Status above stages; stages collapsed until clicked
   const statusEl   = appendStatus('');      // appears first (above)
   const stagesEl   = appendStagesCard();    // appears below, collapsed
+  _currentStagesEl = stagesEl;
   _wireStatusToggle(statusEl, stagesEl);
   let   agentEl           = null;
   let   rawAnswer         = '';
@@ -145,29 +186,33 @@ async function startQuery() {
     }
   } catch (err) {
     setStatusMsg(statusEl, '');
-    appendErrorMsg('שגיאת חיבור: ' + err.message);
+    _reconnectErrorEl = appendErrorMsg('שגיאת חיבור: ' + err.message);
+    if (_reconnectSessionId && document.visibilityState === 'visible') {
+      setTimeout(_attemptReconnect, 1500);
+    }
   } finally {
-    // Finalize streamed answer
-    if (agentEl && rawAnswer) {
+    const _willReconnect = !!_reconnectSessionId;
+    if (agentEl && rawAnswer && !_willReconnect) {
       const body = agentEl.querySelector('.prose-content');
       if (body) {
         body.innerHTML = marked.parse(rawAnswer);
-        // Remove streaming cursor if present
         const cursor = agentEl.querySelector('.stream-cursor');
         if (cursor) cursor.remove();
-        // Inject inline citations + sources panel
         if (pendingFootnotes.length > 0) {
           _applyEvidenceCitations(body, pendingFootnotes, pendingCitations);
           agentEl.insertAdjacentHTML('beforeend', _buildSourcesHtml(pendingFootnotes, sessionId));
         }
       }
+    } else if (agentEl && _willReconnect) {
+      agentEl.remove();
     }
     setStatusMsg(statusEl, '');
-    // Remove empty status row
     if (statusEl && !statusEl.textContent.trim()) statusEl.remove();
-    running = false;
-    submitBtn.disabled = false;
-    queryInput.focus();
+    if (!_willReconnect) {
+      running = false;
+      submitBtn.disabled = false;
+      queryInput.focus();
+    }
     scrollToBottom();
   }
 }
@@ -176,6 +221,7 @@ function handleEvent(ev, data, refs) {
   switch (ev) {
     case 'session_id':
       sessionId = data.session_id;
+      _reconnectSessionId = data.session_id;
       break;
 
     case 'status':
@@ -410,6 +456,7 @@ function handleEvent(ev, data, refs) {
     }
 
     case 'done': {
+      _reconnectSessionId = null;
       finaliseLiveCard(refs.stagesEl);
       // Reveal stages wrap (collapsed) even if user never clicked — allows post-hoc inspection
       if (!_stagesAlways()) {
@@ -448,6 +495,7 @@ function handleEvent(ev, data, refs) {
     }
 
     case 'error':
+      _reconnectSessionId = null;
       finaliseLiveCard(refs.stagesEl);
       setStatusMsg(refs.statusEl, '');
       appendErrorMsg(data.error || 'שגיאה לא ידועה');
@@ -477,6 +525,7 @@ async function submitResponse(outputVar, value) {
 
   const statusEl          = appendStatus('ממשיך...');
   const stagesEl          = appendStagesCard();
+  _currentStagesEl = stagesEl;
   _wireStatusToggle(statusEl, stagesEl);
   let   agentEl           = null;
   let   rawAnswer         = '';
@@ -526,26 +575,33 @@ async function submitResponse(outputVar, value) {
     }
   } catch (err) {
     setStatusMsg(statusEl, '');
-    appendErrorMsg('שגיאת חיבור: ' + err.message);
+    _reconnectErrorEl = appendErrorMsg('שגיאת חיבור: ' + err.message);
+    if (_reconnectSessionId && document.visibilityState === 'visible') {
+      setTimeout(_attemptReconnect, 1500);
+    }
   } finally {
-    if (agentEl && rawAnswer) {
+    const _willReconnect = !!_reconnectSessionId;
+    if (agentEl && rawAnswer && !_willReconnect) {
       const body = agentEl.querySelector('.prose-content');
       if (body) {
         body.innerHTML = marked.parse(rawAnswer);
         const cursor = agentEl.querySelector('.stream-cursor');
         if (cursor) cursor.remove();
-        // Inject inline citations + sources panel
         if (pendingFootnotes.length > 0) {
           _applyEvidenceCitations(body, pendingFootnotes, pendingCitations);
           agentEl.insertAdjacentHTML('beforeend', _buildSourcesHtml(pendingFootnotes, sessionId));
         }
       }
+    } else if (agentEl && _willReconnect) {
+      agentEl.remove();
     }
     setStatusMsg(statusEl, '');
     if (statusEl && !statusEl.textContent.trim()) statusEl.remove();
-    running = false;
-    submitBtn.disabled = false;
-    queryInput.focus();
+    if (!_willReconnect) {
+      running = false;
+      submitBtn.disabled = false;
+      queryInput.focus();
+    }
     scrollToBottom();
   }
 }
@@ -634,6 +690,7 @@ function appendErrorMsg(msg) {
   el.textContent = msg;
   chatColumn.appendChild(el);
   scrollToBottom();
+  return el;
 }
 
 function scrollToBottom() {
@@ -947,16 +1004,28 @@ function renderTextInput(data, outputVar) {
   textarea.placeholder = 'הקלד כאן...';
   card.appendChild(textarea);
 
+  const errHint = document.createElement('span');
+  errHint.className = 'input-error hidden';
+  card.appendChild(errHint);
+
   const submitEl = document.createElement('button');
   submitEl.className = 'text-input-submit';
   submitEl.textContent = 'שלח';
   submitEl.addEventListener('click', () => {
     const val = textarea.value.trim();
     if (!val) return;
+    const _err = _validateQuestion(val);
+    if (_err) {
+      errHint.textContent = _err;
+      errHint.classList.remove('hidden');
+      return;
+    }
+    errHint.classList.add('hidden');
     textarea.disabled = true;
     submitEl.disabled = true;
     submitResponse(outputVar, val);
   });
+  textarea.addEventListener('input', () => errHint.classList.add('hidden'));
   card.appendChild(submitEl);
 
   wrap.appendChild(card);
@@ -1433,6 +1502,229 @@ function _renderEvidenceCard(item) {
     `</div>`
   );
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   RECONNECT — recover SSE stream after mobile focus loss
+═══════════════════════════════════════════════════════════════════ */
+
+function _injectPartialNotice(containerEl) {
+  if (containerEl.querySelector('.reconnect-partial-notice')) return;
+  const notice = document.createElement('div');
+  notice.className = 'reconnect-partial-notice';
+  notice.textContent = 'הייתה בעיית חיבור רגעית, תהליך המחקר עלול להופיע באופן חלקי. התוצאה הסופית תוצג עם כל הסימוכין לאחר סיום העיבוד, גם אם חלק מהשלבים לא יופיעו כאן :)';
+  containerEl.insertBefore(notice, containerEl.firstChild);
+}
+
+async function _attemptReconnect() {
+  if (_reconnecting || !_reconnectSessionId) return;
+  _reconnecting = true;
+  running = true;
+  submitBtn.disabled = true;
+  // Remove the disconnect error card — we're recovering
+  if (_reconnectErrorEl) { _reconnectErrorEl.remove(); _reconnectErrorEl = null; }
+
+  // Finalize any live stage cards left open from the disconnected stream.
+  // Inject partial notice into subgraph wrapper cards so expanding them explains the gap.
+  chatColumn.querySelectorAll('.subgraph-card .subgraph-inner-stages').forEach(inner => {
+    _injectPartialNotice(inner);
+  });
+  chatColumn.querySelectorAll('.live-stage-card').forEach(card => {
+    card.classList.remove('live-stage-card');
+    const dot = card.querySelector('.live-thinking-dot');
+    if (dot) dot.remove();
+  });
+
+  const sid = _reconnectSessionId;
+  const statusEl = appendStatus('מחבר מחדש...');
+
+  try {
+    for (let attempt = 0; attempt < 30 && _reconnectSessionId; attempt++) {
+      if (attempt > 0) {
+        setStatusMsg(statusEl, 'עדיין מעבד...');
+        await new Promise(r => setTimeout(r, attempt < 5 ? 3000 : 8000));
+        if (!_reconnectSessionId) break;
+      }
+
+      let continueRetry = false;
+      try {
+        const res = await fetch(`/api/research/${sid}/stream`);
+        if (!res.ok) break;
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '', curEvent = '';
+        let agentEl = null, rawAnswer = '';
+        const pendingFootnotes = [], pendingCitations = [];
+        // replayRefs tracks state while processing the replayed event_log
+        const replayRefs = { stagesEl: null, subgraphContainer: null };
+
+        outer: while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const lines = buf.split('\n'); buf = lines.pop();
+          for (const line of lines) {
+            if (line.startsWith('event: ')) { curEvent = line.slice(7).trim(); continue; }
+            if (!line.startsWith('data: ')) continue;
+            let data; try { data = JSON.parse(line.slice(6)); } catch { continue; }
+
+            if (curEvent === 'still_running') {
+              continueRetry = true;
+              break outer;
+
+            } else if (curEvent === 'node_start') {
+              if (data.subgraph) {
+                if (!replayRefs.stagesEl) {
+                  // Replace the old partial stages card with a fresh replay one
+                  if (_currentStagesEl) {
+                    _currentStagesEl.closest('.msg-agent')?.remove();
+                    _currentStagesEl = null;
+                  }
+                  replayRefs.stagesEl = appendStagesCard();
+                  _currentStagesEl = replayRefs.stagesEl;
+                }
+                replayRefs.subgraphContainer = addSubgraphWrapperCard(replayRefs.stagesEl, data);
+                _injectPartialNotice(replayRefs.subgraphContainer);
+              }
+
+            } else if (curEvent === 'node_result') {
+              if (data.subgraph) {
+                const footnotes = data.subgraph?.outputs?.footnotes;
+                if (Array.isArray(footnotes) && footnotes.length) pendingFootnotes.push(...footnotes);
+                const citations = data.subgraph?.outputs?.citations;
+                if (Array.isArray(citations)) pendingCitations.push(...citations);
+                finaliseSubgraphCard(replayRefs.subgraphContainer);
+                replayRefs.subgraphContainer = null;
+              }
+
+            } else if (curEvent === 'subgraph_event') {
+              const sg_kind    = data.kind    || '';
+              const sg_name    = data.name    || '';
+              const sg_payload = data.payload || {};
+              if (sg_kind === 'hook' && sg_name === 'step_completed' && replayRefs.subgraphContainer) {
+                const stepTask        = sg_payload.step_task || 'שלב';
+                const toolName        = sg_payload.tool_name || '';
+                const hasError        = !!(sg_payload.error && sg_payload.error !== 'skip');
+                const fullResult      = sg_payload.full || '';
+                const toolCalls       = sg_payload.tool_calls || [];
+                const toolCallResults = sg_payload.tool_call_results || [];
+                let toolResults;
+                if (toolCallResults.length > 0) {
+                  toolResults = toolCallResults.map(tc => ({
+                    name: tc.name, args: tc.args || {}, result: tc.full || tc.summary || '', result_ref: tc.result_ref || null,
+                  }));
+                } else if (toolCalls.length === 1) {
+                  toolResults = [{ name: toolCalls[0].name || toolName || 'כלי', args: toolCalls[0].args || {}, result: fullResult }];
+                } else if (toolCalls.length > 1) {
+                  toolResults = toolCalls.map(tc => ({ name: tc.name, args: tc.args || {}, result: '' }));
+                  if (fullResult) toolResults.push({ name: 'תוצאה מלאה', args: {}, result: fullResult });
+                } else if (fullResult) {
+                  toolResults = [{ name: toolName || 'תוצאה מלאה', args: {}, result: fullResult }];
+                } else {
+                  toolResults = [];
+                }
+                addCompletedStageCard(replayRefs.subgraphContainer, {
+                  label:        `ביצוע: ${stepTask.slice(0, 60)}`,
+                  stage:        hasError ? 'reviewer' : 'tool',
+                  content:      sg_payload.summary || '',
+                  tools:        toolName ? [toolName] : [],
+                  tool_results: toolResults,
+                  prompt:       {},
+                });
+              } else if (sg_kind === 'hook' && sg_name === 'synthesizer_completed' && replayRefs.subgraphContainer) {
+                addCompletedStageCard(replayRefs.subgraphContainer, {
+                  label: 'מסכם ממצאים', stage: 'research',
+                  content: '', thinking: '', tools: [], tool_results: [], prompt: {},
+                });
+              } else if (sg_kind === 'done' && replayRefs.subgraphContainer) {
+                finaliseSubgraphCard(replayRefs.subgraphContainer);
+                replayRefs.subgraphContainer = null;
+              }
+
+            } else if (curEvent === 'token') {
+              rawAnswer += data.text || '';
+              if (!agentEl) { agentEl = appendAgentCard(); setStatusMsg(statusEl, ''); }
+              const body = agentEl.querySelector('.prose-content');
+              if (body) body.innerHTML = esc(rawAnswer) + '<span class="stream-cursor"></span>';
+
+            } else if (curEvent === 'done') {
+              _reconnectSessionId = null;
+              sessionId = sid;
+              // Reveal replay stages card if one was created
+              if (replayRefs.stagesEl && !_stagesAlways()) {
+                const wrap = replayRefs.stagesEl.parentElement;
+                if (wrap && wrap.style.display === 'none') wrap.style.display = 'block';
+              }
+              if (agentEl) {
+                const body = agentEl.querySelector('.prose-content');
+                if (body) {
+                  body.innerHTML = rawAnswer ? marked.parse(rawAnswer) : '';
+                  const c = agentEl.querySelector('.stream-cursor');
+                  if (c) c.remove();
+                  if (pendingFootnotes.length) {
+                    _applyEvidenceCitations(body, pendingFootnotes, pendingCitations);
+                    agentEl.insertAdjacentHTML('beforeend', _buildSourcesHtml(pendingFootnotes, sid));
+                  }
+                }
+              }
+              const exploreWrap = document.createElement('div');
+              exploreWrap.className = 'explore-sources-row';
+              const exploreBtn = document.createElement('button');
+              exploreBtn.className = 'explore-sources-btn';
+              exploreBtn.textContent = 'חקור בפרוטוקולים';
+              exploreBtn.addEventListener('click', async () => {
+                exploreBtn.disabled = true;
+                exploreBtn.innerHTML = '<span class="btn-spinner"></span> טוען…';
+                try {
+                  const q   = encodeURIComponent(_lastQuestion);
+                  const rd  = await fetch(`/api/research/${sid}/rag?query=${q}&top_k=20`).then(r => r.json());
+                  const mts = rd.meetings || [];
+                  openProtocolBrowser(sid, mts[0]?.meeting_id || null, mts, {
+                    originalQuestion: _lastQuestion, postCompletion: true,
+                  });
+                  exploreBtn.innerHTML = 'חקור בפרוטוקולים';
+                  exploreBtn.disabled = false;
+                } catch (err) { exploreBtn.disabled = false; exploreBtn.innerHTML = 'שגיאה — נסה שוב'; console.warn('[reconnect] explore button error', err); }
+              });
+              exploreWrap.appendChild(exploreBtn);
+              chatColumn.appendChild(exploreWrap);
+              break outer;
+
+            } else if (curEvent === 'user_input_required') {
+              _reconnectSessionId = null;
+              sessionId = sid;
+              if (!data.session_id) data = { ...data, session_id: sid };
+              renderUserInputPanel(data);
+              break outer;
+
+            } else if (curEvent === 'error') {
+              _reconnectSessionId = null;
+              appendErrorMsg(data.error || 'שגיאה לא ידועה');
+              break outer;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[reconnect] network error on attempt, will retry:', err);
+      }
+      if (!continueRetry) break;
+    }
+  } finally {
+    setStatusMsg(statusEl, '');
+    if (statusEl && !statusEl.textContent.trim()) statusEl.remove();
+    _reconnectErrorEl = null;
+    running = false;
+    submitBtn.disabled = false;
+    _reconnecting = false;
+    queryInput.focus();
+    scrollToBottom();
+  }
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && _reconnectSessionId && !_reconnecting) {
+    _attemptReconnect();
+  }
+});
 
 /* ── Utility ───────────────────────────────────────────────────── */
 function esc(s) {
