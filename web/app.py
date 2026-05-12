@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sys
 import threading
 import traceback
@@ -65,6 +66,28 @@ _TOOL_RESULT_CAP  = 5000
 # event and wait until a slot opens.
 _RESEARCH_SEM = threading.Semaphore(5)
 
+# ── Input validators ──────────────────────────────────────────────────────────
+_UUID_RE     = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
+# Hebrew block + whitespace + digits + dots/commas/question marks (user spec) + !/:-"'  (natural Hebrew punctuation)
+_QUESTION_RE = re.compile(r'[֐-׿\s\d.,?!:\-"\']+')
+_REF_ID_RE   = re.compile(r'[0-9a-f]{16}')
+_MAX_QUESTION = 2000
+_MAX_TOP_K    = 500
+_MAX_TOP_N    = 500
+
+
+def _ok_session_id(sid: str) -> bool:
+    return bool(_UUID_RE.fullmatch(sid))
+
+
+def _ok_question(q: str) -> bool:
+    return bool(q) and len(q) <= _MAX_QUESTION and bool(_QUESTION_RE.fullmatch(q))
+
+
+def _ok_ref_id(rid: str) -> bool:
+    return bool(_REF_ID_RE.fullmatch(rid))
+
+
 # ── Meeting info cache (meeting_id → {date, committee}) ───────────────────────
 _MEETING_INFO_CACHE: dict[str, dict] = {}
 
@@ -77,6 +100,8 @@ def _get_meeting_info(meeting_id: str) -> dict:
     Result is cached in-process.  Returns {} if not found.
     """
     import glob as _glob
+    if not meeting_id.isdigit():
+        return {}
     if meeting_id in _MEETING_INFO_CACHE:
         return _MEETING_INFO_CACHE[meeting_id]
     base = config.transcriptions_dir(25).parent  # Data/raw_transcriptions/
@@ -440,7 +465,9 @@ async def health(request: Request):
 async def query(req: QueryRequest, request: Request):
     question = req.question.strip()
     if not question:
-        return {"error": "שאלה ריקה"}, 400
+        return JSONResponse({"error": "שאלה ריקה"}, status_code=400)
+    if not _ok_question(question):
+        return JSONResponse({"error": "שאלה מכילה תווים לא חוקיים או ארוכה מדי"}, status_code=400)
 
     _log_query(question, request.client.host if request.client else "unknown")
 
@@ -450,8 +477,8 @@ async def query(req: QueryRequest, request: Request):
     retriever     = request.app.state.retriever
     tool_registry = request.app.state.tool_registry
 
-    top_k = req.top_k or settings.TOP_K_MEETINGS
-    top_n = req.top_n or settings.TOP_N_DIALOGS
+    top_k = min(req.top_k or settings.TOP_K_MEETINGS, _MAX_TOP_K)
+    top_n = min(req.top_n or settings.TOP_N_DIALOGS, _MAX_TOP_N)
 
     async def generate():
         loop      = asyncio.get_event_loop()
@@ -543,6 +570,8 @@ async def research_start(req: ResearchStartRequest, request: Request):
     question = req.question.strip()
     if not question:
         return JSONResponse({"error": "שאלה ריקה"}, status_code=400)
+    if not _ok_question(question):
+        return JSONResponse({"error": "שאלה מכילה תווים לא חוקיים או ארוכה מדי"}, status_code=400)
 
     settings      = request.app.state.settings
     machine       = request.app.state.machine
@@ -551,8 +580,8 @@ async def research_start(req: ResearchStartRequest, request: Request):
     tool_registry = request.app.state.tool_registry
     sessions_dir  = request.app.state.sessions_dir
 
-    top_k = req.top_k or settings.TOP_K_MEETINGS
-    top_n = req.top_n or settings.TOP_N_DIALOGS
+    top_k = min(req.top_k or settings.TOP_K_MEETINGS, _MAX_TOP_K)
+    top_n = min(req.top_n or settings.TOP_N_DIALOGS, _MAX_TOP_N)
 
     session_id = str(uuid.uuid4())
 
@@ -786,6 +815,9 @@ async def research_stream(session_id: str, request: Request):
     - done          → re-emits ``token`` (full answer) + ``done``
     - error         → re-emits ``error``
     """
+    if not _ok_session_id(session_id):
+        return JSONResponse({"error": "Invalid session ID"}, status_code=400)
+
     from web.session import load_session
 
     sessions_dir = request.app.state.sessions_dir
@@ -836,6 +868,9 @@ async def research_respond(
 
     Streams SSE events exactly like ``/api/research/start``.
     """
+    if not _ok_session_id(session_id):
+        return JSONResponse({"error": "Invalid session ID"}, status_code=400)
+
     from web.session import load_session, save_session, ResearchSession
 
     sessions_dir  = request.app.state.sessions_dir
@@ -1079,6 +1114,10 @@ async def research_respond(
 @app.delete("/api/research/{session_id}")
 async def research_delete(session_id: str, request: Request):
     """Delete a research session file from disk."""
+    if not _ok_session_id(session_id):
+        from fastapi.responses import Response
+        return Response(status_code=400)
+
     from web.session import delete_session
 
     sessions_dir = request.app.state.sessions_dir
@@ -1091,6 +1130,8 @@ async def research_delete(session_id: str, request: Request):
 @app.get("/api/research/{session_id}/tool_result/{ref_id}")
 async def get_tool_result(session_id: str, ref_id: str):
     """Return the full text for a lazily-loaded tool result panel."""
+    if not _ok_session_id(session_id) or not _ok_ref_id(ref_id):
+        return JSONResponse({"error": "Invalid parameters"}, status_code=400)
     full = _TOOL_RESULT_CACHE.get(ref_id)
     if full is None:
         return JSONResponse({"error": "not found"}, status_code=404)
@@ -1123,6 +1164,9 @@ async def research_rag(session_id: str, query: str, request: Request, top_k: int
     Returns a ranked list of meetings with excerpt and score.
     Saves meeting_paths into session workspace_data for subsequent endpoints.
     """
+    if not _ok_session_id(session_id):
+        return JSONResponse({"error": "Invalid session ID"}, status_code=400)
+
     from web.session import load_session, save_session
 
     sessions_dir = request.app.state.sessions_dir
@@ -1133,10 +1177,12 @@ async def research_rag(session_id: str, query: str, request: Request, top_k: int
     query = query.strip()
     if not query:
         return JSONResponse({"error": "שאלה ריקה"}, status_code=400)
+    if not _ok_question(query):
+        return JSONResponse({"error": "שאלה מכילה תווים לא חוקיים או ארוכה מדי"}, status_code=400)
 
     settings = request.app.state.settings
     retriever = request.app.state.retriever
-    top_k = top_k if top_k > 0 else settings.TOP_K_MEETINGS
+    top_k = min(top_k, _MAX_TOP_K) if top_k > 0 else settings.TOP_K_MEETINGS
     top_n = settings.TOP_N_DIALOGS
 
     loop = asyncio.get_event_loop()
@@ -1245,6 +1291,9 @@ async def research_meeting_summary(session_id: str, meeting_id: str, request: Re
     """
     Return the parsed summary of a retrieved meeting, grouped by topic section.
     """
+    if not _ok_session_id(session_id) or not meeting_id.isdigit():
+        return JSONResponse({"error": "Invalid parameters"}, status_code=400)
+
     from web.session import load_session
 
     sessions_dir = request.app.state.sessions_dir
@@ -1334,6 +1383,9 @@ async def research_meeting_transcript(session_id: str, meeting_id: str, request:
     """
     Return the transcript of a retrieved meeting as a list of chunks.
     """
+    if not _ok_session_id(session_id) or not meeting_id.isdigit():
+        return JSONResponse({"error": "Invalid parameters"}, status_code=400)
+
     from web.session import load_session
 
     sessions_dir = request.app.state.sessions_dir
@@ -1375,6 +1427,9 @@ async def research_meeting_transcript(session_id: str, meeting_id: str, request:
 @app.get("/api/research/{session_id}/meeting/{meeting_id}/pass2_chunks")
 async def research_meeting_pass2_chunks(session_id: str, meeting_id: str, request: Request):
     """Return pass-2 chunk metadata for a meeting (no scoring — fast)."""
+    if not _ok_session_id(session_id) or not meeting_id.isdigit():
+        return JSONResponse({"error": "Invalid parameters"}, status_code=400)
+
     import config as _cfg
     chroma = request.app.state.chroma
     try:
@@ -1407,6 +1462,11 @@ async def research_meeting_score_pass2(
     session_id: str, meeting_id: str, req: ScorePass2Request, request: Request
 ):
     """Embed query and cosine-score all pass-2 chunks for a meeting."""
+    if not _ok_session_id(session_id) or not meeting_id.isdigit():
+        return JSONResponse({"error": "Invalid parameters"}, status_code=400)
+    if not _ok_question(req.query.strip()):
+        return JSONResponse({"error": "שאלה מכילה תווים לא חוקיים או ארוכה מדי"}, status_code=400)
+
     import json as _json
     import numpy as _np
     import config as _cfg
@@ -1459,6 +1519,9 @@ async def research_meeting_score_pass2(
 @app.get("/api/research/{session_id}/meeting/{meeting_id}/participants")
 async def research_meeting_participants(session_id: str, meeting_id: str, request: Request):
     """Return the list of speakers / attendees for a meeting."""
+    if not _ok_session_id(session_id) or not meeting_id.isdigit():
+        return JSONResponse({"error": "Invalid parameters"}, status_code=400)
+
     from web.session import load_session
 
     sessions_dir = request.app.state.sessions_dir
@@ -1486,6 +1549,9 @@ async def workspace_select(
     request: Request,
 ):
     """Append a transcript chunk to the session workspace for later querying."""
+    if not _ok_session_id(session_id):
+        return JSONResponse({"error": "Invalid session ID"}, status_code=400)
+
     from web.session import load_session, save_session
     from datetime import datetime, timezone
     from dataclasses import replace as _dc_replace
@@ -1526,6 +1592,9 @@ async def workspace_ask(
 
     Streams SSE token/done/error events.
     """
+    if not _ok_session_id(session_id):
+        return JSONResponse({"error": "Invalid session ID"}, status_code=400)
+
     from web.session import load_session
     from agent.llm.base import TokenEvent
 
@@ -1538,6 +1607,8 @@ async def workspace_ask(
     question = req.question.strip()
     if not question:
         return JSONResponse({"error": "שאלה ריקה"}, status_code=400)
+    if not _ok_question(question):
+        return JSONResponse({"error": "שאלה מכילה תווים לא חוקיים או ארוכה מדי"}, status_code=400)
 
     workspace = session.workspace_data or {}
     register_meeting_paths(workspace.get("meeting_paths", {}))

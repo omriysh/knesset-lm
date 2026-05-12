@@ -1463,7 +1463,7 @@ function _injectPartialNotice(containerEl) {
   if (containerEl.querySelector('.reconnect-partial-notice')) return;
   const notice = document.createElement('div');
   notice.className = 'reconnect-partial-notice';
-  notice.textContent = 'תוכן חלקי בשל ניתוק בזמן תהליך חשיבה. כדי לראות את התהליך המלא החיבור לאתר צריך להישאר רציף. התוצאה הסופית תוצג לאחר סיום העיבוד, גם אם חלק מהשלבים לא יופיעו כאן.';
+  notice.textContent = 'הייתה בעיית חיבור רגעית, תהליך המחקר עלול להופיע באופן חלקי. התוצאה הסופית תוצג עם כל הסימוכין לאחר סיום העיבוד, גם אם חלק מהשלבים לא יופיעו כאן :)';
   containerEl.insertBefore(notice, containerEl.firstChild);
 }
 
