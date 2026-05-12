@@ -488,6 +488,13 @@ async def query(req: QueryRequest, request: Request):
         _SENTINEL = object()
 
         def _run_sync():
+            from agent.subgraph.llm_bridge import set_thread_event_sink
+            set_thread_event_sink(
+                lambda ev: loop.call_soon_threadsafe(
+                    queue.put_nowait,
+                    ("subgraph_event", {"kind": ev.kind, "name": ev.name, "payload": ev.payload}),
+                )
+            )
             if not _RESEARCH_SEM.acquire(blocking=False):
                 loop.call_soon_threadsafe(queue.put_nowait, ("queued", {}))
                 _RESEARCH_SEM.acquire()
@@ -610,6 +617,13 @@ async def research_start(req: ResearchStartRequest, request: Request):
         _event_log: list[dict] = []  # selective event log for reconnect replay
 
         def _run_sync():
+            from agent.subgraph.llm_bridge import set_thread_event_sink
+            set_thread_event_sink(
+                lambda ev: loop.call_soon_threadsafe(
+                    queue.put_nowait,
+                    ("subgraph_event", {"kind": ev.kind, "name": ev.name, "payload": ev.payload}),
+                )
+            )
             if not _RESEARCH_SEM.acquire(blocking=False):
                 loop.call_soon_threadsafe(queue.put_nowait, ("queued", {}))
                 _RESEARCH_SEM.acquire()

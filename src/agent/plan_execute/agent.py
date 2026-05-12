@@ -40,7 +40,7 @@ from typing import Any, Callable, Generator
 import config
 from agent.plan_execute.budget import BudgetExceeded, BudgetTracker, estimate_plan_seconds
 from agent.plan_execute.concurrency import DAGExecutor
-from agent.plan_execute.critics import CriticResult, critic_post, critic_pre
+from agent.plan_execute.critics import CriticResult, critic_post, critic_pre, critic_post_gen, critic_pre_gen
 from agent.plan_execute.executor import execute_step
 from agent.plan_execute.plan import PLAN_JSON_SCHEMA, Plan, Step
 from agent.plan_execute.scratchpad import Scratchpad
@@ -54,7 +54,7 @@ from agent.subgraph.evidence import (
     EvidenceStore,
     ToolEnvelope,
 )
-from agent.subgraph.llm_bridge import LLMBridge
+from agent.subgraph.llm_bridge import LLMBridge, get_thread_event_sink, set_thread_event_sink
 from utils.tools import ToolRegistry
 
 
@@ -320,8 +320,7 @@ class PlanExecuteAgent(SubgraphAgent):
         self._plan = plan
 
         # ─── Critic-pre on v1 ───────────────────────────────────────────
-        cp = critic_pre(plan, self._phased_llm("critic_pre"), registry=registry)
-        yield from self._llm.drain_events()
+        cp = yield from critic_pre_gen(plan, self._llm, registry=registry)
         if cp.verdict in ("revise", "replan"):
             yield SubgraphEvent(
                 kind="progress",
@@ -344,7 +343,7 @@ class PlanExecuteAgent(SubgraphAgent):
 
         # ─── Validator ──────────────────────────────────────────────────
         vr = validate_plan(plan, registry, self._phased_llm("validator"))
-        yield from self._llm.drain_events()
+        yield from self._llm.drain_events()  # no-op when sink is set; keeps CLI path working
         replan_attempts = 0
         while not vr.ok and replan_attempts < int(getattr(config, "RESEARCH_MAX_REPLANS", 3)):
             yield SubgraphEvent(
@@ -369,7 +368,7 @@ class PlanExecuteAgent(SubgraphAgent):
                 return
             self._plan = plan
             vr = validate_plan(plan, registry, self._phased_llm("validator"))
-            yield from self._llm.drain_events()
+            yield from self._llm.drain_events()  # no-op when sink is set
 
         if not vr.ok:
             yield SubgraphEvent(
@@ -450,8 +449,7 @@ class PlanExecuteAgent(SubgraphAgent):
                 name="critic_post_started",
                 payload={"plan_version": plan.version},
             )
-            cpost: CriticResult = critic_post(plan, self._store, self._phased_llm("critic_post"))
-            yield from self._llm.drain_events()
+            cpost: CriticResult = yield from critic_post_gen(plan, self._store, self._llm)
 
             if cpost.verdict != "replan":
                 break
@@ -539,7 +537,14 @@ class PlanExecuteAgent(SubgraphAgent):
             s.id: threading.Event() for s in steps
         }
 
+        # Capture the current thread's event sink so worker threads can
+        # inherit it.  Each worker sets its own thread-local copy; the sink
+        # callable itself is thread-safe (uses loop.call_soon_threadsafe).
+        _inherited_sink = get_thread_event_sink()
+
         def _worker(step: Step) -> tuple[ToolEnvelope, list[SubgraphEvent]]:
+            if _inherited_sink is not None:
+                set_thread_event_sink(_inherited_sink)
             for dep_id in (step.deps or []):
                 ev = evidence_ready.get(dep_id)
                 if ev:
