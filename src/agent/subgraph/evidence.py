@@ -276,7 +276,7 @@ class EvidenceStore:
             out.append({
                 "id":             entry.id,
                 "tool_name":      entry.tool_name,
-                "step_id":        entry.step_id,
+                "step_key":       entry.step_id,
                 "summary":        env.summary or "",
                 "tool_calls":     prov.get("tool_calls") or [],
                 "metadata":       env.metadata or {},
