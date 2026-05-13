@@ -38,8 +38,12 @@ function renderQuoteObj(obj) {
     const header = parts.length
       ? `<div class="ev-citation-meeting-header">${parts.join(' &middot; ')}</div>`
       : '';
-    const text = obj.text || obj.label || obj.summary || obj.full_text || '';
+    const text = obj.text || obj.topic_text || obj.label || obj.summary || obj.full_text || '';
     const textHtml = text ? `<div class="ev-citation-quote">${esc(String(text))}</div>` : '';
+    if (Array.isArray(obj.chunks) && obj.chunks.length > 0) {
+      const chunksHtml = obj.chunks.map(ch => renderQuoteObj(ch)).join('<hr class="ev-quote-sep">');
+      return header + textHtml + chunksHtml;
+    }
     return header + textHtml;
   }
   // Generic: visible key-value pairs
@@ -85,8 +89,10 @@ function showCitationPopup(supEl, quoteRaw, uiMeta) {
   const GAP = 8;
   let left = sr.left + sr.width / 2 - pr.width / 2;
   left = Math.max(8, Math.min(left, window.innerWidth - pr.width - 8));
+  const showBelow = sr.top - pr.height - GAP < 0;
   const topAbove = sr.top + window.scrollY - pr.height - GAP;
-  const top = (sr.top - pr.height - GAP >= 0) ? topAbove : sr.bottom + window.scrollY + GAP;
+  const top = showBelow ? sr.bottom + window.scrollY + GAP : topAbove;
+  popup.classList.toggle('ev-citation-popup--below', showBelow);
   const tailLeft = (sr.left + sr.width / 2) - left;
   popup.style.left = left + 'px';
   popup.style.top  = top + 'px';
