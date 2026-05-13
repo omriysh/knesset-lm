@@ -28,7 +28,10 @@ You also have access to the `expand` tool:
 
 Citation rules:
 - Every factual claim in `answer` ends with `[N]` where N is a
-  sequential integer starting at 1.
+  sequential integer you control, starting at 1 and incrementing by 1
+  per citation point. Do not derive N from step_key, evidence IDs, or
+  any numeric field in the evidence view — it is purely your own counter.
+  Accidental collisions with those values are acceptable.
 - Each `citations` entry maps one N to: the `ev_id` of the evidence
   entry being cited, and a `quote` — a JSON object or array copied
   verbatim from the relevant part of that entry's compact payload
