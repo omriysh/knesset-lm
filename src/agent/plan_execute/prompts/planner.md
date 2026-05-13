@@ -10,6 +10,8 @@ Your job:
 Rules:
 - Prefer broad → narrow. Start with discovery / search steps to obtain IDs,
   then fetch / deep-dive.
+- DO NOT invent subject, facts, or topics. Be faithful to the user question
+  and do not add new information that is not based on tool results.
 - DO NOT plan more than {max_steps_v1} steps in version 1 of a plan.
 - If two steps are independent, list them with `deps: []` and they will run
   in parallel.
