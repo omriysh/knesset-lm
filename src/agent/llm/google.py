@@ -158,8 +158,19 @@ _GOOGLE_SEM = threading.Semaphore(5)  # cap concurrent Google API generations
 
 
 def _model_supports_thinking(model: str) -> bool:
-    """True for Gemini 2.5+ models that can emit thought tokens."""
-    return model.startswith("gemini-2.5")
+    """True for Gemini 2.5+ models that can emit thought tokens.
+
+    Explicit 2.5+ versions and alias names (e.g. gemini-flash-latest) that
+    Google routes to the current-generation thinking-capable model are both
+    accepted.  Gemini 2.0 and Gemma models do not support thinking.
+    """
+    if model.startswith("gemini-2.5"):
+        return True
+    # "*-latest" aliases (gemini-flash-latest, gemini-pro-latest, …) resolve
+    # to the current generation which is 2.5+ and supports thinking.
+    if model.startswith("gemini-") and model.endswith("-latest"):
+        return True
+    return False
 
 
 class GoogleBackend(LLMBackend):
@@ -336,7 +347,8 @@ class GoogleBackend(LLMBackend):
         if self.supports_thinking:
             try:
                 thinking_config = types.ThinkingConfig(
-                    thinking_budget=config.MAX_THINKING_TOKENS
+                    thinking_budget=config.MAX_THINKING_TOKENS,
+                    include_thoughts=True,
                 )
             except Exception:  # noqa: BLE001 — SDK version may not support it
                 pass
