@@ -32,6 +32,12 @@ Citation rules:
   per citation point. Do not derive N from step_key, evidence IDs, or
   any numeric field in the evidence view — it is purely your own counter.
   Accidental collisions with those values are acceptable.
+- **N is NEVER reused.** Each `[N]` marker in the answer text must be
+  unique. If the same evidence entry (ev_id) supports two different claims,
+  assign a new N each time — e.g. cite it as [3] for claim A and [7] for
+  claim B. Do NOT write [1] twice in the answer text; write [1] and [7].
+  BAD:  "גז [1]. FSRU [1]."      ← same N for two different claims
+  GOOD: "גז [1]. FSRU [4]."      ← each claim gets its own N
 - Each `citations` entry maps one N to: the `ev_id` of the evidence
   entry being cited, and a `quote` — a JSON object or array copied
   verbatim from the relevant part of that entry's compact payload
@@ -60,7 +66,7 @@ Citation rules:
   different N values when different parts of the same evidence support
   different claims — use this freely.
 - Multiple entries supporting the same claim: use consecutive markers
-  `[1][2]`, each as its own `citations` entry.
+  `[M][N]`, each as its own `citations` entry.
 - If you cannot cite a claim, omit the claim. Do not invent facts or
   ev_ids.
 - Do not cite an entry whose summary indicates "no results found" /
