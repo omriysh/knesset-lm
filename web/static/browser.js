@@ -104,10 +104,8 @@ function openProtocolBrowser(sessionId, meetingId, meetings, opts = {}) {
 
   // On mobile, auto-collapse the sidebar in standalone mode
   if (_standalone && window.innerWidth < 768) {
-    const sb  = _panel.querySelector('#browser-sidebar');
-    const btn = _panel.querySelector('#sidebar-collapse-btn');
-    if (sb)  sb.classList.add('sidebar-collapsed');
-    if (btn) btn.textContent = '◀ הצג ישיבות';
+    const sb = _panel.querySelector('#browser-sidebar');
+    if (sb) sb.classList.add('sidebar-collapsed');
   }
 
   // Panel chat wiring (only when not standalone)
@@ -145,8 +143,16 @@ function _shellHtml(postCompletion) {
   return `
 <div class="browser-panel">
   <div class="browser-header">
-    <button class="sidebar-collapse-btn" id="sidebar-collapse-btn"
-            onclick="browserToggleSidebar()" title="הצג/הסתר סרגל">▶ הסתר ישיבות</button>
+    <!-- Mobile: always-visible sidebar toggle icon -->
+    <button class="sidebar-mob-btn" onclick="browserToggleSidebar()" title="ישיבות">
+      <span class="material-symbols-outlined" style="font-size:20px">format_list_bulleted</span>
+    </button>
+    <!-- Desktop: appears when sidebar is collapsed -->
+    <button class="sidebar-expand-btn" id="sidebar-expand-btn"
+            onclick="browserToggleSidebar()" title="הצג ישיבות" style="display:none">
+      <span class="material-symbols-outlined" style="font-size:15px">format_list_bulleted</span>
+      <span>ישיבות</span>
+    </button>
     <span class="browser-breadcrumb" id="browser-question-label"></span>
     <div class="browser-header-actions">
       ${summarizeBtn}
@@ -164,6 +170,13 @@ function _shellHtml(postCompletion) {
       </div>
     </div>
     <div class="browser-sidebar" id="browser-sidebar">
+      <!-- Desktop: collapse button above meeting list -->
+      <div class="sidebar-top-header">
+        <span class="sidebar-top-title">ישיבות</span>
+        <button class="sidebar-top-close" onclick="browserToggleSidebar()" title="הסתר">
+          <span class="material-symbols-outlined" id="sidebar-top-arrow" style="font-size:18px">chevron_right</span>
+        </button>
+      </div>
       <div class="sidebar-inner">
         <div class="sidebar-controls">
           <div class="sidebar-sort-row">
@@ -319,11 +332,18 @@ function browserFilterParticipant(value) {
 }
 
 function browserToggleSidebar() {
-  const sb  = _panel?.querySelector('#browser-sidebar');
-  const btn = _panel?.querySelector('#sidebar-collapse-btn');
+  const sb = _panel?.querySelector('#browser-sidebar');
   if (!sb) return;
   const collapsed = sb.classList.toggle('sidebar-collapsed');
-  if (btn) btn.textContent = collapsed ? '◀ הצג ישיבות' : '▶ הסתר ישיבות';
+  // Desktop: show expand-btn in header when collapsed
+  const expandBtn = _panel?.querySelector('#sidebar-expand-btn');
+  if (expandBtn) expandBtn.style.display = collapsed ? 'flex' : 'none';
+  // Desktop: flip the arrow in the sidebar top header
+  const arrow = _panel?.querySelector('#sidebar-top-arrow');
+  if (arrow) arrow.textContent = collapsed ? 'chevron_left' : 'chevron_right';
+  // Mobile: flip the icon in the header button
+  const mobIcon = _panel?.querySelector('.sidebar-mob-btn .material-symbols-outlined');
+  if (mobIcon) mobIcon.textContent = collapsed ? 'format_list_bulleted' : 'close';
 }
 
 /* ── Participant loading ─────────────────────────────────────────── */

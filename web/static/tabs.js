@@ -36,18 +36,21 @@ function switchTab(name) {
 
 /* ── Browse search ───────────────────────────────────────────────── */
 async function browseSearch() {
-  const input = document.getElementById('reading-search-input');
-  const btn   = document.getElementById('reading-search-btn');
+  const input   = document.getElementById('reading-search-input');
+  const kwInput = document.getElementById('reading-keyword-input');
+  const btn     = document.getElementById('reading-search-btn');
   if (!input || !btn) return;
 
-  const query = input.value.trim();
-  if (!query) {
+  const query   = input.value.trim();
+  const keyword = kwInput?.value.trim() || '';
+
+  if (!query && !keyword) {
     input.focus();
     return;
   }
 
   // Validate (mirrors the server-side check)
-  if (typeof _validateQuestion === 'function') {
+  if (query && typeof _validateQuestion === 'function') {
     const err = _validateQuestion(query);
     if (err) {
       _showBrowseError(err);
@@ -57,11 +60,13 @@ async function browseSearch() {
 
   _setBrowseLoading(true);
 
+  const filters = typeof rfGetFilters === 'function' ? rfGetFilters() : {};
+
   try {
     const res = await fetch('/api/browse/rag', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ query }),
+      body:    JSON.stringify({ query: query || keyword, keyword, filters }),
     });
     const data = await res.json();
 
@@ -108,8 +113,9 @@ function _setBrowseLoading(on) {
   const btn  = document.getElementById('reading-search-btn');
   const area = document.getElementById('reading-browser-area');
   if (btn) {
-    btn.disabled    = on;
-    btn.textContent = on ? 'מחפש…' : 'חפש';
+    btn.disabled = on;
+    const label = btn.querySelector('span:not(.material-symbols-outlined)');
+    if (label) label.textContent = on ? 'מחפש…' : 'חפש';
   }
   if (!area) return;
   const existing = document.getElementById('browse-loading-overlay');

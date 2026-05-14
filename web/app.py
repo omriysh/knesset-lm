@@ -1210,9 +1210,42 @@ async def get_tool_result(session_id: str, ref_id: str):
 
 # ── Browse (reading tab) ──────────────────────────────────────────────────────
 
+class BrowseFilterRequest(BaseModel):
+    committees: list[str] = []
+    mks:        list[str] = []
+    parties:    list[str] = []
+    guest:      str | None = None
+    date_from:  str | None = None
+    date_to:    str | None = None
+
+
 class BrowseSearchRequest(BaseModel):
-    query: str
-    top_k: int | None = None
+    query:   str = ""
+    keyword: str = ""
+    top_k:   int | None = None
+    filters: BrowseFilterRequest | None = None
+
+
+@app.get("/api/meta")
+async def get_meta():
+    """Return committees, MKs, and parties for filter dropdowns."""
+    from utils.knesset_db import get_all_committees, get_all_mks, get_all_parties
+    loop = asyncio.get_event_loop()
+    committees, mks, parties = await asyncio.gather(
+        loop.run_in_executor(None, lambda: get_all_committees(25)),
+        loop.run_in_executor(None, lambda: get_all_mks(25)),
+        loop.run_in_executor(None, lambda: get_all_parties(25)),
+    )
+    def _mk_name(m: dict) -> str:
+        first = (m.get("mk_individual_first_name") or "").strip()
+        last  = (m.get("mk_individual_name")       or "").strip()
+        return f"{first} {last}".strip() or last or first
+
+    return {
+        "committees": [c["Name"] for c in committees],
+        "mks":        sorted({_mk_name(m) for m in mks if _mk_name(m)}),
+        "parties":    [p["party"] for p in parties],
+    }
 
 
 @app.post("/api/browse/rag")
@@ -1228,10 +1261,13 @@ async def browse_rag(req: BrowseSearchRequest, request: Request):
     from web.session import ResearchSession, save_session
     from datetime import datetime, timezone
 
-    query = req.query.strip()
-    if not query:
-        return JSONResponse({"error": "שאלה ריקה"}, status_code=400)
-    if not _ok_question(query):
+    query   = req.query.strip()
+    keyword = req.keyword.strip() if req.keyword else ""
+    rag_query = query or keyword
+
+    if not rag_query:
+        return JSONResponse({"error": "נדרש לפחות שדה חיפוש אחד"}, status_code=400)
+    if not _ok_question(rag_query):
         return JSONResponse({"error": "שאלה מכילה תווים לא חוקיים או ארוכה מדי"}, status_code=400)
 
     settings     = request.app.state.settings
@@ -1245,13 +1281,13 @@ async def browse_rag(req: BrowseSearchRequest, request: Request):
     loop = asyncio.get_event_loop()
     context_str, debug = await loop.run_in_executor(
         None,
-        lambda: retriever(question=query, top_k=top_k, top_n=top_n),
+        lambda: retriever(question=rag_query, top_k=top_k, top_n=top_n),
     )
 
-    meeting_ids: list[str]        = debug["meetings"]
+    meeting_ids: list[str]           = debug["meetings"]
     meeting_scores: dict[str, float] = debug.get("meeting_scores", {})
-    selected_pass1: list[dict]    = debug["selected_pass1"]
-    meeting_paths: dict[str, str] = debug["meeting_paths"]
+    selected_pass1: list[dict]       = debug["selected_pass1"]
+    meeting_paths: dict[str, str]    = debug["meeting_paths"]
     register_meeting_paths(meeting_paths)
 
     # Build per-meeting metadata index from pass-1 results
@@ -1291,20 +1327,107 @@ async def browse_rag(req: BrowseSearchRequest, request: Request):
         score     = meeting_scores.get(mid, 0.0)
         title     = f"{committee} — {date}" if committee and date else mid
         meetings_out.append({
-            "meeting_id": mid,
-            "date":       date,
-            "committee":  committee,
-            "title":      title,
-            "excerpt":    excerpt,
-            "score":      score,
+            "meeting_id":  mid,
+            "date":        date,
+            "committee":   committee,
+            "title":       title,
+            "excerpt":     excerpt,
+            "score":       score,
+            "_summary_p":  str(summary_p) if summary_p else "",
         })
 
-    # RAG chunks index for heatmap
+    # ── Post-retrieval filters ────────────────────────────────────────────────
+    filt = req.filters
+    if filt:
+        def _norm(s: str) -> str:
+            return s.replace("_", " ").strip()
+
+        # 1. Committee filter
+        if filt.committees:
+            norm_sel = {_norm(c) for c in filt.committees}
+            meetings_out = [m for m in meetings_out if _norm(m["committee"]) in norm_sel]
+
+        # 2. Date filter
+        if filt.date_from or filt.date_to:
+            from datetime import datetime as _dt
+            df = _dt.strptime(filt.date_from, "%Y-%m-%d") if filt.date_from else None
+            dt_ = _dt.strptime(filt.date_to,  "%Y-%m-%d") if filt.date_to  else None
+            def _in_range(m: dict) -> bool:
+                try:
+                    d = _dt.strptime(m["date"], "%d/%m/%Y")
+                except ValueError:
+                    return True
+                return (df is None or d >= df) and (dt_ is None or d <= dt_)
+            meetings_out = [m for m in meetings_out if _in_range(m)]
+
+        # 3. Keyword filter (search raw text of summary files)
+        if keyword:
+            kw_lo = keyword.lower()
+            def _kw_match(m: dict) -> bool:
+                sp = m.get("_summary_p", "")
+                if not sp:
+                    return True
+                try:
+                    return kw_lo in Path(sp).read_text(encoding="utf-8").lower()
+                except Exception as exc:
+                    print(f"[browse_rag] keyword search error: {exc}", flush=True)
+                    return True
+            meetings_out = [m for m in meetings_out if _kw_match(m)]
+
+        # 4. MK / party / guest participant filter
+        if filt.mks or filt.parties or filt.guest:
+            from utils.meeting import load_meeting, extract_attendance
+            from concurrent.futures import ThreadPoolExecutor
+
+            # Build set of last names to match against (case-insensitive)
+            sel_lastnames: set[str] = {n.split()[-1].lower() for n in filt.mks}
+
+            if filt.parties:
+                from utils.knesset_db import get_all_mks as _get_mks, _most_recent_faction
+                sel_parties = set(filt.parties)
+                for mk in _get_mks(25):
+                    faction = _most_recent_faction(
+                        [f for f in (mk.get("factions") or []) if f], 25
+                    )
+                    if faction and faction.get("faction_name", "").strip() in sel_parties:
+                        last = (mk.get("mk_individual_name") or "").strip().lower()
+                        if last:
+                            sel_lastnames.add(last)
+
+            if filt.guest:
+                sel_lastnames.add(filt.guest.split()[-1].lower())
+
+            def _participant_match(mid: str) -> bool:
+                path = get_transcript_path_from_id(mid)
+                if not path or not path.exists():
+                    return True
+                try:
+                    meeting     = load_meeting(path)
+                    attendees   = [p.lower() for p in extract_attendance(meeting)]
+                except Exception as exc:
+                    print(f"[browse_rag] attendee load failed for {mid}: {exc}", flush=True)
+                    return True
+                return any(
+                    last in attendee
+                    for last in sel_lastnames
+                    for attendee in attendees
+                )
+
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                keep_mask = list(pool.map(lambda m: _participant_match(m["meeting_id"]), meetings_out))
+            meetings_out = [m for m, keep in zip(meetings_out, keep_mask) if keep]
+
+    # Strip internal fields before output
+    for m in meetings_out:
+        m.pop("_summary_p", None)
+
+    # RAG chunks index for heatmap (only for meetings that survived filtering)
+    surviving = {m["meeting_id"] for m in meetings_out}
     rag_by_meeting: dict[str, list[dict]] = {}
     for item in selected_pass1:
         meta = item["meta"]
         mid  = meta.get("meeting_id", "")
-        if not mid:
+        if not mid or mid not in surviving:
             continue
         rag_by_meeting.setdefault(mid, []).append({
             "start": meta.get("start_speech_idx", 0),
@@ -1319,7 +1442,7 @@ async def browse_rag(req: BrowseSearchRequest, request: Request):
     save_session(ResearchSession(
         session_id         = session_id,
         status             = "done",
-        original_question  = query,
+        original_question  = rag_query,
         created_at         = now,
         updated_at         = now,
         workspace_data     = {
@@ -1329,7 +1452,7 @@ async def browse_rag(req: BrowseSearchRequest, request: Request):
         },
     ), sessions_dir)
 
-    return {"session_id": session_id, "meetings": meetings_out, "query_used": query}
+    return {"session_id": session_id, "meetings": meetings_out, "query_used": rag_query}
 
 
 # ── Workspace models ──────────────────────────────────────────────────────────

@@ -176,28 +176,139 @@
   ══════════════════════════════════════════════════════════ -->
   <div id="tab-reading" class="app-tab-panel hidden">
 
-    <!-- Search bar -->
-    <div class="flex-shrink-0 bg-surface-container-lowest border-b border-surface-variant/20 px-4 py-3">
-      <div class="max-w-5xl mx-auto flex items-center gap-3">
-        <div class="flex-1 relative">
-          <div class="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
-            <span class="material-symbols-outlined text-on-surface-variant/50" style="font-size:20px">search</span>
+    <!-- Filter bar -->
+    <div class="rfb flex-shrink-0">
+      <div class="rfb-inner">
+        <div class="rfb-body">
+
+          <!-- ── Fields + filters (right, takes remaining width) ── -->
+          <div class="rfb-content">
+
+            <!-- Search fields -->
+            <div class="rfb-search-row">
+              <div class="rfb-field">
+                <label class="rfb-label">
+                  <span class="material-symbols-outlined" style="font-size:13px;font-variation-settings:'FILL' 1">auto_awesome</span>
+                  נושא / עמדה
+                </label>
+                <input id="reading-search-input" type="text"
+                       class="w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-4 py-2.5 text-sm text-on-surface placeholder-on-surface-variant/60 outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all font-inherit"
+                       placeholder="חפש לפי נושא, עמדה, שאלה…"
+                       onkeydown="if(event.key==='Enter')browseSearch()" />
+              </div>
+              <div class="rfb-field">
+                <label class="rfb-label">
+                  <span class="material-symbols-outlined" style="font-size:13px">text_fields</span>
+                  מילות מפתח
+                </label>
+                <input id="reading-keyword-input" type="text"
+                       class="w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-4 py-2.5 text-sm text-on-surface placeholder-on-surface-variant/60 outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all font-inherit"
+                       placeholder="מילות מפתח מדויקות…"
+                       onkeydown="if(event.key==='Enter')browseSearch()" />
+              </div>
+            </div>
+
+            <!-- Filter pills -->
+            <div class="rfb-filter-row">
+              <span class="rfb-filter-label">סנן:</span>
+
+              <!-- Committee -->
+              <div class="rfb-filter-item" id="fitem-committee">
+                <button class="rfb-filter-btn" onclick="rfToggle('committee')">
+                  <span class="material-symbols-outlined rfb-filter-icon">account_balance</span>
+                  ועדה
+                  <span class="material-symbols-outlined rfb-chevron" id="rfchev-committee">expand_more</span>
+                </button>
+                <div class="rfb-dropdown hidden" id="rfdrop-committee">
+                  <div class="rfb-dropdown-search">
+                    <input type="text" placeholder="חפש ועדה…"
+                           class="w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-3 py-2 text-sm text-on-surface placeholder-on-surface-variant/60 outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all font-inherit"
+                           oninput="rfFilterList(this,'rf-committee-list')" />
+                  </div>
+                  <div class="rfb-option-list" id="rf-committee-list"></div>
+                </div>
+              </div>
+
+              <!-- Participants: MKs + Parties + Guests -->
+              <div class="rfb-filter-item" id="fitem-participants">
+                <button class="rfb-filter-btn" onclick="rfToggle('participants')">
+                  <span class="material-symbols-outlined rfb-filter-icon">groups</span>
+                  משתתפים
+                  <span class="material-symbols-outlined rfb-chevron" id="rfchev-participants">expand_more</span>
+                </button>
+                <div class="rfb-dropdown rfb-dropdown-participants hidden" id="rfdrop-participants">
+                  <div class="rfb-part-section">
+                    <div class="rfb-part-title">חברי כנסת</div>
+                    <div class="rfb-dropdown-search">
+                      <input type="text" placeholder='חפש ח"כ…'
+                             class="w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-3 py-2 text-sm text-on-surface placeholder-on-surface-variant/60 outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all font-inherit"
+                             oninput="rfFilterList(this,'rf-mk-list')" />
+                    </div>
+                    <div class="rfb-option-list" id="rf-mk-list"></div>
+                  </div>
+                  <div class="rfb-part-section rfb-part-section--sep">
+                    <div class="rfb-part-title">מפלגה</div>
+                    <div class="rfb-dropdown-search">
+                      <input type="text" placeholder="חפש מפלגה…"
+                             class="w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-3 py-2 text-sm text-on-surface placeholder-on-surface-variant/60 outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all font-inherit"
+                             oninput="rfFilterList(this,'rf-party-list')" />
+                    </div>
+                    <div class="rfb-option-list" id="rf-party-list"></div>
+                  </div>
+                  <div class="rfb-part-section rfb-part-section--sep rfb-part-section--guest">
+                    <div class="rfb-part-title">אורחים</div>
+                    <input id="rf-guest-input" type="text"
+                           placeholder="טקסט חופשי: אורחים שאינם חברי כנסת"
+                           class="w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-3 py-2 text-sm text-on-surface placeholder-on-surface-variant/60 outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all font-inherit"
+                           oninput="rfSetGuest(this.value)" />
+                  </div>
+                </div>
+              </div>
+
+              <!-- Date range -->
+              <div class="rfb-filter-item" id="fitem-date">
+                <button class="rfb-filter-btn" onclick="rfToggle('date')">
+                  <span class="material-symbols-outlined rfb-filter-icon">calendar_month</span>
+                  תאריך
+                  <span class="material-symbols-outlined rfb-chevron" id="rfchev-date">expand_more</span>
+                </button>
+                <div class="rfb-dropdown rfb-dropdown-date hidden" id="rfdrop-date">
+                  <div class="rfb-date-row">
+                    <div class="rfb-date-field">
+                      <label>מתאריך</label>
+                      <input id="rf-date-from" type="date" onchange="rfSetDate()"
+                             class="w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-3 py-2 text-sm text-on-surface outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all font-inherit" />
+                    </div>
+                    <div class="rfb-date-field">
+                      <label>עד תאריך</label>
+                      <input id="rf-date-to" type="date" onchange="rfSetDate()"
+                             class="w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-3 py-2 text-sm text-on-surface outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all font-inherit" />
+                    </div>
+                  </div>
+                  <button class="rfb-date-apply" onclick="rfApplyDate()">החל</button>
+                </div>
+              </div>
+
+              <!-- Clear all -->
+              <button id="rf-clear-btn" class="rfb-clear-btn hidden" onclick="rfClearAll()">
+                <span class="material-symbols-outlined" style="font-size:14px">close</span>
+                נקה הכל
+              </button>
+            </div>
+
+            <!-- Active chips -->
+            <div id="rf-active-chips" class="rfb-active-chips hidden"></div>
           </div>
-          <input
-            id="reading-search-input"
-            type="text"
-            class="w-full bg-surface-container border border-outline-variant/40 rounded-xl px-4 pr-11 py-3 text-sm text-on-surface placeholder-on-surface-variant/60 outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all"
-            placeholder="חפש פרוטוקולים סמנטית…"
-            onkeydown="if(event.key==='Enter')browseSearch()"
-          />
+
+          <!-- ── Search button (left, vertically centered) ── -->
+          <div class="rfb-btn-area">
+            <button id="reading-search-btn" class="rfb-search-btn" onclick="browseSearch()">
+              <span class="material-symbols-outlined" style="font-size:24px;font-variation-settings:'FILL' 1">search</span>
+              <span>חפש</span>
+            </button>
+          </div>
+
         </div>
-        <button
-          id="reading-search-btn"
-          class="flex-shrink-0 px-5 py-3 bg-primary text-on-primary rounded-xl font-semibold text-sm hover:bg-primary-dim transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-sm whitespace-nowrap"
-          onclick="browseSearch()"
-        >
-          חפש
-        </button>
       </div>
     </div>
 
@@ -206,7 +317,7 @@
       <!-- Placeholder (shown before first search) -->
       <div id="reading-placeholder" class="flex flex-col items-center justify-center h-full gap-4 text-center px-6">
         <div class="w-16 h-16 rounded-full bg-secondary/10 flex items-center justify-center">
-          <span class="material-symbols-outlined text-secondary" style="font-size:32px;font-variation-settings:'FILL' 1">library_books</span>
+          <span class="material-symbols-outlined text-primary" style="font-size:32px;font-variation-settings:'FILL' 1">library_books</span>
         </div>
         <div>
           <div class="text-xl font-bold text-on-surface mb-2">גלה פרוטוקולים</div>
@@ -272,6 +383,7 @@
   <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
   <script src="/static/browser.js"></script>
   <script src="/static/tabs.js"></script>
+  <script src="/static/filters.js"></script>
   <script type="module" src="/static/app.js"></script>
 </body>
 </html>
