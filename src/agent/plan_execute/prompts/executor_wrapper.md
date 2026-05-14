@@ -42,8 +42,8 @@ Decision protocol:
    enough evidence, simply stop — do NOT call `record_evidence` with
    decision='produced'. The system will automatically prompt you to
    produce a structured summary after your tool calls finish.
-   In your summary, the Hebrew rule still aplies - you MUST write
-   every name (mk, committee, law and any other named entity) stricly
+   In your summary, the Hebrew rule still applies - you MUST write
+   every name (mk, committee, law and any other named entity) strictly
    in Hebrew.
 
 5. If any tool returns an error or zero results and no further tool can
