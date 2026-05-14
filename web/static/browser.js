@@ -558,12 +558,16 @@ function _transcriptHtml(data) {
   if (!chunks.length) return '<div class="browser-empty">אין תמלול זמין</div>';
 
   const rows = chunks.map(c => {
-    const color   = topicColor(c.topic_index);
+    const color    = topicColor(c.topic_index);
     const initials = _initials(c.speaker);
+    const photoName = encodeURIComponent(_speakerPhotoKey(c.speaker));
     return `
 <div class="chunk-card" data-chunk-id="${_esc(c.chunk_id)}" data-topic-idx="${c.topic_index ?? ''}">
   <div class="chunk-left">
-    <div class="chunk-avatar" style="background:${color}20;color:${color}">${_esc(initials)}</div>
+    <div class="chunk-avatar" style="background:${color}20;color:${color}">
+      <span class="chunk-avatar-initials">${_esc(initials)}</span>
+      <img class="chunk-avatar-img" src="/mk-photo/${photoName}" alt="" loading="lazy" onerror="this.style.display='none'">
+    </div>
   </div>
   <div class="chunk-body" style="border-right-color:${color}">
     <div class="chunk-speaker-row">
@@ -688,7 +692,6 @@ function _filterByBullet(bulletIdx) {
     _activeBulletIdx  = null;
     _activeTopicFilter = null;
     _renderHeatmap(_hmChunks.map(c => c.simScore));
-    col.querySelectorAll('.chunk-card').forEach(c => c.classList.remove('dimmed'));
     col.querySelectorAll('.summary-bullet-btn').forEach(b => b.classList.remove('active'));
     return;
   }
@@ -706,19 +709,16 @@ function _filterByBullet(bulletIdx) {
 
   _renderHeatmap(normScores);
 
-  // Dim chunks in lower half of relevance for this bullet
-  col.querySelectorAll('.chunk-card').forEach((card, i) => {
-    const s = normScores[i] ?? 0;
-    card.classList.toggle('dimmed', s < 0.35);
-  });
-
   // Mark active bullet
   col.querySelectorAll('.summary-bullet-btn').forEach(b => {
     b.classList.toggle('active', parseInt(b.dataset.bulletIdx, 10) === bulletIdx);
   });
 
-  // Scroll to first relevant chunk
-  const first = col.querySelector('.chunk-card:not(.dimmed)');
+  // Scroll to highest-scoring chunk
+  const normMax = Math.max(...normScores.filter(s => s != null), 0);
+  const bestIdx = normScores.findIndex(s => s === normMax);
+  const cards   = col.querySelectorAll('.chunk-card');
+  const first   = bestIdx >= 0 ? cards[bestIdx] : null;
   if (first) {
     const target = col.scrollTop
       + first.getBoundingClientRect().top
@@ -885,6 +885,14 @@ function _meetingLabel(m) {
 function _initials(name) {
   if (!name) return '?';
   return name.trim().split(/\s+/).map(w => w[0]).slice(0, 2).join('');
+}
+
+// Strip honorific prefixes so "ח\"כ נעמה לזימי" → "נעמה לזימי" for photo lookup
+function _speakerPhotoKey(name) {
+  if (!name) return '';
+  return name.trim()
+    .replace(/^(ח"כ|ח'כ|השר|השרה|שר|שרה|יו"ר|מנכ"ל|ד"ר|פרופ'?)\s+/u, '')
+    .trim();
 }
 
 function _esc(s) {

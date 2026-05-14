@@ -18,7 +18,8 @@ API_TIMEOUT = 30
 
 # ── HTTP cache ────────────────────────────────────────────────────────────────
 
-CACHE_DB  = DATA_DIR / "knesset_api_cache"
+CACHE_DB      = DATA_DIR / "knesset_api_cache"
+MK_PHOTOS_DIR = DATA_DIR / "mk_photos"
 CACHE_TTL = 7 * 24 * 3600   # 1 week (seconds)
 
 # ── LLM ──────────────────────────────────────────────────────────────────────

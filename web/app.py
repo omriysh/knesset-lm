@@ -45,7 +45,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import chromadb
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -391,6 +391,17 @@ _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+
+_MK_PHOTOS_DIR = config.MK_PHOTOS_DIR
+
+
+@app.get("/mk-photo/{name}")
+async def mk_photo(name: str):
+    for ext in (".jpeg", ".jpg", ".png"):
+        p = _MK_PHOTOS_DIR / f"{name}{ext}"
+        if p.exists():
+            return FileResponse(str(p), media_type=f"image/{ext.lstrip('.')}")
+    return JSONResponse({}, status_code=404)
 
 
 # ── Models ────────────────────────────────────────────────────────────────────

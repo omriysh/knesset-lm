@@ -1322,6 +1322,17 @@ details[open] > .sub-summary::before { transform: rotate(90deg); }
   justify-content: center;
   font-size: 0.72rem;
   font-weight: 700;
+  position: relative;
+  overflow: hidden;
+}
+.chunk-avatar-initials { line-height: 1; }
+.chunk-avatar-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
 }
 
 .chunk-body {
