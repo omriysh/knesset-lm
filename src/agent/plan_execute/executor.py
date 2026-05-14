@@ -330,19 +330,7 @@ def execute_step(
     by_name = _registry_by_name(registry)
     allowed: list[str] = list(step.allowed_tools or ())
 
-    if step.task_kind != "deep_dive":
-        for tool_name in allowed:
-            spec = by_name.get(tool_name)
-            if spec is not None and spec.planner_only:
-                return _abort_envelope(
-                    f"planner_only tool {tool_name!r} cannot run outside a "
-                    "deep_dive step",
-                    tool_name=tool_name,
-                    error_kind="planner_only_violation",
-                )
-
-    tool_schemas = list_tools_for_executor(registry, allowed,
-                                            allow_planner_only=step.task_kind == "deep_dive")
+    tool_schemas = list_tools_for_executor(registry, allowed)
     tool_schemas_full = list(tool_schemas) + [RECORD_EVIDENCE_SCHEMA]
 
     # ----------------------------------------------------------- prompt
@@ -450,17 +438,6 @@ def execute_step(
                 "role": "tool",
                 "tool_call_id": tc_id,
                 "content": json.dumps({"error": f"tool {tool_name!r} not in allowed list"}),
-            })
-            continue
-
-        # Planner-only check
-        spec = by_name.get(tool_name)
-        if spec is not None and spec.planner_only and step.task_kind != "deep_dive":
-            tc_id = _find_tc_id(raw_tool_calls, tool_name)
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tc_id,
-                "content": json.dumps({"error": f"tool {tool_name!r} is planner-only"}),
             })
             continue
 

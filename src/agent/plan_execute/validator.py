@@ -65,7 +65,6 @@ _KIND_OVERREACH_STEPS = "OVERREACH_STEPS"
 _KIND_OVERREACH_DEEP_DIVES = "OVERREACH_DEEP_DIVES"
 _KIND_MISSING_DEP = "MISSING_DEP"
 _KIND_UNKNOWN_TOOL = "UNKNOWN_TOOL"
-_KIND_PLANNER_ONLY = "PLANNER_ONLY_VIOLATION"
 _KIND_DAG_CYCLE = "DAG_CYCLE"
 _KIND_BAD_TASK_KIND = "BAD_TASK_KIND"
 
@@ -274,13 +273,6 @@ def validate_plan(
             if spec is None:
                 issues.append(
                     f"{_KIND_UNKNOWN_TOOL}: {step.id}: tool {tool_name!r} not in registry"
-                )
-                continue
-            # planner_only tools are only allowed on deep_dive steps
-            if spec.planner_only and step.task_kind != "deep_dive":
-                issues.append(
-                    f"{_KIND_PLANNER_ONLY}: {step.id}: tool {tool_name!r} is "
-                    f"planner_only but step.task_kind={step.task_kind!r}"
                 )
 
         # deps must reference existing step ids

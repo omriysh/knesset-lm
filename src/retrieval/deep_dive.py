@@ -157,7 +157,11 @@ def _deep_dive_rerank(
           3. For each top pass-2 chunk, cosine-rerank pass-1 children.
     """
     chroma_client = chroma_client or _default_chroma_client()
-    embedder = embedder or ProtocolEmbedder()
+    if embedder is None:
+        from indexing.embedder import get_global_embedder
+        embedder, _ = get_global_embedder()
+    if embedder is None:
+        embedder = ProtocolEmbedder()
 
     # 1. Embed query, fetch this meeting's bullets with their cosine sims.
     q_emb = embedder.embed([query], ProtocolEmbedder.INSTR_QUERY)

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
 from dataclasses import asdict, dataclass, field, fields as dc_fields
 from datetime import datetime, timezone
@@ -55,7 +56,15 @@ def save_session(session: ResearchSession, sessions_dir: Path) -> None:
     tmp = target.with_name(target.stem + f"_{uuid.uuid4().hex[:8]}.tmp")
     try:
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(target)
+        # Windows antivirus/indexer may hold a transient lock on the target; retry briefly.
+        for _attempt in range(5):
+            try:
+                tmp.replace(target)
+                break
+            except PermissionError:
+                if _attempt == 4:
+                    raise
+                time.sleep(0.05 * (_attempt + 1))
     except Exception:
         try:
             tmp.unlink(missing_ok=True)

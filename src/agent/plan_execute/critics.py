@@ -219,4 +219,106 @@ def critic_post(
     return CriticResult.from_dict(parsed)
 
 
-__all__ = ["CriticResult", "critic_pre", "critic_post"]
+# ---------------------------------------------------------------------------
+# Generator variants (streaming)
+# ---------------------------------------------------------------------------
+# These are the preferred call-sites for the agent loop.  They accept an
+# LLMBridge instance, stream events via LLMBridge.stream(), and use the
+# Python generator return-value protocol so callers can write:
+#
+#   result = yield from critic_pre_gen(plan, self._llm, registry)
+#
+# The yielded SubgraphEvent objects (llm_start / llm_token* / llm_done) are
+# surfaced over SSE in real time.  The synchronous critic_pre / critic_post
+# functions remain available for tests and non-streaming call-sites.
+
+
+def critic_pre_gen(plan: "Plan", llm_bridge: "Any", registry=None):
+    """Streaming generator version of critic_pre.
+
+    Yields SubgraphEvents; returns a CriticResult via generator return value.
+    """
+    template = _load_prompt("critic_pre.md")
+    plan_json = json.dumps(plan.to_dict(), ensure_ascii=False, indent=2)
+    if registry:
+        catalogue_str = json.dumps(
+            list_tools_for_planner(registry), ensure_ascii=False, indent=2
+        )
+    else:
+        catalogue_str = "(tool catalogue unavailable)"
+    prompt = template.format(
+        goal=plan.goal,
+        plan=plan_json,
+        tool_catalogue=catalogue_str,
+        max_steps_v1=int(getattr(config, "RESEARCH_MAX_PLAN_STEPS_V1", 8)),
+        max_deep_dives=int(getattr(config, "RESEARCH_MAX_DEEP_DIVES_PER_PLAN", 3)),
+    )
+
+    text_parts: list[str] = []
+    error_seen = False
+    try:
+        for ev in llm_bridge.stream(
+            model=config.CRITIC_PRE_MODEL,
+            prompt=prompt,
+            response_format={"type": "json_object"},
+            phase="critic_pre",
+        ):
+            if ev.kind == "llm_token":
+                text_parts.append(ev.payload.get("text", ""))
+            elif ev.kind == "llm_done" and ev.payload.get("error"):
+                error_seen = True
+            yield ev
+    except Exception as exc:  # noqa: BLE001
+        return CriticResult(verdict="ok", reason=f"critic_pre LLM error: {exc}")
+
+    if error_seen:
+        return CriticResult(verdict="ok", reason="critic_pre LLM error (see llm_done payload)")
+
+    parsed = _parse_json("".join(text_parts))
+    if not isinstance(parsed, dict):
+        return CriticResult(verdict="ok", reason="critic_pre returned non-JSON; defaulting to ok")
+    return CriticResult.from_dict(parsed)
+
+
+def critic_post_gen(plan: "Plan", store: "EvidenceStore | None", llm_bridge: "Any"):
+    """Streaming generator version of critic_post.
+
+    Yields SubgraphEvents; returns a CriticResult via generator return value.
+    """
+    template = _load_prompt("critic_post.md")
+    plan_json = json.dumps(plan.to_dict(), ensure_ascii=False, indent=2)
+    view = _summary_view(store)
+    view_json = json.dumps(view, ensure_ascii=False, indent=2)
+    prompt = template.format(
+        goal=plan.goal,
+        plan=plan_json,
+        evidence_view=view_json,
+    )
+
+    text_parts: list[str] = []
+    error_seen = False
+    try:
+        for ev in llm_bridge.stream(
+            model=config.CRITIC_POST_MODEL,
+            prompt=prompt,
+            response_format={"type": "json_object"},
+            phase="critic_post",
+        ):
+            if ev.kind == "llm_token":
+                text_parts.append(ev.payload.get("text", ""))
+            elif ev.kind == "llm_done" and ev.payload.get("error"):
+                error_seen = True
+            yield ev
+    except Exception as exc:  # noqa: BLE001
+        return CriticResult(verdict="ok", reason=f"critic_post LLM error: {exc}")
+
+    if error_seen:
+        return CriticResult(verdict="ok", reason="critic_post LLM error (see llm_done payload)")
+
+    parsed = _parse_json("".join(text_parts))
+    if not isinstance(parsed, dict):
+        return CriticResult(verdict="ok", reason="critic_post returned non-JSON; defaulting to ok")
+    return CriticResult.from_dict(parsed)
+
+
+__all__ = ["CriticResult", "critic_pre", "critic_post", "critic_pre_gen", "critic_post_gen"]

@@ -37,7 +37,7 @@ from agent.subgraph.base import SubgraphEvent
 
 
 # ---------------------------------------------------------------------------
-# Thread-local event buffer
+# Thread-local event buffer and immediate-emit sink
 # ---------------------------------------------------------------------------
 
 _tl = threading.local()
@@ -47,6 +47,24 @@ def _get_buffer() -> deque:
     if not hasattr(_tl, "events"):
         _tl.events = deque()
     return _tl.events
+
+
+def set_thread_event_sink(sink) -> None:
+    """Register a per-thread sink callable(SubgraphEvent) → None.
+
+    When set, LLMBridge.__call__ emits events immediately via the sink
+    instead of buffering them for drain_events().  Pass None to clear.
+
+    Workers that need to propagate the caller's sink should call
+    get_thread_event_sink() on the spawning thread and call
+    set_thread_event_sink(captured_sink) at the top of the worker body.
+    """
+    _tl.sink = sink
+
+
+def get_thread_event_sink():
+    """Return the sink registered on this thread, or None."""
+    return getattr(_tl, "sink", None)
 
 
 # ---------------------------------------------------------------------------
@@ -118,10 +136,20 @@ class LLMBridge:
         # Build a compact user-facing prompt preview (first 500 chars of
         # the last user message, or the full prompt if short).
         prompt_preview = _prompt_preview(msgs)
-        buf = _get_buffer()
-        buf.append(SubgraphEvent(
+
+        sink = get_thread_event_sink()
+        buf  = _get_buffer()
+
+        def _emit(ev: SubgraphEvent) -> None:
+            if sink is not None:
+                sink(ev)
+            else:
+                buf.append(ev)
+
+        phase_name = phase or model
+        _emit(SubgraphEvent(
             kind="llm_start",
-            name=phase or model,
+            name=phase_name,
             payload={"phase": phase, "model": model, "prompt": {"user": prompt_preview}},
         ))
         t0 = time.monotonic()
@@ -138,26 +166,25 @@ class LLMBridge:
             text, tool_calls, thinking = _drain_stream(backend.stream(**kwargs))
         except Exception as exc:
             elapsed = int((time.monotonic() - t0) * 1000)
-            buf.append(SubgraphEvent(
+            _emit(SubgraphEvent(
                 kind="llm_done",
-                name=phase or model,
+                name=phase_name,
                 payload={"content": "", "elapsed_ms": elapsed, "error": str(exc)},
             ))
             raise RuntimeError(f"llm_call({model!r}) failed: {exc}") from exc
 
         if thinking:
-            buf.append(SubgraphEvent(
+            _emit(SubgraphEvent(
                 kind="llm_thinking",
-                name=phase or model,
+                name=phase_name,
                 payload={"text": thinking},
             ))
 
         elapsed = int((time.monotonic() - t0) * 1000)
-        content_preview = (text or "")
-        buf.append(SubgraphEvent(
+        _emit(SubgraphEvent(
             kind="llm_done",
-            name=phase or model,
-            payload={"content": content_preview, "elapsed_ms": elapsed},
+            name=phase_name,
+            payload={"content": text or "", "elapsed_ms": elapsed},
         ))
 
         if tools:
@@ -319,4 +346,4 @@ def _prompt_preview(msgs: list[dict]) -> str:
     return ""
 
 
-__all__ = ["LLMBridge"]
+__all__ = ["LLMBridge", "set_thread_event_sink", "get_thread_event_sink"]

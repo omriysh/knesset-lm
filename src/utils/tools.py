@@ -79,7 +79,6 @@ class ToolSpec:
     handler: Callable[..., ToolEnvelope]
     task_kinds: list[str] = field(default_factory=list)
     cost_hint: str = "cheap"
-    planner_only: bool = False
     ui: dict = field(default_factory=dict)
     compact_spec: dict = field(default_factory=dict)
 
@@ -90,7 +89,6 @@ class ToolSpec:
             "schema":       dict(self.schema or {}),
             "task_kinds":   list(self.task_kinds),
             "cost_hint":    self.cost_hint,
-            "planner_only": bool(self.planner_only),
             "ui":           dict(self.ui or {}),
             "compact_spec": dict(self.compact_spec or {}),
         }
@@ -344,12 +342,17 @@ def _embed_bullet_ranking(*, query: str, top_k: int) -> list[str]:
     embedding side is unavailable.
     """
     import chromadb
+    from contextlib import nullcontext
 
     client = chromadb.PersistentClient(path=str(config.CHROMA_DIR))
     coll = client.get_collection(config.BULLETS_COLLECTION)
-    from indexing.embedder import ProtocolEmbedder
-    embedder = ProtocolEmbedder()
-    q_emb = embedder.embed([query], ProtocolEmbedder.INSTR_QUERY)
+    from indexing.embedder import ProtocolEmbedder, get_global_embedder
+    embedder, embed_lock = get_global_embedder()
+    if embedder is None:
+        embedder = ProtocolEmbedder()
+        embed_lock = None
+    with embed_lock if embed_lock is not None else nullcontext():
+        q_emb = embedder.embed([query], ProtocolEmbedder.INSTR_QUERY)
     res = coll.query(
         query_embeddings=q_emb.tolist(),
         n_results=top_k,

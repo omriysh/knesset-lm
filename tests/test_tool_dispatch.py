@@ -32,14 +32,13 @@ def _make_registry(*entries: ToolSpec) -> ToolRegistry:
     return list(entries)
 
 
-def _make_spec(name: str, handler=None, planner_only: bool = False) -> ToolSpec:
+def _make_spec(name: str, handler=None) -> ToolSpec:
     return ToolSpec(
         name=name,
         schema={"type": "object", "properties": {}},
         handler=handler or _make_ok_handler(),
         task_kinds=["discover"],
         cost_hint="cheap",
-        planner_only=planner_only,
     )
 
 
@@ -211,13 +210,4 @@ class TestToolSpec:
         assert "schema" in d
         assert "task_kinds" in d
         assert "cost_hint" in d
-        assert "planner_only" in d
         assert "handler" not in d
-
-    def test_tool_spec_planner_only_default_false(self):
-        spec = _make_spec("find_mk")
-        assert spec.planner_only is False
-
-    def test_tool_spec_planner_only_true(self):
-        spec = _make_spec("deep_dive_meeting", planner_only=True)
-        assert spec.planner_only is True
