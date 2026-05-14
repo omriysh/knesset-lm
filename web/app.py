@@ -1208,6 +1208,130 @@ async def get_tool_result(session_id: str, ref_id: str):
     return JSONResponse({"full": full})
 
 
+# ── Browse (reading tab) ──────────────────────────────────────────────────────
+
+class BrowseSearchRequest(BaseModel):
+    query: str
+    top_k: int | None = None
+
+
+@app.post("/api/browse/rag")
+async def browse_rag(req: BrowseSearchRequest, request: Request):
+    """
+    Session-less entry point for the reading tab.
+
+    Creates a fresh ResearchSession, runs RAG retrieval, persists meeting_paths
+    into that session's workspace_data, and returns the session_id alongside
+    the meeting list.  Subsequent calls (summary, transcript, score_pass2, etc.)
+    use the returned session_id against the existing /api/research/ routes.
+    """
+    from web.session import ResearchSession, save_session
+    from datetime import datetime, timezone
+
+    query = req.query.strip()
+    if not query:
+        return JSONResponse({"error": "שאלה ריקה"}, status_code=400)
+    if not _ok_question(query):
+        return JSONResponse({"error": "שאלה מכילה תווים לא חוקיים או ארוכה מדי"}, status_code=400)
+
+    settings     = request.app.state.settings
+    retriever    = request.app.state.retriever
+    sessions_dir = request.app.state.sessions_dir
+
+    top_k = min(req.top_k or settings.TOP_K_MEETINGS, _MAX_TOP_K)
+    top_n = settings.TOP_N_DIALOGS
+
+    # Run retrieval
+    loop = asyncio.get_event_loop()
+    context_str, debug = await loop.run_in_executor(
+        None,
+        lambda: retriever(question=query, top_k=top_k, top_n=top_n),
+    )
+
+    meeting_ids: list[str]        = debug["meetings"]
+    meeting_scores: dict[str, float] = debug.get("meeting_scores", {})
+    selected_pass1: list[dict]    = debug["selected_pass1"]
+    meeting_paths: dict[str, str] = debug["meeting_paths"]
+    register_meeting_paths(meeting_paths)
+
+    # Build per-meeting metadata index from pass-1 results
+    meta_by_meeting: dict[str, dict] = {}
+    for item in selected_pass1:
+        mid = item["meta"].get("meeting_id", "")
+        if mid and mid not in meta_by_meeting:
+            meta_by_meeting[mid] = item["meta"]
+
+    def _parse_filename(path_str: str) -> tuple[str, str]:
+        p     = Path(path_str)
+        parts = p.stem.split("_")
+        date  = f"{parts[0]}/{parts[1]}/{parts[2]}" if len(parts) >= 4 else ""
+        return date, p.parent.name
+
+    def _first_bullet(path_str: str) -> str:
+        try:
+            bullets = parse_summary_bullets(Path(path_str))
+            for b in bullets:
+                return b["text"]
+        except Exception as exc:
+            print(f"[browse_rag] bullet parse failed: {exc}", flush=True)
+        return ""
+
+    meetings_out = []
+    for mid in meeting_ids:
+        meta = meta_by_meeting.get(mid)
+        if meta:
+            date      = meta.get("date", "")
+            committee = meta.get("committee", "")
+        else:
+            summary_p = get_summary_path_from_id(mid)
+            date, committee = _parse_filename(str(summary_p)) if summary_p else ("", "")
+
+        summary_p = get_summary_path_from_id(mid)
+        excerpt   = _first_bullet(str(summary_p)) if summary_p else ""
+        score     = meeting_scores.get(mid, 0.0)
+        title     = f"{committee} — {date}" if committee and date else mid
+        meetings_out.append({
+            "meeting_id": mid,
+            "date":       date,
+            "committee":  committee,
+            "title":      title,
+            "excerpt":    excerpt,
+            "score":      score,
+        })
+
+    # RAG chunks index for heatmap
+    rag_by_meeting: dict[str, list[dict]] = {}
+    for item in selected_pass1:
+        meta = item["meta"]
+        mid  = meta.get("meeting_id", "")
+        if not mid:
+            continue
+        rag_by_meeting.setdefault(mid, []).append({
+            "start": meta.get("start_speech_idx", 0),
+            "end":   meta.get("end_speech_idx",   0),
+            "sim":   round(float(item["p1_sim"]), 4),
+            "tvec":  item.get("topic_scores_vec", []),
+        })
+
+    # Create a browse session so subsequent /api/research/ endpoints work
+    session_id = str(uuid.uuid4())
+    now        = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    save_session(ResearchSession(
+        session_id         = session_id,
+        status             = "done",
+        original_question  = query,
+        created_at         = now,
+        updated_at         = now,
+        workspace_data     = {
+            "meeting_paths":          meeting_paths,
+            "rag_chunks_by_meeting":  rag_by_meeting,
+            "selected_chunks":        [],
+        },
+    ), sessions_dir)
+
+    return {"session_id": session_id, "meetings": meetings_out, "query_used": query}
+
+
 # ── Workspace models ──────────────────────────────────────────────────────────
 
 class WorkspaceSelectRequest(BaseModel):

@@ -1825,3 +1825,137 @@ details.ev-source-entry[open] > summary.ev-source-header::before { transform: ro
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ══════════════════════════════════════════════════════════════════
+   TAB LAYOUT
+══════════════════════════════════════════════════════════════════ */
+
+/* Safe-area inset: push header content below notch/status bar */
+body > header {
+  padding-top: env(safe-area-inset-top, 0);
+}
+
+/* Tab panel: fill remaining height after header */
+.app-tab-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+.app-tab-panel.hidden {
+  display: none !important;
+}
+
+/* History tab: center vertically */
+#tab-history.app-tab-panel {
+  justify-content: center;
+  align-items: center;
+}
+
+/* ── Desktop tab buttons ────────────────────────────────────────── */
+.app-tab-btn {
+  color: #5b5c5a;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s, color 0.15s;
+}
+.app-tab-btn:hover {
+  color: #2e2f2d;
+  background: rgba(46, 47, 45, 0.06);
+}
+.app-tab-btn.active {
+  background: #fff;
+  color: #266829;
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(46, 47, 45, 0.06);
+}
+
+/* ── Mobile bottom tab bar ──────────────────────────────────────── */
+#mobile-tab-bar {
+  min-height: 60px;
+  height: calc(60px + env(safe-area-inset-bottom, 0px));
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+
+.mobile-tab-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border: none;
+  background: transparent;
+  color: #767775;
+  font-size: 0.65rem;
+  font-family: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 6px 4px;
+  transition: color 0.15s;
+  letter-spacing: 0.01em;
+}
+.mobile-tab-btn.active {
+  color: #266829;
+}
+
+/* Mobile: pad tabs so content isn't behind the fixed mobile nav */
+@media (max-width: 767px) {
+  #tab-reading,
+  #tab-history,
+  #tab-research {
+    padding-bottom: calc(60px + env(safe-area-inset-bottom, 0px));
+  }
+  /* Reduce welcome-centering shift on short mobile screens */
+  body.show-welcome #input-bar {
+    transform: translateY(-10vh);
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   READING TAB — STANDALONE BROWSER
+══════════════════════════════════════════════════════════════════ */
+
+/* Wrapper fills the reading-browser-area completely */
+.browser-standalone-wrapper {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Override the default 80vh cap so it fills the tab */
+.browser-standalone-wrapper .browser-panel {
+  flex: 1;
+  max-height: 100%;
+  min-height: 0;
+}
+
+/* On mobile with standalone browser, widen sidebar so it's usable */
+@media (max-width: 767px) {
+  .browser-standalone-wrapper .browser-sidebar {
+    width: 180px;
+  }
+}
+
+/* ── Browse error banner ────────────────────────────────────────── */
+.browse-error-banner {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #fff0ee;
+  border: 1px solid #f95630;
+  border-radius: 10px;
+  padding: 10px 20px;
+  font-size: 0.85rem;
+  color: #b02500;
+  direction: rtl;
+  z-index: 20;
+  max-width: 90%;
+  text-align: center;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+

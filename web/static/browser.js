@@ -35,6 +35,8 @@ let _panel     = null;   // root DOM element (.msg-agent wrapper)
 let _summary   = null;   // last fetched summary {topics:[]}
 let _activeTopicFilter = null;  // null = show all; number = show that topic index
 let _origQ     = '';     // original question (for summarize button)
+let _standalone = false; // true when embedded in reading tab (no chat bar)
+let _container  = null;  // DOM element the panel is appended into
 
 /* ── Heatmap state ──────────────────────────────────────────────── */
 let _hmChunks        = [];   // [{chunk_id, chars, simScore, topicScores}]
@@ -49,8 +51,18 @@ let _partCache       = {};          // meeting_id → string[] (lowercase speake
 let _partLoadedCount = 0;           // how many participant fetches completed
 
 /* ── Main entry point ───────────────────────────────────────────── */
+/**
+ * openProtocolBrowser(sessionId, meetingId, meetings, opts)
+ *
+ * opts.container    — DOM element to append into (default: #chat-column)
+ * opts.standalone   — true: fills the container, hides chat bar
+ * opts.postCompletion / opts.originalQuestion — as before
+ */
 function openProtocolBrowser(sessionId, meetingId, meetings, opts = {}) {
-  _sid      = sessionId;
+  _sid        = sessionId;
+  _standalone = !!opts.standalone;
+  _container  = opts.container || document.getElementById('chat-column');
+
   _meetings = (meetings || []).map(m => {
     const clean = s => String(s || '').replace(/_/g, ' ').trim();
     let title;
@@ -78,11 +90,10 @@ function openProtocolBrowser(sessionId, meetingId, meetings, opts = {}) {
   if (_panel) _panel.remove();
 
   _panel = document.createElement('div');
-  _panel.className = 'msg-agent browser-wrapper';
+  _panel.className = _standalone ? 'browser-standalone-wrapper' : 'msg-agent browser-wrapper';
   _panel.innerHTML = _shellHtml(opts.postCompletion);
 
-  const chatColumn = document.getElementById('chat-column');
-  chatColumn.appendChild(_panel);
+  _container.appendChild(_panel);
 
   const qLabel = _panel.querySelector('#browser-question-label');
   if (qLabel) qLabel.textContent = _origQ || 'עיון בפרוטוקולים';
@@ -91,25 +102,46 @@ function openProtocolBrowser(sessionId, meetingId, meetings, opts = {}) {
   _loadMeeting(meetingId);
   _loadAllParticipants();
 
-  // Panel chat submit
-  _panel.querySelector('#browser-chat-submit').addEventListener('click', _browserAsk);
-  _panel.querySelector('#browser-chat-input').addEventListener('keydown', e => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); _browserAsk(); }
-  });
+  // On mobile, auto-collapse the sidebar in standalone mode
+  if (_standalone && window.innerWidth < 768) {
+    const sb  = _panel.querySelector('#browser-sidebar');
+    const btn = _panel.querySelector('#sidebar-collapse-btn');
+    if (sb)  sb.classList.add('sidebar-collapsed');
+    if (btn) btn.textContent = '◀ הצג ישיבות';
+  }
+
+  // Panel chat wiring (only when not standalone)
+  if (!_standalone) {
+    const chatSubmit = _panel.querySelector('#browser-chat-submit');
+    const chatInput  = _panel.querySelector('#browser-chat-input');
+    if (chatSubmit) chatSubmit.addEventListener('click', _browserAsk);
+    if (chatInput)  chatInput.addEventListener('keydown', e => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); _browserAsk(); }
+    });
+  }
 
   // Summarize button (if shown)
   const sumBtn = _panel.querySelector('#browser-summarize-btn');
   if (sumBtn) sumBtn.addEventListener('click', _browserSummarize);
 
-  chatColumn.scrollTop = chatColumn.scrollHeight;
+  _container.scrollTop = _container.scrollHeight;
 }
 
 /* ── Shell HTML ─────────────────────────────────────────────────── */
 function _shellHtml(postCompletion) {
-  const summarizeBtn = postCompletion ? '' :
+  // In standalone mode: no "summarize for me", no chat bar, no close button
+  const summarizeBtn = (postCompletion || _standalone) ? '' :
     `<button id="browser-summarize-btn" class="browser-summarize-btn" title="תמצת על בסיס הפרוטוקולים שנמצאו">
       תמצת עבורי
     </button>`;
+  const closeBtn = _standalone ? '' :
+    `<button class="browser-close-btn" onclick="closeProtocolBrowser()" title="סגור">✕</button>`;
+  const chatBar = _standalone ? '' : `
+  <div class="browser-chat-bar">
+    <textarea id="browser-chat-input" placeholder="שאל שאלה על הישיבה הזו… (Ctrl+Enter)" rows="1"></textarea>
+    <button id="browser-chat-submit" class="browser-chat-submit">שלח</button>
+  </div>`;
+
   return `
 <div class="browser-panel">
   <div class="browser-header">
@@ -118,7 +150,7 @@ function _shellHtml(postCompletion) {
     <span class="browser-breadcrumb" id="browser-question-label"></span>
     <div class="browser-header-actions">
       ${summarizeBtn}
-      <button class="browser-close-btn" onclick="closeProtocolBrowser()" title="סגור">✕</button>
+      ${closeBtn}
     </div>
   </div>
   <div class="browser-body">
@@ -155,10 +187,7 @@ function _shellHtml(postCompletion) {
       </div>
     </div>
   </div>
-  <div class="browser-chat-bar">
-    <textarea id="browser-chat-input" placeholder="שאל שאלה על הישיבה הזו… (Ctrl+Enter)" rows="1"></textarea>
-    <button id="browser-chat-submit" class="browser-chat-submit">שלח</button>
-  </div>
+  ${chatBar}
 </div>`;
 }
 
@@ -706,7 +735,7 @@ async function _browserSummarize() {
 
 /* ── Stream /workspace/ask → new agent message in main chat ─────── */
 async function _streamWorkspaceAsk(question, meetingId) {
-  const chatColumn = document.getElementById('chat-column');
+  const chatColumn = document.getElementById('chat-column') || _container;
 
   // User bubble
   const userRow = document.createElement('div');

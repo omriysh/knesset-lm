@@ -2,7 +2,7 @@
 <html dir="rtl" lang="he">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>מעורב ירושלמי</title>
   <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Assistant:wght@300;400;600;700&family=Heebo:wght@300;400;500;700;800&display=swap" rel="stylesheet"/>
   <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
@@ -82,67 +82,168 @@
   </script>
   <link rel="stylesheet" href="/static/style.css">
 </head>
-<body class="bg-surface overflow-hidden h-screen flex flex-col show-welcome">
+<body class="bg-surface text-on-surface h-[100dvh] flex flex-col overflow-hidden show-welcome">
 
-  <!-- Fixed header -->
-  <header class="flex-shrink-0 border-b border-surface-variant/20">
-    <div class="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
-      <div class="flex flex-col">
-        <div class="text-2xl font-bold text-[#2E7D32]" style="font-family:'Be Vietnam Pro',sans-serif">מעורב ירושלמי</div>
-        <div class="text-xs text-on-surface-variant mt-0.5 opacity-70" style="font-family:'Assistant',sans-serif">כלי מחקר על פעולות הכנסת</div>
+  <!-- ── Fixed header ── -->
+  <header class="flex-shrink-0 bg-surface-container-lowest border-b border-surface-variant/50 shadow-sm z-50">
+    <div class="px-4 md:px-6 py-3 flex items-center justify-between gap-3">
+
+      <!-- Brand -->
+      <div class="flex items-center gap-2.5 flex-shrink-0">
+        <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-primary to-primary-dim flex items-center justify-center shadow-[0_4px_16px_rgba(38,104,41,0.2)]">
+          <span class="material-symbols-outlined text-on-primary" style="font-size:20px;font-variation-settings:'FILL' 1">account_balance</span>
+        </div>
+        <div>
+          <div class="text-base sm:text-lg font-bold text-primary leading-tight" style="font-family:'Be Vietnam Pro',sans-serif">מעורב ירושלמי</div>
+          <div class="hidden sm:block text-xs text-on-surface-variant opacity-70 leading-tight" style="font-family:'Assistant',sans-serif">כלי מחקר על פעולות הכנסת</div>
+        </div>
       </div>
-      <div class="flex items-center gap-3">
-        <button class="p-2 text-on-surface-variant hover:bg-surface-container rounded-full transition-colors" title="הגדרות" onclick="openSettings()">
-          <span class="material-symbols-outlined">settings</span>
+
+      <!-- Desktop tab navigation (center) -->
+      <nav class="hidden md:flex items-center gap-1 bg-surface-container-low p-1.5 rounded-lg">
+        <button onclick="switchTab('research')" id="dt-tab-research"
+          class="app-tab-btn active px-5 py-1.5 rounded-md text-sm font-semibold transition-all duration-200">
+          מחקר אוטומטי
         </button>
-        <button class="p-2 text-on-surface-variant hover:bg-surface-container rounded-full transition-colors" title="עזרה" onclick="openHelp()">
-          <span class="material-symbols-outlined">help</span>
+        <button onclick="switchTab('reading')" id="dt-tab-reading"
+          class="app-tab-btn px-5 py-1.5 rounded-md text-sm font-semibold transition-all duration-200">
+          קריאה עצמית
+        </button>
+        <button onclick="switchTab('history')" id="dt-tab-history"
+          class="app-tab-btn px-5 py-1.5 rounded-md text-sm font-semibold transition-all duration-200">
+          היסטוריה
+        </button>
+      </nav>
+
+      <!-- Header actions -->
+      <div class="flex items-center gap-1">
+        <button class="p-2 rounded-full text-on-surface-variant hover:bg-surface-container-high hover:text-primary transition-colors" title="עזרה" onclick="openHelp()">
+          <span class="material-symbols-outlined" style="font-size:20px">help</span>
+        </button>
+        <button class="p-2 rounded-full text-on-surface-variant hover:bg-surface-container-high hover:text-primary transition-colors" title="הגדרות" onclick="openSettings()">
+          <span class="material-symbols-outlined" style="font-size:20px">settings</span>
         </button>
       </div>
     </div>
   </header>
 
-  <!-- Scrollable chat column -->
-  <div id="chat-column" class="flex-1 overflow-y-auto px-4 py-6 space-y-4">
-    <!-- Welcome state: shown until first query -->
-    <div id="welcome-state" class="flex flex-col items-center justify-center h-full gap-4 text-center py-16">
-      <div class="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
-        <span class="material-symbols-outlined text-3xl text-primary" style="font-variation-settings:'FILL' 1">auto_awesome</span>
+  <!-- ══════════════════════════════════════════════════════════
+       Tab: Research (מחקר אוטומטי) — existing chat interface
+  ══════════════════════════════════════════════════════════ -->
+  <div id="tab-research" class="app-tab-panel">
+
+    <div id="chat-column" class="flex-1 overflow-y-auto px-4 py-6 space-y-4">
+      <!-- Welcome state (shown until first query) -->
+      <div id="welcome-state" class="flex flex-col items-center justify-center h-full gap-4 text-center py-16">
+        <div class="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
+          <span class="material-symbols-outlined text-3xl text-primary" style="font-variation-settings:'FILL' 1">auto_awesome</span>
+        </div>
+        <div>
+          <div class="text-xl font-bold text-on-surface mb-1">שאל/י שאלה על חברי כנסת</div>
+          <div class="text-sm text-on-surface-variant max-w-sm">מה אני? אפשר לקרוא בעזרה משמאל למעלה</div>
+        </div>
       </div>
-      <div>
-        <div class="text-xl font-bold text-on-surface mb-1">שאל/י שאלה על חברי כנסת</div>
-        <div class="text-sm text-on-surface-variant max-w-sm">מה אני? אפשר לקרוא בעזרה משמאל למעלה</div>
+      <!-- Messages appended here by JS -->
+    </div>
+
+    <div id="input-bar" class="flex-shrink-0 bg-surface-container-highest/30 backdrop-blur-md border-t border-outline-variant/10 px-4 py-3">
+      <div class="max-w-5xl mx-auto flex items-end gap-3">
+        <textarea
+          id="query-input"
+          placeholder="שאל/י שאלה..."
+          rows="1"
+          class="flex-1 resize-none bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-4 py-3 text-sm text-on-surface placeholder-on-surface-variant/60 outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all leading-relaxed"
+          style="min-height:44px;max-height:160px"
+        ></textarea>
+        <button
+          id="submit-btn"
+          class="flex-shrink-0 w-11 h-11 bg-primary text-on-primary rounded-xl flex items-center justify-center hover:bg-primary-dim transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
+          title="שלח (Ctrl+Enter)"
+          style="transform: rotate(180deg);"
+        >
+          <span class="material-symbols-outlined text-xl" style="font-variation-settings:'FILL' 1">send</span>
+        </button>
+      </div>
+      <div class="max-w-5xl mx-auto mt-1.5 px-1 flex items-center gap-3">
+        <span class="text-xs text-on-surface-variant/50">Ctrl+Enter לשליחה</span>
+        <span id="query-error" class="input-error hidden"></span>
       </div>
     </div>
-    <!-- Messages appended here by JS -->
   </div>
 
-  <!-- Fixed input bar at bottom -->
-  <div id="input-bar" class="flex-shrink-0 bg-surface-container-highest/30 backdrop-blur-md border-t border-outline-variant/10 px-4 py-3">
-    <div class="max-w-5xl mx-auto flex items-end gap-3">
-      <textarea
-        id="query-input"
-        placeholder="שאל/י שאלה..."
-        rows="1"
-        class="flex-1 resize-none bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-4 py-3 text-sm text-on-surface placeholder-on-surface-variant/60 outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all leading-relaxed"
-        style="min-height:44px;max-height:160px"
-      ></textarea>
-      <button
-        id="submit-btn"
-        class="flex-shrink-0 w-11 h-11 bg-primary text-on-primary rounded-xl flex items-center justify-center hover:bg-primary-dim transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
-        title="שלח (Ctrl+Enter)"
-        style="transform: rotate(180deg);"
-      >
-        <span class="material-symbols-outlined text-xl" style="font-variation-settings:'FILL' 1">send</span>
-      </button>
+  <!-- ══════════════════════════════════════════════════════════
+       Tab: Reading (קריאה עצמית) — protocol browser
+  ══════════════════════════════════════════════════════════ -->
+  <div id="tab-reading" class="app-tab-panel hidden">
+
+    <!-- Search bar -->
+    <div class="flex-shrink-0 bg-surface-container-lowest border-b border-surface-variant/20 px-4 py-3">
+      <div class="max-w-5xl mx-auto flex items-center gap-3">
+        <div class="flex-1 relative">
+          <div class="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
+            <span class="material-symbols-outlined text-on-surface-variant/50" style="font-size:20px">search</span>
+          </div>
+          <input
+            id="reading-search-input"
+            type="text"
+            class="w-full bg-surface-container border border-outline-variant/40 rounded-xl px-4 pr-11 py-3 text-sm text-on-surface placeholder-on-surface-variant/60 outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all"
+            placeholder="חפש פרוטוקולים סמנטית…"
+            onkeydown="if(event.key==='Enter')browseSearch()"
+          />
+        </div>
+        <button
+          id="reading-search-btn"
+          class="flex-shrink-0 px-5 py-3 bg-primary text-on-primary rounded-xl font-semibold text-sm hover:bg-primary-dim transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-sm whitespace-nowrap"
+          onclick="browseSearch()"
+        >
+          חפש
+        </button>
+      </div>
     </div>
-    <div class="max-w-5xl mx-auto mt-1.5 px-1 flex items-center gap-3">
-      <span class="text-xs text-on-surface-variant/50">Ctrl+Enter לשליחה</span>
-      <span id="query-error" class="input-error hidden"></span>
+
+    <!-- Browser content area -->
+    <div id="reading-browser-area" class="flex-1 overflow-hidden relative">
+      <!-- Placeholder (shown before first search) -->
+      <div id="reading-placeholder" class="flex flex-col items-center justify-center h-full gap-4 text-center px-6">
+        <div class="w-16 h-16 rounded-full bg-secondary/10 flex items-center justify-center">
+          <span class="material-symbols-outlined text-secondary" style="font-size:32px;font-variation-settings:'FILL' 1">library_books</span>
+        </div>
+        <div>
+          <div class="text-xl font-bold text-on-surface mb-2">גלה פרוטוקולים</div>
+          <div class="text-sm text-on-surface-variant max-w-xs leading-relaxed">חפש סמנטית כדי לאתר ישיבות ועדה רלוונטיות. תוכל לעיין בפרוטוקולים ולקרוא את הסיכומים.</div>
+        </div>
+      </div>
     </div>
   </div>
 
-  <!-- Help overlay -->
+  <!-- ══════════════════════════════════════════════════════════
+       Tab: History (היסטוריה) — coming soon placeholder
+  ══════════════════════════════════════════════════════════ -->
+  <div id="tab-history" class="app-tab-panel hidden">
+    <div class="flex flex-col items-center justify-center flex-1 gap-3 text-center px-6">
+      <div style="font-size:56px;line-height:1">😉</div>
+      <div class="text-2xl font-bold text-on-surface" style="font-family:'Be Vietnam Pro',sans-serif">בקרוב</div>
+      <div class="text-sm text-on-surface-variant max-w-xs leading-relaxed">שמירת מחקרים, תשובות ופרוטוקולים מועדפים</div>
+    </div>
+  </div>
+
+  <!-- ── Mobile bottom tab navigation ── -->
+  <nav id="mobile-tab-bar" class="md:hidden fixed bottom-0 inset-x-0 z-50 bg-surface-container-lowest border-t border-surface-variant/20 flex safe-area-bottom">
+    <button onclick="switchTab('research')" id="mob-tab-research" class="mobile-tab-btn active flex-1">
+      <span class="material-symbols-outlined" style="font-size:22px">chat</span>
+      <span>מחקר</span>
+    </button>
+    <button onclick="switchTab('reading')" id="mob-tab-reading" class="mobile-tab-btn flex-1">
+      <span class="material-symbols-outlined" style="font-size:22px">library_books</span>
+      <span>קריאה</span>
+    </button>
+    <button onclick="switchTab('history')" id="mob-tab-history" class="mobile-tab-btn flex-1">
+      <span class="material-symbols-outlined" style="font-size:22px">history</span>
+      <span>היסטוריה</span>
+    </button>
+  </nav>
+
+  <!-- ── Help overlay ── -->
   <div id="help-overlay" onclick="if(event.target===this)closeHelp()">
     <div id="help-panel">
       <div id="help-content" class="prose-content">טוען…</div>
@@ -150,7 +251,7 @@
     </div>
   </div>
 
-  <!-- Settings overlay -->
+  <!-- ── Settings overlay ── -->
   <div id="settings-overlay" onclick="if(event.target===this)closeSettings()">
     <div id="settings-panel">
       <h2>הגדרות</h2>
@@ -170,6 +271,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
   <script src="/static/browser.js"></script>
+  <script src="/static/tabs.js"></script>
   <script type="module" src="/static/app.js"></script>
 </body>
 </html>
