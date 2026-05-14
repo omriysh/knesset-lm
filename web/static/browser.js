@@ -106,6 +106,8 @@ function openProtocolBrowser(sessionId, meetingId, meetings, opts = {}) {
   if (_standalone && window.innerWidth < 768) {
     const sb = _panel.querySelector('#browser-sidebar');
     if (sb) sb.classList.add('sidebar-collapsed');
+    const sideTab = _panel.querySelector('#sidebar-side-tab');
+    if (sideTab) sideTab.style.display = 'flex';
   }
 
   // Panel chat wiring (only when not standalone)
@@ -153,20 +155,25 @@ function _shellHtml(postCompletion) {
       <span class="material-symbols-outlined" style="font-size:15px">format_list_bulleted</span>
       <span>ישיבות</span>
     </button>
+    <button class="browser-summary-btn" id="browser-summary-btn" onclick="browserToggleSummary()" title="סיכום AI" style="display:none">
+      <span class="material-symbols-outlined" style="font-size:16px;font-variation-settings:'FILL' 1">auto_awesome</span>
+      <span>סיכום</span>
+    </button>
     <span class="browser-breadcrumb" id="browser-question-label"></span>
     <div class="browser-header-actions">
       ${summarizeBtn}
       ${closeBtn}
     </div>
   </div>
+  <div class="browser-summary-bar" id="browser-summary-bar"></div>
   <div class="browser-body">
     <div class="browser-transcript-wrap">
+      <div class="browser-transcript-col" id="browser-transcript-col">
+        <div class="browser-loading">טוען…</div>
+      </div>
       <div class="heatmap-strip" id="heatmap-strip">
         <div class="hm-bands" id="hm-bands"></div>
         <div class="hm-viewport" id="hm-viewport"></div>
-      </div>
-      <div class="browser-transcript-col" id="browser-transcript-col">
-        <div class="browser-loading">טוען…</div>
       </div>
     </div>
     <div class="browser-sidebar" id="browser-sidebar">
@@ -200,6 +207,9 @@ function _shellHtml(postCompletion) {
       </div>
     </div>
   </div>
+  <button class="sidebar-side-tab" id="sidebar-side-tab" onclick="browserToggleSidebar()" title="פתח רשימת ישיבות" style="display:none">
+    <span class="material-symbols-outlined" id="sidebar-side-tab-icon" style="font-size:18px">format_list_bulleted</span>
+  </button>
   ${chatBar}
 </div>`;
 }
@@ -344,6 +354,19 @@ function browserToggleSidebar() {
   // Mobile: flip the icon in the header button
   const mobIcon = _panel?.querySelector('.sidebar-mob-btn .material-symbols-outlined');
   if (mobIcon) mobIcon.textContent = collapsed ? 'format_list_bulleted' : 'close';
+  // Mobile: side-tab visible only when sidebar is collapsed
+  const sideTab = _panel?.querySelector('#sidebar-side-tab');
+  if (sideTab) sideTab.style.display = collapsed ? 'flex' : 'none';
+  const sideTabIcon = _panel?.querySelector('#sidebar-side-tab-icon');
+  if (sideTabIcon) sideTabIcon.textContent = 'format_list_bulleted';
+}
+
+function browserToggleSummary() {
+  const bar = _panel?.querySelector('#browser-summary-bar');
+  if (!bar) return;
+  const open = bar.classList.toggle('open');
+  const btn = _panel?.querySelector('#browser-summary-btn span:not(.material-symbols-outlined)');
+  if (btn) btn.textContent = open ? 'סגור' : 'סיכום';
 }
 
 /* ── Participant loading ─────────────────────────────────────────── */
@@ -405,9 +428,26 @@ async function _loadMeeting(meetingId) {
     _summary = summaryData;
     col.innerHTML =
       `<div class="transcript-inner">` +
-        _summaryHtml(summaryData) +
+        _summaryHtml(summaryData, m) +
         _transcriptHtml(transcriptData) +
       `</div>`;
+
+    // Populate header summary bar (desktop)
+    const summaryBar = _panel?.querySelector('#browser-summary-bar');
+    if (summaryBar) {
+      summaryBar.innerHTML = '<div class="summary-bar-inner">' + _summaryBodyHtml(summaryData) + '</div>';
+    }
+    const summaryBtn = _panel?.querySelector('#browser-summary-btn');
+    if (summaryBtn) summaryBtn.style.display = 'flex';
+    // Wire bullet clicks in header bar
+    _panel?.querySelectorAll('#browser-summary-bar .summary-bullet-btn[data-bullet-idx]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const idx = parseInt(btn.dataset.bulletIdx, 10);
+        _activeBulletIdx = (_activeBulletIdx === idx) ? null : idx;
+        _renderHeatmap();
+        _highlightBulletBtn(idx);
+      });
+    });
 
     // Wire summary bullet clicks for heatmap reranking
     col.querySelectorAll('.summary-bullet-btn[data-bullet-idx]').forEach(btn => {
@@ -441,9 +481,16 @@ async function _loadMeeting(meetingId) {
 }
 
 /* ── Summary panel ───────────────────────────────────────────────── */
-function _summaryHtml(data) {
+function _summaryHtml(data, m) {
   const topics = data.topics || [];
   if (!topics.length) return '';
+
+  const metaParts = [];
+  if (m?.committee) metaParts.push(_esc((m.committee + '').replace(/_/g, ' ').trim()));
+  if (m?.date)      metaParts.push(_esc((m.date + '').replace(/_/g, '/')));
+  const metaHtml = metaParts.length
+    ? `<span class="summary-toggle-sep">|</span><span class="summary-toggle-meta">${metaParts.join(' | ')}</span>`
+    : '';
 
   const sections = topics.map((t, i) => {
     const bullets = (t.bullets || []).map(b => {
@@ -471,9 +518,38 @@ function _summaryHtml(data) {
   <summary class="summary-toggle">
     <span class="summary-toggle-arrow">▼</span>
     <span>סיכום AI</span>
+    ${metaHtml}
   </summary>
   <div class="summary-body">${sections}</div>
 </details>`;
+}
+
+function _summaryBodyHtml(data) {
+  const topics = data.topics || [];
+  if (!topics.length) return '';
+  return topics.map((t, i) => {
+    const bullets = (t.bullets || []).map(b => {
+      const text      = typeof b === 'string' ? b : b.text;
+      const bulletIdx = typeof b === 'string' ? null : b.bullet_idx;
+      const idxAttr   = bulletIdx != null ? `data-bullet-idx="${bulletIdx}"` : '';
+      return `<li>
+        <button class="summary-bullet-btn" ${idxAttr}>
+          <span class="bullet-indicator"></span>
+          <span>${marked.parseInline(text)}</span>
+        </button>
+      </li>`;
+    }).join('');
+    return `<div class="summary-section">
+       <div class="summary-heading">${_esc(t.heading)}</div>
+       <ul class="summary-bullets">${bullets}</ul>
+     </div>`;
+  }).join('');
+}
+
+function _highlightBulletBtn(idx) {
+  _panel?.querySelectorAll('.summary-bullet-btn').forEach(b => {
+    b.classList.toggle('active', parseInt(b.dataset.bulletIdx, 10) === idx);
+  });
 }
 
 /* ── Transcript ──────────────────────────────────────────────────── */

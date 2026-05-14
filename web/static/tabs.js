@@ -101,11 +101,30 @@ async function browseSearch() {
       }
     );
 
+    // Collapse filter bar now that results are loaded
+    _collapseRfb(query || keyword);
+
   } catch (err) {
     _showBrowseError('שגיאת רשת: ' + err.message);
   } finally {
     _setBrowseLoading(false);
   }
+}
+
+/* ── Filter bar collapse ─────────────────────────────────────────── */
+function rfbExpand() {
+  document.querySelector('.rfb')?.classList.remove('rfb-collapsed');
+}
+
+function rfbCollapse() {
+  const q = document.getElementById('rfb-collapsed-query')?.textContent || '';
+  _collapseRfb(q);
+}
+
+function _collapseRfb(queryText) {
+  document.querySelector('.rfb')?.classList.add('rfb-collapsed', 'rfb-has-results');
+  const q = document.getElementById('rfb-collapsed-query');
+  if (q) q.textContent = queryText;
 }
 
 /* ── Helpers ─────────────────────────────────────────────────────── */

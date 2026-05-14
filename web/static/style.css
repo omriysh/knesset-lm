@@ -659,6 +659,7 @@ details[open] > .sub-summary::before { transform: rotate(90deg); }
   flex-direction: column;
   max-height: 80vh;
   direction: rtl;
+  position: relative;
 }
 
 /* ── Header ─────────────────────────────────────────────────── */
@@ -712,6 +713,39 @@ details[open] > .sub-summary::before { transform: rotate(90deg); }
   line-height: 1;
 }
 .browser-close-btn:hover { background: rgba(0,0,0,0.2); }
+
+/* ── Summary header sub-bar ─────────────────────────────────── */
+.browser-summary-bar {
+  flex-shrink: 0;
+  background: #fff;
+  border-bottom: 1px solid #e2e3df;
+  overflow: hidden;
+  max-height: 0;
+  transition: max-height 0.3s ease;
+}
+.browser-summary-bar.open {
+  max-height: 300px;
+  overflow-y: auto;
+}
+.summary-bar-inner {
+  padding: 10px 16px;
+  direction: rtl;
+}
+.browser-summary-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(255,255,255,0.15);
+  border: 1px solid rgba(255,255,255,0.3);
+  border-radius: 8px;
+  color: #d1ffc8;
+  cursor: pointer;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  font-family: inherit;
+  flex-shrink: 0;
+}
+.browser-summary-btn:hover { background: rgba(255,255,255,0.28); }
 
 /* ── Body (two columns) ─────────────────────────────────────── */
 .browser-body {
@@ -887,10 +921,39 @@ details[open] > .sub-summary::before { transform: rotate(90deg); }
 }
 .sidebar-top-close:hover { background: #e8e8e5; color: #2e2f2d; }
 
+/* Floating side-tab: mobile standalone only */
+.sidebar-side-tab {
+  display: none;
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 54px;
+  background: #266829;
+  color: #d1ffc8;
+  border: none;
+  border-radius: 8px 0 0 8px;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 60;
+  flex-shrink: 0;
+  padding: 0;
+}
+.sidebar-side-tab:hover { background: #185c1e; }
+
 @media (max-width: 767px) {
   .sidebar-mob-btn  { display: flex; }
   .sidebar-top-header { display: none; }
   .sidebar-expand-btn { display: none !important; }
+  .browser-standalone-wrapper .sidebar-top-header { display: flex; }
+}
+.browser-standalone-wrapper .browser-header { display: none; }
+.browser-standalone-wrapper .browser-summary-bar { display: none !important; }
+.browser-standalone-wrapper #browser-summary-btn { display: none !important; }
+@media (min-width: 768px) {
+  .browser-standalone-wrapper .sidebar-top-close { display: none; }
 }
 .sidebar-inner {
   flex: 1;
@@ -1114,7 +1177,7 @@ details[open] > .sub-summary::before { transform: rotate(90deg); }
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 14px;
+  padding: 8px 14px;
   cursor: pointer;
   font-size: 0.85rem;
   font-weight: 700;
@@ -1124,6 +1187,8 @@ details[open] > .sub-summary::before { transform: rotate(90deg); }
   direction: rtl;
 }
 .summary-toggle::-webkit-details-marker { display: none; }
+.summary-toggle-sep  { color: #b0b0aa; font-weight: 400; }
+.summary-toggle-meta { font-weight: 400; font-size: 0.78rem; color: #6b6c69; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .summary-pills-row {
   display: flex;
@@ -1902,6 +1967,11 @@ body > header {
   align-items: center;
 }
 
+/* Filter dropdowns must overflow the tab panel */
+#tab-reading.app-tab-panel {
+  overflow: visible;
+}
+
 /* ── Desktop tab buttons ────────────────────────────────────────── */
 .app-tab-btn {
   color: #5b5c5a;
@@ -2118,17 +2188,68 @@ body > header {
   border-color: rgba(176,37,0,0.5);
 }
 
-/* ── Floating dropdown ──────────────────────────────────────────── */
+/* ── Collapsed filter bar state ─────────────────────────────────── */
+.rfb.rfb-collapsed .rfb-inner { display: none; }
+.rfb-collapsed-bar { display: none; align-items: center; gap: 10px; padding: 8px 16px; }
+.rfb.rfb-collapsed .rfb-collapsed-bar { display: flex; }
+
+.rfb-expand-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  background: #266829;
+  color: #d1ffc8;
+  border: none;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+.rfb-expand-btn:hover { background: #185c1e; }
+
+.rfb-inner-header {
+  display: none;
+  justify-content: flex-start;
+  padding: 4px 14px 0;
+}
+.rfb.rfb-has-results .rfb-inner-header { display: flex; }
+.rfb-collapse-btn {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.78rem;
+  color: #5b5c5a;
+  background: transparent;
+  border: none;
+  padding: 2px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.rfb-collapse-btn:hover { background: rgba(0,0,0,0.06); color: #2e2f2d; }
+
+.rfb-collapsed-query {
+  font-size: 0.82rem;
+  color: #5b5c5a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Floating dropdown (portalled to <body>, position set by JS) ─── */
 .rfb-dropdown {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
+  position: fixed;
+  /* top + right set dynamically in _rfOpenDrop */
   min-width: 230px;
   background: #ffffff;
   border: 1px solid rgba(173,173,171,0.3);
   border-radius: 12px;
   box-shadow: 0 8px 28px rgba(0,0,0,0.11), 0 2px 8px rgba(0,0,0,0.06);
-  z-index: 300;
+  z-index: 9999;
   overflow: hidden;
   animation: rfb-drop-in 0.15s ease;
 }
@@ -2312,7 +2433,7 @@ body > header {
 
 /* ── Mobile: stack layout vertically, scroll filter row ─────────── */
 @media (max-width: 640px) {
-  .rfb-body         { flex-direction: column-reverse; gap: 10px; }
+  .rfb-body         { flex-direction: column; gap: 10px; }
   .rfb-btn-area     { border-right: none; border-top: 1px solid rgba(173,173,171,0.22);
                       margin-right: 0; padding: 10px 0 0; }
   .rfb-search-btn   { width: 100%; flex-direction: row; gap: 6px; padding: 10px; border-radius: 12px; }
@@ -2417,7 +2538,11 @@ body > header {
   .browser-standalone-wrapper .browser-sidebar {
     width: 180px;
   }
+  .browser-standalone-wrapper .browser-sidebar.sidebar-collapsed {
+    width: 0px;
+  }
 }
+
 
 /* ── Browse error banner ────────────────────────────────────────── */
 .browse-error-banner {

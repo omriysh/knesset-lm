@@ -178,7 +178,21 @@
 
     <!-- Filter bar -->
     <div class="rfb flex-shrink-0">
+      <!-- Collapsed state (shown after search) -->
+      <div class="rfb-collapsed-bar" id="rfb-collapsed-bar">
+        <button class="rfb-expand-btn" onclick="rfbExpand()">
+          <span class="material-symbols-outlined" style="font-size:16px">tune</span>
+          חפש שוב
+        </button>
+        <span class="rfb-collapsed-query" id="rfb-collapsed-query"></span>
+      </div>
       <div class="rfb-inner">
+        <div class="rfb-inner-header">
+          <button class="rfb-collapse-btn" onclick="rfbCollapse()" title="קפל">
+            <span class="material-symbols-outlined" style="font-size:15px">keyboard_arrow_up</span>
+            סגור
+          </button>
+        </div>
         <div class="rfb-body">
 
           <!-- ── Fields + filters (right, takes remaining width) ── -->

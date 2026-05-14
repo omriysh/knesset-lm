@@ -31,9 +31,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
   _rfLoadMeta();
 
+  // Portal: move all dropdowns to <body> so overflow-x:auto on rfb-filter-row
+  // can't clip them (fixed children position relative to viewport, not parent).
+  const portal = document.createElement('div');
+  portal.id = 'rfb-portal';
+  document.body.appendChild(portal);
+  document.querySelectorAll('.rfb-dropdown').forEach(d => portal.appendChild(d));
+
   document.addEventListener('click', e => {
-    if (_rfOpen && !e.target.closest('.rfb-filter-item')) _rfClose(_rfOpen);
+    if (_rfOpen &&
+        !e.target.closest('.rfb-filter-item') &&
+        !e.target.closest('.rfb-dropdown')) {
+      _rfClose(_rfOpen);
+    }
   });
+
+  // Close on scroll outside the dropdown (capture catches rfb-filter-row too)
+  document.addEventListener('scroll', e => {
+    if (_rfOpen && !e.target.closest?.('.rfb-dropdown')) _rfClose(_rfOpen);
+  }, { passive: true, capture: true });
 });
 
 async function _rfLoadMeta() {
@@ -72,7 +88,28 @@ function rfToggle(type) {
 }
 
 function _rfOpenDrop(type) {
-  document.getElementById(`rfdrop-${type}`)?.classList.remove('hidden');
+  const drop = document.getElementById(`rfdrop-${type}`);
+  if (!drop) return;
+  drop.classList.remove('hidden');
+
+  // Position below the trigger button via viewport coordinates
+  const btn = document.getElementById(`fitem-${type}`)?.querySelector('.rfb-filter-btn');
+  if (btn) {
+    const r        = btn.getBoundingClientRect();
+    const dropMinW = 230;
+    const margin   = 6;
+    drop.style.top = (r.bottom + margin) + 'px';
+    if (r.right >= dropMinW + margin) {
+      // Enough room to the left: right-anchor with button's right edge
+      drop.style.right = Math.max(margin, window.innerWidth - r.right) + 'px';
+      drop.style.left  = 'auto';
+    } else {
+      // Near left edge: left-anchor, clamped so it doesn't fall off right
+      drop.style.left  = Math.max(margin, Math.min(r.left, window.innerWidth - dropMinW - margin)) + 'px';
+      drop.style.right = 'auto';
+    }
+  }
+
   const chev = document.getElementById(`rfchev-${type}`);
   if (chev) chev.textContent = 'expand_less';
   document.getElementById(`fitem-${type}`)?.classList.add('rfb-filter-item--open');
