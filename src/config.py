@@ -139,7 +139,6 @@ RESEARCH_PER_TOOL_TIMEOUT_SECONDS       = 90
 
 # Concurrency
 RESEARCH_DAG_MAX_WORKERS         = 4
-RESEARCH_DEEP_DIVE_MAX_PARALLEL  = 1
 
 # BM25 / morphology
 BM25_DIR             = DATA_DIR / "bm25"

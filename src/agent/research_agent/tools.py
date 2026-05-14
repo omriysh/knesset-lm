@@ -451,7 +451,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         },
     ),
 
-    # ── Deep-dive (planner-only) ──────────────────────────────────────────
+    # ── Deep-dive ─────────────────────────────────────────────────────────
     ToolSpec(
         name="deep_dive_meeting",
         schema={
@@ -460,8 +460,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
                 "Heavy analysis of a single meeting. mode='rerank' returns "
                 "top reranked pass-1/pass-2 chunks for focus_query. "
                 "mode='full' runs an LLM pass over the entire meeting "
-                "(approximately 5 LLM calls budget). Allocated only by the "
-                "planner — see §5.3.1."
+                "(approximately 5 LLM calls budget). Use sparingly."
             ),
             "properties": {
                 "meeting_id":  {"type": "string"},
@@ -477,7 +476,6 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         handler=handle_deep_dive_meeting,
         task_kinds=["deep_dive"],
         cost_hint="expensive",
-        planner_only=True,
         ui={
             "meta_note": "מתוך ניתוח מעמיק של קטעים רלוונטיים מישיבת הוועדה",
             "enrich_fields": ["meeting_id"],

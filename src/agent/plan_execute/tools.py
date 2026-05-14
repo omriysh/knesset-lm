@@ -50,14 +50,8 @@ EXPAND_TOOL_SCHEMA: dict = {
 
 
 def list_tools_for_planner(registry: ToolRegistry) -> list[dict]:
-    """Return all tools from *registry* (including ``planner_only=True`` ones)
-    as OpenAI-style JSON-schema dicts, with the ``expand`` pseudo-tool
-    appended at the end.
-
-    Each tool's full schema comes from ``spec.schema`` which already carries
-    the JSON Schema parameters block; we wrap it with the standard
-    ``{"type": "function", "function": {...}}`` envelope expected by the LLM
-    API.
+    """Return all tools from *registry* as OpenAI-style JSON-schema dicts,
+    with the ``expand`` pseudo-tool appended at the end.
     """
     result: list[dict] = []
     for spec in registry or []:
@@ -76,23 +70,14 @@ def list_tools_for_planner(registry: ToolRegistry) -> list[dict]:
 def list_tools_for_executor(
     registry: ToolRegistry,
     allowed: list[str],
-    allow_planner_only: bool = False,
 ) -> list[dict]:
-    """Return the subset of *registry* whose ``name`` is in *allowed* AND
-    whose ``planner_only`` flag is ``False`` (or *allow_planner_only* is
-    ``True``), as OpenAI-style JSON-schema dicts, with the ``expand``
-    pseudo-tool appended at the end.
-
-    The planner assigns a concrete set of tool names to each executor step
-    via the plan; this function enforces that only non-planner-only tools
-    are ever handed to the executor — except for ``deep_dive`` steps, where
-    the caller passes ``allow_planner_only=True``.
+    """Return the subset of *registry* whose ``name`` is in *allowed*,
+    as OpenAI-style JSON-schema dicts, with the ``expand`` pseudo-tool
+    appended at the end.
     """
     allowed_set = set(allowed or [])
     result: list[dict] = []
     for spec in registry or []:
-        if spec.planner_only and not allow_planner_only:
-            continue
         if spec.name not in allowed_set:
             continue
         result.append({

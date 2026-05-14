@@ -2,8 +2,7 @@
 concurrency.py
 
 DAGExecutor — schedules plan steps under a fixed-size ThreadPoolExecutor,
-respecting per-step DAG dependencies, with a single-slot lane reserved
-for `task_kind == "deep_dive"` steps.
+respecting per-step DAG dependencies.
 
 See: Documentation/KnessetLM/Development/Claude/plan-and-execute-design.md §9
 """
@@ -20,10 +19,7 @@ from concurrent.futures import (
 )
 from typing import Any, Callable, Iterator
 
-from config import (
-    RESEARCH_DAG_MAX_WORKERS,
-    RESEARCH_DEEP_DIVE_MAX_PARALLEL,
-)
+from config import RESEARCH_DAG_MAX_WORKERS
 
 from agent.plan_execute.plan import Step
 
@@ -51,14 +47,8 @@ class DAGExecutor:
     def __init__(
         self,
         max_workers: int = RESEARCH_DAG_MAX_WORKERS,
-        deep_dive_max_parallel: int = RESEARCH_DEEP_DIVE_MAX_PARALLEL,
     ):
         self._pool = ThreadPoolExecutor(max_workers=max_workers)
-        # Deep-dive lane: a Semaphore gates *any* step whose task_kind ==
-        # "deep_dive" — the worker acquires the slot before doing real work
-        # and releases it on the way out.
-        self._deep_dive_sem = threading.Semaphore(deep_dive_max_parallel)
-
         self._lock = threading.Lock()
         self._futures: dict[str, Future] = {}             # step_id -> Future
         self._steps: dict[str, Step] = {}                 # step_id -> Step
@@ -78,8 +68,6 @@ class DAGExecutor:
         whatever `fn(step)` returns.
 
         Waits for all `step.deps` to have completed before invoking `fn`.
-        Deep-dive steps additionally hold the deep-dive semaphore for the
-        duration of `fn`.
         """
         with self._lock:
             if self._cancelled:
@@ -97,8 +85,6 @@ class DAGExecutor:
             dep_futures = [
                 self._futures[d] for d in step.deps if d in self._futures
             ]
-
-        is_deep_dive = step.task_kind == "deep_dive"
 
         def _runner() -> Any:
             # Wait for dep futures first. We do this *inside* the worker
@@ -120,15 +106,7 @@ class DAGExecutor:
             if self._cancelled:
                 raise RuntimeError(f"step {step.id!r} cancelled before start")
 
-            if is_deep_dive:
-                # Block for a deep-dive slot.
-                self._deep_dive_sem.acquire()
-                try:
-                    return fn(step)
-                finally:
-                    self._deep_dive_sem.release()
-            else:
-                return fn(step)
+            return fn(step)
 
         future = self._pool.submit(_runner)
         with self._lock:

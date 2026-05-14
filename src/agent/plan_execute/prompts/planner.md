@@ -40,7 +40,7 @@ fences, no commentary.
 Plan JSON schema:
 {plan_schema}
 
-Tool catalogue (full surface, including planner-only tools):
+Tool catalogue:
 {tool_catalogue}
 
 Currently available evidence:

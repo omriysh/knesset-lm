@@ -41,7 +41,6 @@ def _make_find_mk_spec() -> ToolSpec:
         handler=lambda args: _make_tool_envelope(),
         task_kinds=["discover"],
         cost_hint="cheap",
-        planner_only=False,
     )
 
 
@@ -52,7 +51,6 @@ def _make_deep_dive_spec() -> ToolSpec:
         handler=lambda args: _make_tool_envelope(),
         task_kinds=["deep_dive"],
         cost_hint="expensive",
-        planner_only=True,
     )
 
 
@@ -229,48 +227,6 @@ class TestExecuteStepCallsTool:
 
         assert isinstance(result, ToolEnvelope)
         assert result.error is not None
-
-
-# ── test_execute_step_planner_only_blocked ────────────────────────────────────
-
-class TestExecuteStepPlannerOnlyBlocked:
-    def test_planner_only_tool_blocked_on_non_deep_dive(self, tmp_path):
-        """deep_dive_meeting is planner_only — must not run outside deep_dive step."""
-        registry = [_make_deep_dive_spec()]
-        store = _make_store(tmp_path)
-        # task_kind is 'discover', not 'deep_dive'
-        step = _make_step(
-            task_kind="discover",
-            allowed_tools=("deep_dive_meeting",),
-        )
-
-        def dummy_llm(**kwargs):
-            return {"content": "", "tool_calls": []}
-
-        result = execute_step(step, registry, store, dummy_llm)
-
-        assert isinstance(result, ToolEnvelope)
-        assert result.error is not None
-        # The error should indicate planner_only violation
-        assert "planner" in (result.error or "").lower() or result.error == "planner_only_violation"
-
-    def test_planner_only_tool_allowed_on_deep_dive(self, tmp_path):
-        """deep_dive_meeting IS allowed on a deep_dive step."""
-        registry = [_make_deep_dive_spec()]
-        store = _make_store(tmp_path)
-        step = _make_step(
-            task_kind="deep_dive",
-            allowed_tools=("deep_dive_meeting",),
-            cost_hint="expensive",
-        )
-        llm_call = _make_llm_call_tool_then_record("deep_dive_meeting",
-                                                    args={"meeting_id": "42",
-                                                          "focus_query": "welfare"})
-
-        result = execute_step(step, registry, store, llm_call)
-
-        assert isinstance(result, ToolEnvelope)
-        assert result.error != "planner_only_violation"
 
 
 # ── test_execute_step_budget_enforcement ─────────────────────────────────────

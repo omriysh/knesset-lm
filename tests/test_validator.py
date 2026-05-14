@@ -30,7 +30,7 @@ def _ambiguous_llm_call(**kwargs) -> str:
     return json.dumps({"verdict": "ambiguous", "reason": "could be multiple people"})
 
 
-def _make_tool(name: str, planner_only: bool = False, task_kinds=None) -> ToolSpec:
+def _make_tool(name: str, task_kinds=None) -> ToolSpec:
     return ToolSpec(
         name=name,
         schema={"type": "object", "properties": {}},
@@ -40,16 +40,11 @@ def _make_tool(name: str, planner_only: bool = False, task_kinds=None) -> ToolSp
         ),
         task_kinds=task_kinds or ["discover"],
         cost_hint="cheap",
-        planner_only=planner_only,
     )
 
 
-def _make_registry(*tool_names, planner_only_tools=None) -> ToolRegistry:
-    planner_only_tools = planner_only_tools or set()
-    return [
-        _make_tool(name, planner_only=(name in planner_only_tools))
-        for name in tool_names
-    ]
+def _make_registry(*tool_names) -> ToolRegistry:
+    return [_make_tool(name) for name in tool_names]
 
 
 def _make_step(**kwargs) -> Step:
@@ -163,10 +158,7 @@ class TestTooManySteps:
 class TestTooManyDeepDives:
     def test_too_many_deep_dives(self):
         max_dd = config.RESEARCH_MAX_DEEP_DIVES_PER_PLAN
-        registry = _make_registry(
-            "find_mk", "deep_dive_meeting",
-            planner_only_tools={"deep_dive_meeting"},
-        )
+        registry = _make_registry("find_mk", "deep_dive_meeting")
         steps = [
             _make_step(
                 id=f"s{i+1}",
@@ -183,10 +175,7 @@ class TestTooManyDeepDives:
 
     def test_exactly_at_deep_dive_cap_passes(self):
         max_dd = config.RESEARCH_MAX_DEEP_DIVES_PER_PLAN
-        registry = _make_registry(
-            "find_mk", "deep_dive_meeting",
-            planner_only_tools={"deep_dive_meeting"},
-        )
+        registry = _make_registry("find_mk", "deep_dive_meeting")
         steps = [
             _make_step(
                 id=f"s{i+1}",
@@ -220,41 +209,6 @@ class TestUnknownTool:
         assert any("s99" in issue for issue in result.issues)
 
 
-# ── validate_plan: planner_only violation ────────────────────────────────────
-
-class TestPlannerOnlyViolation:
-    def test_planner_only_tool_on_non_deep_dive_step(self):
-        registry = _make_registry(
-            "deep_dive_meeting",
-            planner_only_tools={"deep_dive_meeting"},
-        )
-        steps = [
-            _make_step(
-                id="s1",
-                task_kind="discover",  # NOT deep_dive
-                allowed_tools=("deep_dive_meeting",),
-            )
-        ]
-        plan = _make_plan(steps)
-        result = validate_plan(plan, registry, _ok_llm_call)
-        assert result.ok is False
-        assert any("PLANNER_ONLY" in issue for issue in result.issues)
-
-    def test_planner_only_tool_on_deep_dive_step_passes(self):
-        registry = _make_registry(
-            "deep_dive_meeting",
-            planner_only_tools={"deep_dive_meeting"},
-        )
-        steps = [
-            _make_step(
-                id="s1",
-                task_kind="deep_dive",  # matches
-                allowed_tools=("deep_dive_meeting",),
-            )
-        ]
-        plan = _make_plan(steps)
-        result = validate_plan(plan, registry, _ok_llm_call)
-        assert not any("PLANNER_ONLY" in issue for issue in result.issues)
 
 
 # ── validate_plan: DAG cycle ──────────────────────────────────────────────────

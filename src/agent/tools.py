@@ -12,9 +12,7 @@ The new tool layer (``utils/tools.py``) speaks ``ToolEnvelope`` instead.
 This module is the §12 migration shim that bridges the two:
 
   * :func:`list_tools_for_machine_runner` renders the registry as the
-    JSON-schema list, hiding ``planner_only=True`` tools (those exist
-    only for the plan-execute planner and must not be surfaced to the
-    legacy machine).
+    JSON-schema list.
   * :func:`call_for_machine_runner` invokes :func:`utils.tools.dispatch`
     and serialises the returned :class:`ToolEnvelope` back to the JSON
     string the legacy runner expects.
@@ -39,11 +37,6 @@ from utils.tools import ToolRegistry, dispatch
 def list_tools_for_machine_runner(registry: ToolRegistry) -> list[dict]:
     """Render *registry* as an OpenAI-style tool-schema list.
 
-    Tools whose ``planner_only`` flag is ``True`` are omitted — they exist
-    for the plan-execute planner's introspection only and have no place in
-    the legacy machine's tool-call loop (which has no concept of a planner
-    deciding whether to fan out a deep dive, etc.).
-
     Each entry has the shape::
 
         {
@@ -54,15 +47,9 @@ def list_tools_for_machine_runner(registry: ToolRegistry) -> list[dict]:
             "parameters":  <spec.schema minus "description">,
           },
         }
-
-    Mirrors the wrapper that
-    :func:`agent.plan_execute.tools.list_tools_for_planner` produces for
-    the planner; the only difference is the ``planner_only`` filter.
     """
     out: list[dict] = []
     for spec in registry or []:
-        if spec.planner_only:
-            continue
         schema = spec.schema or {}
         out.append({
             "type": "function",

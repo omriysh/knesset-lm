@@ -17,7 +17,7 @@ VALID_TASK_KINDS: set[str] = {
     "discover",   # broad search (search_topics, find_*)
     "filter",     # keyword search across protocols
     "fetch",      # single-record fetch (get_mk_profile, get_meeting_summary)
-    "deep_dive",  # planner-only: deep_dive_meeting
+    "deep_dive",  # expensive: full meeting analysis
     "analyze",    # LLM-only step over already-collected evidence (no tool)
 }
 
