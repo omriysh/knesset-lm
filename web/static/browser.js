@@ -464,7 +464,6 @@ function _transcriptHtml(data) {
   const rows = chunks.map(c => {
     const color   = topicColor(c.topic_index);
     const initials = _initials(c.speaker);
-    const pinBtn  = `<button class="chunk-pin" onclick="browserPinChunk('${_esc(c.chunk_id)}','${_esc(data.meeting_id)}')" title="הוסף לסל">📌</button>`;
     return `
 <div class="chunk-card" data-chunk-id="${_esc(c.chunk_id)}" data-topic-idx="${c.topic_index ?? ''}">
   <div class="chunk-left">
@@ -473,7 +472,6 @@ function _transcriptHtml(data) {
   <div class="chunk-body" style="border-right-color:${color}">
     <div class="chunk-speaker-row">
       <span class="chunk-speaker">${_esc(c.speaker || '—')}</span>
-      ${pinBtn}
     </div>
     <div class="chunk-text">${_esc(c.text)}</div>
   </div>
@@ -680,24 +678,6 @@ async function _loadNewParticipants(newMeetings) {
   if (_filterPart) _renderSidebar();
 }
 
-/* ── Pin chunk ───────────────────────────────────────────────────── */
-async function browserPinChunk(chunkId, meetingId) {
-  // Find the chunk text from DOM
-  const col   = _panel.querySelector('#browser-transcript-col');
-  const card  = col?.querySelector(`.chunk-card[data-chunk-id="${chunkId}"]`);
-  const text  = card?.querySelector('.chunk-text')?.textContent?.trim() || '';
-
-  try {
-    await fetch(`/api/research/${_sid}/workspace/select`, {
-      method:  'POST',
-      headers: {'Content-Type': 'application/json'},
-      body:    JSON.stringify({ chunk_id: chunkId, text, source_meeting_id: meetingId }),
-    });
-    // Visual feedback
-    const btn = card?.querySelector('.chunk-pin');
-    if (btn) { btn.textContent = '✅'; btn.disabled = true; }
-  } catch { /* silent */ }
-}
 
 /* ── Panel chat (ask about current meeting) ──────────────────────── */
 async function _browserAsk() {

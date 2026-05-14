@@ -105,10 +105,25 @@ async function browseSearch() {
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
 function _setBrowseLoading(on) {
-  const btn = document.getElementById('reading-search-btn');
-  if (!btn) return;
-  btn.disabled = on;
-  btn.textContent = on ? 'מחפש…' : 'חפש';
+  const btn  = document.getElementById('reading-search-btn');
+  const area = document.getElementById('reading-browser-area');
+  if (btn) {
+    btn.disabled    = on;
+    btn.textContent = on ? 'מחפש…' : 'חפש';
+  }
+  if (!area) return;
+  const existing = document.getElementById('browse-loading-overlay');
+  if (on && !existing) {
+    const overlay = document.createElement('div');
+    overlay.id        = 'browse-loading-overlay';
+    overlay.className = 'browse-loading-overlay';
+    overlay.innerHTML = `
+      <div class="browse-spinner"></div>
+      <div class="browse-loading-text">מחפש פרוטוקולים…</div>`;
+    area.appendChild(overlay);
+  } else if (!on && existing) {
+    existing.remove();
+  }
 }
 
 function _showBrowseError(msg) {

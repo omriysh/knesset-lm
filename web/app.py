@@ -1238,7 +1238,7 @@ async def browse_rag(req: BrowseSearchRequest, request: Request):
     retriever    = request.app.state.retriever
     sessions_dir = request.app.state.sessions_dir
 
-    top_k = min(req.top_k or settings.TOP_K_MEETINGS, _MAX_TOP_K)
+    top_k = min(req.top_k or settings.TOP_K_BROWSE, _MAX_TOP_K)
     top_n = settings.TOP_N_DIALOGS
 
     # Run retrieval
