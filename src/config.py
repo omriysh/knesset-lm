@@ -160,6 +160,19 @@ NAME_RESOLUTION_AUTO_THRESHOLD     = 0.35
 FUZZY_SEARCH_THRESHOLD             = 55.0   # minimum RapidFuzz score (0–100) to include a candidate
 FUZZY_BODY_SCORE_WEIGHT            = 0.85   # body match weighted lower than label match
 
+# Stricter bar for meeting-participant/guest MK resolution (speaker/roster
+# names -> mk_id, in build_meeting_index.py and web/app.py::browse_rag).
+# At the general-purpose FUZZY_SEARCH_THRESHOLD=55, real non-MK names that
+# happen to share one name token with an MK false-positive up to ~85
+# (e.g. "עודד ברוק" -> MK "עודד פורר", "שי טייב" -> MK "יוסף טייב") — while
+# true matches (the actual MK's name, verbatim as transcribed) always score
+# 100. 90 sits cleanly between the two with margin on both sides. A false
+# negative here just falls through to the guest bucket (still filterable,
+# just via guest_name instead of mk_id) — a much softer failure than
+# attributing a meeting to the wrong MK, so trading recall for precision
+# is the right call specifically for this use case.
+PARTICIPANT_FUZZY_THRESHOLD        = 90.0
+
 # Bill text
 BILL_TEXT_DEFAULT_MAX_CHARS  = 1000
 BILL_TEXT_MIN_MAX_CHARS      = 200
