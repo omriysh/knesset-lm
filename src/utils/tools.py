@@ -366,6 +366,77 @@ def _embed_bullet_ranking(*, query: str, top_k: int) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def _build_speeches_where(
+    *,
+    committee_ids: list | None = None,
+    meeting_ids: list | None = None,
+    speaker: str | None = None,
+) -> str | None:
+    """Build the FTS5 WHERE fragment for the ``speeches`` index.
+
+    Each filter *group* (committee_ids, meeting_ids) is OR-ed internally —
+    "any of these committees" / "any of these meetings" — and the groups
+    are AND-ed together with the speaker filter. (An earlier version AND-ed
+    every individual id together, which meant passing more than one
+    committee_id or meeting_id could never match — a single row's ``extra``
+    only ever carries one committee/meeting. Fixed here since the new
+    reading-tab candidate-set scoping needs to pass many meeting_ids at
+    once.)
+    """
+    where_parts: list[str] = []
+
+    if committee_ids:
+        group = " OR ".join(
+            f"extra LIKE '%\"committee\": \"{_sql_safe(str(cid))}\"%'" for cid in committee_ids
+        )
+        where_parts.append(f"({group})")
+    if meeting_ids:
+        group = " OR ".join(
+            f"extra LIKE '%\"meeting_id\": \"{_sql_safe(str(mid))}\"%'" for mid in meeting_ids
+        )
+        where_parts.append(f"({group})")
+    if speaker:
+        where_parts.append(f"extra LIKE '%\"speaker\": \"%{_sql_safe(speaker)}%\"%'")
+
+    return " AND ".join(where_parts) if where_parts else None
+
+
+def search_speeches_bm25(
+    bm25: BM25Index,
+    query: str,
+    *,
+    committee_ids: list | None = None,
+    meeting_ids: list | None = None,
+    speaker: str | None = None,
+    top_k: int = config.SEARCH_PROTOCOLS_DEFAULT_TOP_K,
+    sort: str = "relevance",
+) -> list[dict]:
+    """Run a BM25 FTS5 search against an already-open ``speeches`` index.
+
+    Extracted out of handle_search_protocols_keyword so both the agent tool
+    handler (which wraps the result in a ToolEnvelope) and
+    web.app.browse_rag (reading-tab keyword search, not an agent context —
+    no envelope) share identical WHERE-building + search-call logic instead
+    of diverging.
+
+    Returns raw BM25Index.search() rows: dicts with keys id, label,
+    label_lemmatized, body, body_lemmatized, extra, score. ``score`` is
+    sqlite's bm25() value — lower / more negative = more relevant (already
+    ORDER BY score ASC inside BM25Index.search()).
+
+    Caller owns opening/closing the BM25Index (mirrors _open_bm25 /
+    _bm25_missing_envelope at the call site) and any exception handling.
+    """
+    where = _build_speeches_where(
+        committee_ids=committee_ids, meeting_ids=meeting_ids, speaker=speaker,
+    )
+    return bm25.search(
+        _quote_match(lemmatize(query)) or query,
+        top_k=max(top_k, config.KEYWORD_RERANK_TOP_K) if sort == "relevance" else top_k,
+        where=where,
+    )
+
+
 def handle_search_protocols_keyword(args: dict) -> ToolEnvelope:
     """BM25 over indexed speeches with optional axis filters.
 
@@ -388,27 +459,20 @@ def handle_search_protocols_keyword(args: dict) -> ToolEnvelope:
     if bm25 is None:
         return _bm25_missing_envelope("speeches", knesset_num)
 
-    where_parts: list[str] = []
     committee_ids = args.get("committee_ids") or []
     meeting_ids = args.get("meeting_ids") or []
     speaker = (args.get("speaker") or "").strip()
     date_from = (args.get("date_from") or "").strip()
     date_to = (args.get("date_to") or "").strip()
 
-    for cid in committee_ids:
-        where_parts.append(f"extra LIKE '%\"committee\": \"{_sql_safe(str(cid))}\"%'")
-    for mid in meeting_ids:
-        where_parts.append(f"extra LIKE '%\"meeting_id\": \"{_sql_safe(str(mid))}\"%'")
-    if speaker:
-        where_parts.append(f"extra LIKE '%\"speaker\": \"%{_sql_safe(speaker)}%\"%'")
-
-    where = " AND ".join(where_parts) if where_parts else None
-
     try:
-        rows = bm25.search(
-            _quote_match(lemmatize(query)) or query,
-            top_k=max(top_k, config.KEYWORD_RERANK_TOP_K) if sort == "relevance" else top_k,
-            where=where,
+        rows = search_speeches_bm25(
+            bm25, query,
+            committee_ids=committee_ids,
+            meeting_ids=meeting_ids,
+            speaker=speaker,
+            top_k=top_k,
+            sort=sort,
         )
     except Exception as exc:
         bm25.close()
@@ -1151,6 +1215,7 @@ __all__ = [
     # search
     "handle_search_topics",
     "handle_search_protocols_keyword",
+    "search_speeches_bm25",
     # find
     "handle_find_mk",
     "handle_find_committee",

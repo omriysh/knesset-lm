@@ -4,6 +4,7 @@ test_tool_dispatch.py
 Tests for utils.tools.dispatch and related tool infrastructure.
 """
 
+import json
 import sys
 from pathlib import Path
 
@@ -11,8 +12,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import pytest
 import config
-from utils.tools import ToolSpec, ToolRegistry, dispatch, handle_find_mk
+from utils.tools import ToolSpec, ToolRegistry, dispatch, handle_find_mk, search_speeches_bm25
 from agent.subgraph.evidence import ToolEnvelope
+from retrieval.bm25_index import BM25Index
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -198,6 +200,146 @@ class TestDispatchFindMkWithDB:
         else:
             # No error — we should have some results
             assert result.metadata.get("count", 0) >= 0
+
+
+# ── search_speeches_bm25 — shared helper extracted from handle_search_protocols_keyword ──
+
+class _SpeechesFixture:
+    """Small in-memory-shaped speeches BM25 fixture (mirrors build_speeches() rows)."""
+
+    ROWS = [
+        {"id": "m1_0", "label": "אלמוני", "label_lemmatized": "אלמוני",
+         "body": "אלמוני: הצעת חוק בנושא חינוך", "body_lemmatized": "אלמוני: הצעת חוק בנושא חינוך",
+         "extra": {"meeting_id": "m1", "committee": "ועדת החינוך", "speech_idx": 0, "speaker": "אלמוני"}},
+        {"id": "m2_0", "label": "פלוני", "label_lemmatized": "פלוני",
+         "body": "פלוני: דיון בנושא חינוך והשכלה גבוהה", "body_lemmatized": "פלוני: דיון בנושא חינוך והשכלה גבוהה",
+         "extra": {"meeting_id": "m2", "committee": "ועדת הכספים", "speech_idx": 0, "speaker": "פלוני"}},
+        {"id": "m2_1", "label": "פלוני", "label_lemmatized": "פלוני",
+         "body": "פלוני: המשך הדיון בנושא חינוך", "body_lemmatized": "פלוני: המשך הדיון בנושא חינוך",
+         "extra": {"meeting_id": "m2", "committee": "ועדת הכספים", "speech_idx": 1, "speaker": "פלוני"}},
+        {"id": "m3_0", "label": "אחר", "label_lemmatized": "אחר",
+         "body": "אחר: נושא לא קשור", "body_lemmatized": "אחר: נושא לא קשור",
+         "extra": {"meeting_id": "m3", "committee": "ועדת החוץ", "speech_idx": 0, "speaker": "אחר"}},
+    ]
+
+    @classmethod
+    def build(cls, path) -> BM25Index:
+        idx = BM25Index(path)
+        idx.create_table()
+        idx.insert_many(cls.ROWS)
+        return idx
+
+
+class TestSearchSpeechesBm25Helper:
+    def test_basic_search_no_filters(self, tmp_path):
+        bm25 = _SpeechesFixture.build(tmp_path / "speeches.db")
+        try:
+            rows = search_speeches_bm25(bm25, "חינוך")
+        finally:
+            bm25.close()
+        ids = {r["id"] for r in rows}
+        assert {"m1_0", "m2_0", "m2_1"}.issubset(ids)
+        assert "m3_0" not in ids
+
+    def test_meeting_ids_filter_is_ored_not_anded(self, tmp_path):
+        """Regression test for the fixed OR-bug: passing multiple meeting_ids
+        used to AND every individual LIKE clause together, which could never
+        match (a single row's `extra` only ever has one meeting_id), so any
+        filter with >1 meeting_id silently returned zero rows. Now it's
+        "any of these meetings" — required for the reading-tab candidate-set
+        scoping which passes many meeting_ids at once."""
+        bm25 = _SpeechesFixture.build(tmp_path / "speeches.db")
+        try:
+            rows = search_speeches_bm25(bm25, "חינוך", meeting_ids=["m1", "m2"])
+        finally:
+            bm25.close()
+        meeting_ids_hit = {r["extra"]["meeting_id"] for r in rows}
+        assert meeting_ids_hit == {"m1", "m2"}
+
+    def test_meeting_ids_filter_excludes_others(self, tmp_path):
+        bm25 = _SpeechesFixture.build(tmp_path / "speeches.db")
+        try:
+            rows = search_speeches_bm25(bm25, "חינוך", meeting_ids=["m2"])
+        finally:
+            bm25.close()
+        meeting_ids_hit = {r["extra"]["meeting_id"] for r in rows}
+        assert meeting_ids_hit == {"m2"}
+
+    def test_committee_ids_filter_is_ored(self, tmp_path):
+        bm25 = _SpeechesFixture.build(tmp_path / "speeches.db")
+        try:
+            rows = search_speeches_bm25(
+                bm25, "חינוך", committee_ids=["ועדת החינוך", "ועדת הכספים"],
+            )
+        finally:
+            bm25.close()
+        committees_hit = {r["extra"]["committee"] for r in rows}
+        assert committees_hit == {"ועדת החינוך", "ועדת הכספים"}
+
+    def test_no_match_returns_empty(self, tmp_path):
+        bm25 = _SpeechesFixture.build(tmp_path / "speeches.db")
+        try:
+            rows = search_speeches_bm25(bm25, "חינוך", meeting_ids=["nonexistent"])
+        finally:
+            bm25.close()
+        assert rows == []
+
+    def test_per_meeting_bm25_aggregation_max_score_collapse(self, tmp_path):
+        """m2 has two matching speeches — aggregating to per-meeting best score
+        (as web.app.browse_rag's keyword-ranking step does) must collapse them
+        to a single meeting-level entry with the best (lowest, per sqlite's
+        bm25() convention) score."""
+        bm25 = _SpeechesFixture.build(tmp_path / "speeches.db")
+        try:
+            rows = search_speeches_bm25(bm25, "חינוך")
+        finally:
+            bm25.close()
+
+        best_score: dict[str, float] = {}
+        for r in rows:
+            mid = r["extra"]["meeting_id"]
+            score = float(r["score"])
+            if mid not in best_score or score < best_score[mid]:
+                best_score[mid] = score
+
+        assert set(best_score) == {"m1", "m2"}
+        m2_scores = [float(r["score"]) for r in rows if r["extra"]["meeting_id"] == "m2"]
+        assert len(m2_scores) == 2                    # two raw hits collapse to...
+        assert best_score["m2"] == min(m2_scores)      # ...one entry, the best of the two
+
+
+class TestHandleSearchProtocolsKeywordUnchanged:
+    """handle_search_protocols_keyword's external contract (ToolEnvelope shape,
+    payload fields) must be unaffected by extracting search_speeches_bm25 out
+    of it — this is a pure refactor for the handler."""
+
+    def test_missing_db_still_returns_bm25_missing_envelope(self, tmp_path):
+        original_bm25_dir = config.BM25_DIR
+        config.BM25_DIR = tmp_path / "nonexistent_bm25"
+        try:
+            from utils.tools import handle_search_protocols_keyword
+            result = handle_search_protocols_keyword({"query": "חינוך"})
+            assert isinstance(result, ToolEnvelope)
+            assert result.error == "bm25_db_missing"
+        finally:
+            config.BM25_DIR = original_bm25_dir
+
+    def test_missing_query_still_validation_error(self):
+        from utils.tools import handle_search_protocols_keyword
+        result = handle_search_protocols_keyword({"query": ""})
+        assert isinstance(result, ToolEnvelope)
+        assert result.error == "missing_query"
+
+    def test_real_db_smoke(self):
+        bm25_speeches_path = config.BM25_DIR / "25" / "speeches.db"
+        if not bm25_speeches_path.exists():
+            pytest.skip(f"BM25 speeches.db not built yet: {bm25_speeches_path}")
+        from utils.tools import handle_search_protocols_keyword
+        result = handle_search_protocols_keyword({"query": "תקציב", "top_k": 5})
+        assert isinstance(result, ToolEnvelope)
+        assert result.error is None
+        payload = json.loads(result.full) if result.full else []
+        assert isinstance(payload, list)
 
 
 # ── ToolSpec ──────────────────────────────────────────────────────────────────
