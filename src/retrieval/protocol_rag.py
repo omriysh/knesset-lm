@@ -66,11 +66,21 @@ def query_retrieve(
     bullets_collection: str = config.BULLETS_COLLECTION,
     pass2_collection:   str = config.PASS2_COLLECTION,
     pass1_collection:   str = config.PASS1_COLLECTION,
+    meeting_id_filter: list[str] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """
     3-level ChromaDB retrieval.  Returns (context_str, debug_dict).
 
     context_str is ready to inject into the LLM prompt.
+
+    meeting_id_filter
+        Optional allow-list of meeting_ids to scope the L1 bullet search to
+        (via Chroma's ``where={"meeting_id": {"$in": [...]}}``). Used by the
+        reading-tab structural prefilter (web/app.py::browse_rag) so topic
+        ranking runs *within* the committee/date/participant-filtered
+        candidate set instead of ranking the whole corpus and post-filtering
+        a fixed top-k window. ``None`` (the default) means unrestricted,
+        matching prior behavior exactly.
 
     debug_dict keys:
         meetings        : list[str]   — retrieved meeting IDs
@@ -83,11 +93,14 @@ def query_retrieve(
 
     # ── 2. L1: bullets → meeting IDs ─────────────────────────────────────────
     l1_coll = chroma_client.get_collection(bullets_collection)
-    l1_results = l1_coll.query(
+    l1_query_kwargs: dict[str, Any] = dict(
         query_embeddings=q_emb.tolist(),
         n_results=top_k * 6,
         include=["metadatas", "distances"],
     )
+    if meeting_id_filter is not None:
+        l1_query_kwargs["where"] = {"meeting_id": {"$in": list(meeting_id_filter)}}
+    l1_results = l1_coll.query(**l1_query_kwargs)
 
     meeting_bullet_sims: dict[str, dict[int, float]] = {}
     for meta, dist in zip(
