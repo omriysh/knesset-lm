@@ -393,14 +393,91 @@ app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
 _MK_PHOTOS_DIR = config.MK_PHOTOS_DIR
+_MK_PHOTO_EXTS = (".jpeg", ".jpg", ".png")
+
+# Honorific / role prefixes stripped before photo lookup. Mirrors browser.js
+# _speakerPhotoKey but also covers forms it misses (notably the definite-
+# article היו"ר, שר roles, מ"מ). Speaker strings arrive as e.g. 'ח"כ אבי דיכטר',
+# 'היו"ר עמית הלוי', 'השר יריב לוין'.
+_HONORIFIC_RE = re.compile(
+    r'^(ח"כ|ח\'כ|היו"ר|יו"ר|מ"מ\s+היו"ר|מ"מ|סגן\s+השר|סגנית\s+השרה|השרה|השר|שרה|שר|מנכ"ל|ד"ר|פרופ\'?)\s+'
+)
+
+# Lazy singleton fuzzy index over mks.db (label = canonical MK name, which
+# matches the photo filenames). Loading scans the whole table, so cache it —
+# the reading tab fires one /mk-photo request per distinct speaker.
+_mk_fuzzy_index = None
+_mk_fuzzy_loaded = False
+_mk_photo_cache: dict[str, "Path | None"] = {}
+
+
+def _get_mk_fuzzy_index():
+    global _mk_fuzzy_index, _mk_fuzzy_loaded
+    if _mk_fuzzy_loaded:
+        return _mk_fuzzy_index
+    _mk_fuzzy_loaded = True
+    try:
+        from retrieval.bm25_index import BM25Index
+        from utils.tool_helpers.fuzzy_name_index import FuzzyNameIndex
+        mks_db = config.BM25_DIR / "25" / "mks.db"
+        if not mks_db.exists():
+            print(f"[mk_photo] mks.db not found ({mks_db}); "
+                  f"photo name resolution limited to exact filename match")
+            return None
+        bm = BM25Index(mks_db)
+        try:
+            _mk_fuzzy_index = FuzzyNameIndex.from_bm25(bm)
+        finally:
+            bm.close()
+    except Exception as exc:
+        print(f"[mk_photo] failed to load mks fuzzy index: {exc}")
+        _mk_fuzzy_index = None
+    return _mk_fuzzy_index
+
+
+def _photo_file_for(stem: str) -> "Path | None":
+    stem = stem.strip()
+    if not stem:
+        return None
+    for ext in _MK_PHOTO_EXTS:
+        p = _MK_PHOTOS_DIR / f"{stem}{ext}"
+        if p.exists():
+            return p
+    return None
+
+
+def _resolve_mk_photo(name: str) -> "Path | None":
+    """Resolve a (possibly honorific-prefixed / variant) speaker name to a
+    photo file: exact match → prefix-stripped exact match → fuzzy resolve to
+    a canonical MK name. Returns None for non-MKs (guests, section headers)."""
+    if name in _mk_photo_cache:
+        return _mk_photo_cache[name]
+
+    cleaned = _HONORIFIC_RE.sub("", name.strip()).strip()
+    result = _photo_file_for(name) or _photo_file_for(cleaned)
+
+    if result is None and cleaned:
+        idx = _get_mk_fuzzy_index()
+        if idx is not None:
+            try:
+                matches = idx.search(
+                    cleaned, top_k=1, threshold=config.PARTICIPANT_FUZZY_THRESHOLD
+                )
+            except Exception as exc:
+                print(f"[mk_photo] fuzzy resolve failed for {name!r}: {exc}")
+                matches = []
+            if matches:
+                result = _photo_file_for(matches[0]["label"])
+
+    _mk_photo_cache[name] = result
+    return result
 
 
 @app.get("/mk-photo/{name}")
 async def mk_photo(name: str):
-    for ext in (".jpeg", ".jpg", ".png"):
-        p = _MK_PHOTOS_DIR / f"{name}{ext}"
-        if p.exists():
-            return FileResponse(str(p), media_type=f"image/{ext.lstrip('.')}")
+    p = _resolve_mk_photo(name)
+    if p is not None:
+        return FileResponse(str(p), media_type=f"image/{p.suffix.lstrip('.')}")
     return JSONResponse({}, status_code=404)
 
 
