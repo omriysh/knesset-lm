@@ -125,15 +125,30 @@ function _rfClose(type) {
 }
 
 /* ── Option list rendering ──────────────────────────────────────── */
+// Escape a string for safe use in an HTML attribute value / text node.
+// Committee/MK names contain gershayim (") and other markup-significant
+// chars; interpolating them raw broke the option's attributes so those
+// items rendered unclickable. The value is read back at click time via
+// this.dataset.value (browser-decoded), so we never embed it in the
+// inline JS string — only HTML-escape it into data-value + text.
+function _rfEsc(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function _rfRenderList(listId, items, type) {
   const el = document.getElementById(listId);
   if (!el) return;
   const set = _rfSetFor(type);
   el.innerHTML = items.map(item => {
-    const sel = set.has(item) ? 'rfb-option--selected' : '';
-    const safe = item.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-    return `<button class="rfb-option ${sel}" onclick="rfToggleItem('${type}','${safe}')" data-value="${item}">
-  <span class="rfb-option-check material-symbols-outlined">check</span>${item}</button>`;
+    const sel  = set.has(item) ? 'rfb-option--selected' : '';
+    const safe = _rfEsc(item);
+    return `<button class="rfb-option ${sel}" onclick="rfToggleItem('${type}', this.dataset.value)" data-value="${safe}">
+  <span class="rfb-option-check material-symbols-outlined">check</span>${safe}</button>`;
   }).join('');
 }
 
@@ -289,10 +304,9 @@ function _rfRenderChips() {
   clearBtn?.classList.toggle('hidden', !has);
 
   if (has) {
-    row.innerHTML = chips.map(c => {
-      const sv = c.value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-      return `<span class="rfb-chip">${c.label}<button class="rfb-chip-remove" onclick="rfRemoveFilter('${c.type}','${sv}')" title="הסר"><span class="material-symbols-outlined" style="font-size:13px">close</span></button></span>`;
-    }).join('');
+    row.innerHTML = chips.map(c =>
+      `<span class="rfb-chip">${_rfEsc(c.label)}<button class="rfb-chip-remove" data-type="${_rfEsc(c.type)}" data-value="${_rfEsc(c.value)}" onclick="rfRemoveFilter(this.dataset.type, this.dataset.value)" title="הסר"><span class="material-symbols-outlined" style="font-size:13px">close</span></button></span>`
+    ).join('');
   }
 }
 
