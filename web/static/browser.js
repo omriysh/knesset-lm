@@ -37,6 +37,7 @@ let _activeTopicFilter = null;  // null = show all; number = show that topic ind
 let _origQ     = '';     // original question (for summarize button)
 let _standalone = false; // true when embedded in reading tab (no chat bar)
 let _container  = null;  // DOM element the panel is appended into
+let _pendingScrollChunk = null; // chunk_id to scroll to once its meeting loads
 
 /* ── Heatmap state ──────────────────────────────────────────────── */
 let _hmChunks        = [];   // [{chunk_id, chars, simScore, topicScores}]
@@ -85,6 +86,8 @@ function openProtocolBrowser(sessionId, meetingId, meetings, opts = {}) {
   _partLoadedCount   = 0;
   _hmChunks          = [];
   _activeBulletIdx   = null;
+  _pendingScrollChunk = (opts.focusChunkId != null && opts.focusChunkId !== '')
+    ? String(opts.focusChunkId) : null;
 
   // Replace any existing panel
   if (_panel) _panel.remove();
@@ -475,6 +478,13 @@ async function _loadMeeting(meetingId) {
     // Async: score pass-2 chunks and fill heatmap colors
     _scoreAndRenderHeatmap(meetingId);
 
+    // Deep-link: scroll to the requested chunk once the transcript is laid out.
+    if (_pendingScrollChunk != null) {
+      const target = _pendingScrollChunk;
+      _pendingScrollChunk = null;
+      requestAnimationFrame(() => browserScrollToChunk(target));
+    }
+
   } catch (err) {
     col.innerHTML = `<div class="browser-loading"><div class="browser-error">שגיאה בטעינה: ${_esc(err.message)}</div></div>`;
   }
@@ -740,6 +750,28 @@ function browserScrollToChunk(chunkId) {
     - col.clientHeight / 2
     + card.clientHeight / 2;
   col.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+}
+
+/* ── Deep-link from the agent answer → open protocol in reading tab ── */
+function openProtocolFromCitation(sid, meetingId, speechIdx) {
+  if (!meetingId) return;
+  // Seed the viewer sidebar with the answer's own cited meetings.
+  const seed = (window.__citedMeetings && window.__citedMeetings[sid]) || [];
+  const meetings = (seed.length && seed.some(m => String(m.meeting_id) === String(meetingId)))
+    ? seed
+    : [{ meeting_id: String(meetingId) }];
+
+  if (typeof switchTab === 'function') switchTab('reading');
+
+  const area = document.getElementById('reading-browser-area');
+  if (area) area.innerHTML = '';
+
+  openProtocolBrowser(sid, String(meetingId), meetings, {
+    container:      area || undefined,
+    standalone:     true,
+    postCompletion: true,
+    focusChunkId:   (speechIdx != null && speechIdx !== '') ? String(speechIdx) : null,
+  });
 }
 
 /* ── Sidebar switch meeting ──────────────────────────────────────── */

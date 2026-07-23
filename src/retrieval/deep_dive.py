@@ -275,6 +275,10 @@ def _deep_dive_rerank(
                 "date": p["meta"].get("date", ""),
                 "committee": p["meta"].get("committee", ""),
                 "text": p["doc"],
+                # Chunk anchor for UI deep-linking into the protocol viewer.
+                # start_speech_idx shares the same index space as the viewer's
+                # chunk_id; exposed as speech_idx for a uniform frontend field.
+                "speech_idx": p["meta"].get("start_speech_idx"),
                 "p1_sim": p["p1_sim"],
                 "p2_score": p["p2_score"],
             }

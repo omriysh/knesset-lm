@@ -70,7 +70,7 @@ async function loadEvidenceFull(el) {
   try {
     const resp = await fetch(`/api/research/${sid}/tool_result/${ref}`);
     const json = await resp.json();
-    if (slot) slot.innerHTML = renderEvidenceFull(json.full || '', tool);
+    if (slot) slot.innerHTML = renderEvidenceFull(json.full || '', tool, sid);
     el.dataset.loaded  = '1';
     el.dataset.loading = '0';
   } catch (exc) {

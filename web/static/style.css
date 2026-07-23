@@ -615,31 +615,6 @@ details[open] > .sub-summary::before { transform: rotate(90deg); }
 .text-input-submit:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ══════════════════════════════════════════════════════════════════
-   EXPLORE SOURCES button (post-completion)
-══════════════════════════════════════════════════════════════════ */
-.explore-sources-row {
-  display: flex;
-  justify-content: flex-end;
-  margin: 4px 0 8px;
-}
-
-.explore-sources-btn {
-  background: #fff;
-  color: #266829;
-  border: 1.5px solid #266829;
-  border-radius: 10px;
-  padding: 7px 20px;
-  font-size: 0.85rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-  direction: rtl;
-}
-
-.explore-sources-btn:hover { background: #266829; color: #d1ffc8; }
-.explore-sources-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-/* ══════════════════════════════════════════════════════════════════
    PROTOCOL BROWSER
 ══════════════════════════════════════════════════════════════════ */
 
@@ -1740,6 +1715,26 @@ sup.ev-cite:hover { color: #4f46e5; }
   color: #374151;
   margin-bottom: 4px;
 }
+/* "לפרוטוקול המלא →" deep-link — in citation popups and source cards */
+.ev-open-protocol {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 4px 9px;
+  font: inherit;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: #2e7d32;
+  background: #eaf5ea;
+  border: 1px solid #cfe6cf;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.ev-open-protocol:hover { background: #2e7d32; color: #fff; border-color: #2e7d32; }
+.ev-open-icon { font-size: 15px; line-height: 1; }
+.ev-card-footer { padding: 4px 8px 7px; }
 .ev-citation-quote {
   font-size: 0.85rem;
   color: #1f2937;

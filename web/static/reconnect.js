@@ -206,7 +206,7 @@ function replayDone(data, replay) {
       const cursor = replay.agentEl.querySelector('.stream-cursor');
       if (cursor) cursor.remove();
       if (replay.pendingFootnotes.length) {
-        applyEvidenceCitations(body, replay.pendingFootnotes, replay.pendingCitations);
+        applyEvidenceCitations(body, replay.pendingFootnotes, replay.pendingCitations, replay.sid);
         replay.agentEl.insertAdjacentHTML(
           'beforeend',
           buildSourcesHtml(replay.pendingFootnotes, replay.sid),
