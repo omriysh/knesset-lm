@@ -128,10 +128,40 @@ def register_meeting_paths(paths: dict[str, str]) -> None:
     _meeting_registry.update(paths)
 
 
+def _find_summary_on_disk(meeting_id: str) -> Path | None:
+    """Locate a meeting's summary .txt by its id suffix under Data/summaries.
+
+    Summary files are named ``DD_MM_YYYY_<session_id>.txt`` and the meeting_id
+    IS that trailing session_id, so a ``*_<meeting_id>.txt`` glob resolves it
+    regardless of committee-folder or knesset-number nesting.
+    """
+    if not meeting_id.isdigit():
+        return None
+    import config
+    root = config.DATA_DIR / "summaries"
+    try:
+        return next(root.glob(f"**/*_{meeting_id}.txt"), None)
+    except Exception as exc:
+        print(f"[meeting] summary glob failed for {meeting_id!r}: {exc}")
+        return None
+
+
 def get_summary_path_from_id(meeting_id: str) -> Path | None:
-    """Return the summary .txt Path for a meeting_id, or None if not registered."""
-    p = _meeting_registry.get(str(meeting_id))
-    return Path(p) if p else None
+    """Return the summary .txt Path for a meeting_id, or None if not found.
+
+    Fast path: the in-memory registry populated by ``register_meeting_paths``
+    during a RAG run. Fallback: glob the summaries tree so meetings that were
+    never registered (e.g. opened from an agent citation) still resolve; hits
+    are cached back into the registry.
+    """
+    mid = str(meeting_id)
+    p = _meeting_registry.get(mid)
+    if p:
+        return Path(p)
+    found = _find_summary_on_disk(mid)
+    if found is not None:
+        _meeting_registry[mid] = str(found)
+    return found
 
 
 def get_transcript_path_from_id(meeting_id: str) -> Path | None:

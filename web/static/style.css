@@ -1731,6 +1731,9 @@ sup.ev-cite:hover { color: #4f46e5; }
   border-radius: 6px;
   cursor: pointer;
   transition: background 0.12s, color 0.12s;
+  /* The citation popup is pointer-events:none (click-through tooltip); the
+     button must re-enable events so it stays clickable. */
+  pointer-events: auto;
 }
 .ev-open-protocol:hover { background: #2e7d32; color: #fff; border-color: #2e7d32; }
 .ev-open-icon { font-size: 15px; line-height: 1; }
