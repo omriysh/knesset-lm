@@ -1706,9 +1706,19 @@ sup.ev-cite:hover { color: #4f46e5; }
 .ev-citation-popup-source {
   font-size: 0.72rem;
   color: #6366f1;
-  margin-top: 6px;
   opacity: 0.8;
+  flex: 1 1 0;
+  min-width: 0;
 }
+/* Footer row: source note (right) + "לפרוטוקול המלא" button (left), split ~50/50 */
+.ev-citation-popup-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+}
+.ev-citation-popup-footer .ev-open-protocol { margin-top: 0; flex: 0 0 auto; }
 .ev-citation-meeting-header {
   font-size: 0.8rem;
   font-weight: 600;
@@ -1737,7 +1747,14 @@ sup.ev-cite:hover { color: #4f46e5; }
 }
 .ev-open-protocol:hover { background: #2e7d32; color: #fff; border-color: #2e7d32; }
 .ev-open-icon { font-size: 15px; line-height: 1; }
-.ev-card-footer { padding: 4px 8px 7px; }
+/* In a source card header: compact, pinned to the leading (left, in RTL) edge */
+.ev-card-header .ev-open-protocol {
+  margin-top: 0;
+  margin-inline-start: auto;
+  padding: 2px 7px;
+  font-size: 0.66rem;
+}
+.ev-card-header .ev-open-icon { font-size: 13px; }
 .ev-citation-quote {
   font-size: 0.85rem;
   color: #1f2937;

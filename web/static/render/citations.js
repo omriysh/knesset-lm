@@ -46,7 +46,7 @@ function openProtocolLinkHtml(sid, anchor) {
     `<button type="button" class="ev-open-protocol" ` +
     `onclick="openProtocolFromCitation('${esc(sid)}','${esc(anchor.meetingId)}',` +
     `${sidx === '' ? 'null' : `'${esc(sidx)}'`})">` +
-    `${OPEN_ICON}<span>לפרוטוקול המלא →</span></button>`
+    `${OPEN_ICON}<span>לפרוטוקול המלא ←</span></button>`
   );
 }
 
@@ -146,9 +146,12 @@ function showCitationPopup(supEl, quoteRaw, uiMeta) {
 
   const metaNote = (uiMeta && uiMeta.meta_note) ? uiMeta.meta_note : (uiMeta && uiMeta.tool_name) || '';
   const anchor   = quoteObj != null ? findQuoteAnchor(quoteObj) : null;
-  popup.innerHTML = contentHtml +
-    (metaNote ? `<div class="ev-citation-popup-source">${esc(metaNote)}</div>` : '') +
-    openProtocolLinkHtml(_citeSid, anchor);
+  const noteHtml = metaNote ? `<div class="ev-citation-popup-source">${esc(metaNote)}</div>` : '';
+  const linkHtml = openProtocolLinkHtml(_citeSid, anchor);
+  const footerHtml = (noteHtml || linkHtml)
+    ? `<div class="ev-citation-popup-footer">${noteHtml}${linkHtml}</div>`
+    : '';
+  popup.innerHTML = contentHtml + footerHtml;
 
   popup.hidden = false;
   const sr = supEl.getBoundingClientRect();
@@ -329,18 +332,15 @@ function renderEvidenceCard(item, sid) {
   if (rest.length > 0) {
     bodyHtml += `<pre class="ev-card-rest">${esc(JSON.stringify(Object.fromEntries(rest), null, 2))}</pre>`;
   }
-  const headerHtml = (labelHtml || metaBadges)
-    ? `<div class="ev-card-header">${labelHtml}<span class="ev-card-metas">${metaBadges}</span></div>`
-    : '';
   const anchor   = findQuoteAnchor(item);
-  const linkHtml = (sid && anchor)
-    ? `<div class="ev-card-footer">${openProtocolLinkHtml(sid, anchor)}</div>`
+  const linkHtml = (sid && anchor) ? openProtocolLinkHtml(sid, anchor) : '';
+  const headerHtml = (labelHtml || metaBadges || linkHtml)
+    ? `<div class="ev-card-header">${labelHtml}<span class="ev-card-metas">${metaBadges}</span>${linkHtml}</div>`
     : '';
   return (
     `<div class="ev-full-card">` +
     headerHtml +
     (bodyHtml ? `<div class="ev-card-body">${bodyHtml}</div>` : '') +
-    linkHtml +
     `</div>`
   );
 }
