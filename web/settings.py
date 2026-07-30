@@ -55,8 +55,9 @@ SUMMARIES_ROOT: Path = Path(
 
 # ── RAG retrieval ─────────────────────────────────────────────────────────────
 
-TOP_K_MEETINGS: int = int(os.environ.get("KNESSET_TOP_K", str(_cfg.TOP_K_MEETINGS)))
-TOP_N_DIALOGS:  int = int(os.environ.get("KNESSET_TOP_N", str(_cfg.TOP_N_DIALOGS)))
+TOP_K_MEETINGS: int = int(os.environ.get("KNESSET_TOP_K",        str(_cfg.TOP_K_MEETINGS)))
+TOP_K_BROWSE:   int = int(os.environ.get("KNESSET_TOP_K_BROWSE", str(_cfg.TOP_K_BROWSE)))
+TOP_N_DIALOGS:  int = int(os.environ.get("KNESSET_TOP_N",        str(_cfg.TOP_N_DIALOGS)))
 
 # ── Sessions ─────────────────────────────────────────────────────────────────
 

@@ -19,7 +19,6 @@ import {
 import { addCompletedStageCard } from './render/stage_card.js';
 import {
   appendStatus, setStatusMsg, appendAgentCard, appendErrorMsg,
-  appendExploreSourcesButton,
 } from './render/chat.js';
 import { applyEvidenceCitations, buildSourcesHtml } from './render/citations.js';
 import { renderUserInputPanel } from './render/user_input.js';
@@ -207,7 +206,7 @@ function replayDone(data, replay) {
       const cursor = replay.agentEl.querySelector('.stream-cursor');
       if (cursor) cursor.remove();
       if (replay.pendingFootnotes.length) {
-        applyEvidenceCitations(body, replay.pendingFootnotes, replay.pendingCitations);
+        applyEvidenceCitations(body, replay.pendingFootnotes, replay.pendingCitations, replay.sid);
         replay.agentEl.insertAdjacentHTML(
           'beforeend',
           buildSourcesHtml(replay.pendingFootnotes, replay.sid),
@@ -215,7 +214,6 @@ function replayDone(data, replay) {
       }
     }
   }
-  appendExploreSourcesButton(replay.sid, state.lastQuestion);
   return 'terminal';
 }
 

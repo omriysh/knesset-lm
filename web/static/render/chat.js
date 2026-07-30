@@ -55,34 +55,3 @@ export function appendErrorMsg(msg) {
   return el;
 }
 
-export function appendExploreSourcesButton(sid, lastQuestion) {
-  const exploreWrap = document.createElement('div');
-  exploreWrap.className = 'explore-sources-row';
-  const exploreBtn = document.createElement('button');
-  exploreBtn.className = 'explore-sources-btn';
-  exploreBtn.textContent = 'חקור בפרוטוקולים';
-  exploreBtn.addEventListener('click', async () => {
-    exploreBtn.disabled = true;
-    exploreBtn.innerHTML = '<span class="btn-spinner"></span> טוען…';
-    try {
-      const q   = encodeURIComponent(lastQuestion);
-      const res = await fetch(`/api/research/${sid}/rag?query=${q}&top_k=20`);
-      const rd  = await res.json();
-      const mts = rd.meetings || [];
-      window.openProtocolBrowser(sid, mts[0]?.meeting_id || null, mts, {
-        originalQuestion: lastQuestion,
-        postCompletion:   true,
-      });
-      exploreBtn.innerHTML = 'חקור בפרוטוקולים';
-      exploreBtn.disabled  = false;
-    } catch (exc) {
-      console.error('[chat] explore-sources rag fetch failed:', exc);
-      exploreBtn.disabled = false;
-      exploreBtn.innerHTML = 'שגיאה — נסה שוב';
-    }
-  });
-  exploreWrap.appendChild(exploreBtn);
-  chatColumn.appendChild(exploreWrap);
-  scrollToBottom();
-  return exploreBtn;
-}

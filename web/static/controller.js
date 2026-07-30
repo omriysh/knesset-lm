@@ -88,7 +88,7 @@ function finalize(session, statusEl) {
       const cursor = session.agentEl.querySelector('.stream-cursor');
       if (cursor) cursor.remove();
       if (session.pendingFootnotes.length > 0) {
-        applyEvidenceCitations(body, session.pendingFootnotes, session.pendingCitations);
+        applyEvidenceCitations(body, session.pendingFootnotes, session.pendingCitations, state.sessionId);
         session.agentEl.insertAdjacentHTML(
           'beforeend',
           buildSourcesHtml(session.pendingFootnotes, state.sessionId),

@@ -45,7 +45,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import chromadb
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -391,6 +391,94 @@ _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+
+_MK_PHOTOS_DIR = config.MK_PHOTOS_DIR
+_MK_PHOTO_EXTS = (".jpeg", ".jpg", ".png")
+
+# Honorific / role prefixes stripped before photo lookup. Mirrors browser.js
+# _speakerPhotoKey but also covers forms it misses (notably the definite-
+# article היו"ר, שר roles, מ"מ). Speaker strings arrive as e.g. 'ח"כ אבי דיכטר',
+# 'היו"ר עמית הלוי', 'השר יריב לוין'.
+_HONORIFIC_RE = re.compile(
+    r'^(ח"כ|ח\'כ|היו"ר|יו"ר|מ"מ\s+היו"ר|מ"מ|סגן\s+השר|סגנית\s+השרה|השרה|השר|שרה|שר|מנכ"ל|ד"ר|פרופ\'?)\s+'
+)
+
+# Lazy singleton fuzzy index over mks.db (label = canonical MK name, which
+# matches the photo filenames). Loading scans the whole table, so cache it —
+# the reading tab fires one /mk-photo request per distinct speaker.
+_mk_fuzzy_index = None
+_mk_fuzzy_loaded = False
+_mk_photo_cache: dict[str, "Path | None"] = {}
+
+
+def _get_mk_fuzzy_index():
+    global _mk_fuzzy_index, _mk_fuzzy_loaded
+    if _mk_fuzzy_loaded:
+        return _mk_fuzzy_index
+    _mk_fuzzy_loaded = True
+    try:
+        from retrieval.bm25_index import BM25Index
+        from utils.tool_helpers.fuzzy_name_index import FuzzyNameIndex
+        mks_db = config.BM25_DIR / "25" / "mks.db"
+        if not mks_db.exists():
+            print(f"[mk_photo] mks.db not found ({mks_db}); "
+                  f"photo name resolution limited to exact filename match")
+            return None
+        bm = BM25Index(mks_db)
+        try:
+            _mk_fuzzy_index = FuzzyNameIndex.from_bm25(bm)
+        finally:
+            bm.close()
+    except Exception as exc:
+        print(f"[mk_photo] failed to load mks fuzzy index: {exc}")
+        _mk_fuzzy_index = None
+    return _mk_fuzzy_index
+
+
+def _photo_file_for(stem: str) -> "Path | None":
+    stem = stem.strip()
+    if not stem:
+        return None
+    for ext in _MK_PHOTO_EXTS:
+        p = _MK_PHOTOS_DIR / f"{stem}{ext}"
+        if p.exists():
+            return p
+    return None
+
+
+def _resolve_mk_photo(name: str) -> "Path | None":
+    """Resolve a (possibly honorific-prefixed / variant) speaker name to a
+    photo file: exact match → prefix-stripped exact match → fuzzy resolve to
+    a canonical MK name. Returns None for non-MKs (guests, section headers)."""
+    if name in _mk_photo_cache:
+        return _mk_photo_cache[name]
+
+    cleaned = _HONORIFIC_RE.sub("", name.strip()).strip()
+    result = _photo_file_for(name) or _photo_file_for(cleaned)
+
+    if result is None and cleaned:
+        idx = _get_mk_fuzzy_index()
+        if idx is not None:
+            try:
+                matches = idx.search(
+                    cleaned, top_k=1, threshold=config.PARTICIPANT_FUZZY_THRESHOLD
+                )
+            except Exception as exc:
+                print(f"[mk_photo] fuzzy resolve failed for {name!r}: {exc}")
+                matches = []
+            if matches:
+                result = _photo_file_for(matches[0]["label"])
+
+    _mk_photo_cache[name] = result
+    return result
+
+
+@app.get("/mk-photo/{name}")
+async def mk_photo(name: str):
+    p = _resolve_mk_photo(name)
+    if p is not None:
+        return FileResponse(str(p), media_type=f"image/{p.suffix.lstrip('.')}")
+    return JSONResponse({}, status_code=404)
 
 
 # ── Models ────────────────────────────────────────────────────────────────────
@@ -1206,6 +1294,377 @@ async def get_tool_result(session_id: str, ref_id: str):
     if full is None:
         return JSONResponse({"error": "not found"}, status_code=404)
     return JSONResponse({"full": full})
+
+
+# ── Browse (reading tab) ──────────────────────────────────────────────────────
+
+class BrowseFilterRequest(BaseModel):
+    committees: list[str] = []
+    mks:        list[str] = []
+    parties:    list[str] = []
+    guest:      str | None = None
+    date_from:  str | None = None
+    date_to:    str | None = None
+
+
+class BrowseSearchRequest(BaseModel):
+    query:   str = ""
+    keyword: str = ""
+    top_k:   int | None = None
+    filters: BrowseFilterRequest | None = None
+
+
+@app.get("/api/meta")
+async def get_meta():
+    """Return committees, MKs, and parties for filter dropdowns."""
+    from utils.knesset_db import get_all_committees, get_all_mks, get_all_parties
+    loop = asyncio.get_event_loop()
+    committees, mks, parties = await asyncio.gather(
+        loop.run_in_executor(None, lambda: get_all_committees(25)),
+        loop.run_in_executor(None, lambda: get_all_mks(25)),
+        loop.run_in_executor(None, lambda: get_all_parties(25)),
+    )
+    def _mk_name(m: dict) -> str:
+        first = (m.get("mk_individual_first_name") or "").strip()
+        last  = (m.get("mk_individual_name")       or "").strip()
+        return f"{first} {last}".strip() or last or first
+
+    return {
+        "committees": [c["Name"] for c in committees],
+        "mks":        sorted({_mk_name(m) for m in mks if _mk_name(m)}),
+        "parties":    [p["party"] for p in parties],
+    }
+
+
+@app.post("/api/browse/rag")
+async def browse_rag(req: BrowseSearchRequest, request: Request):
+    """
+    Session-less entry point for the reading tab.
+
+    Flow (structural-prefilter-first, replacing the old retrieve-then-post-filter
+    approach that silently dropped on-topic meetings outside a fixed top-k window
+    and unconditionally failed under any MK/party/guest filter — see
+    src/retrieval/meeting_index.py and utils.tools.search_speeches_bm25 docstrings):
+
+      1. Structural SQL prefilter (committee / date / MK / party) against
+         meeting_index.db → candidate meeting_id set (or None = unrestricted).
+      2. Topic ranking (embeddings) scoped to the candidate set, if `query` given.
+      3. Keyword ranking (BM25 over actual speech text) scoped to the candidate
+         set, if `keyword` given.
+      4. RRF-fuse the two rankings (or use whichever one ran alone).
+
+    Creates a fresh ResearchSession, persists meeting_paths into that session's
+    workspace_data, and returns the session_id alongside the meeting list.
+    Subsequent calls (summary, transcript, score_pass2, etc.) use the returned
+    session_id against the existing /api/research/ routes.
+    """
+    from web.session import ResearchSession, save_session
+    from datetime import datetime, timezone
+    from retrieval.meeting_index import query_candidate_meeting_ids
+    from retrieval.hybrid import rrf_fuse
+    from utils.tools import _open_bm25, search_speeches_bm25
+    from utils.tool_helpers.fuzzy_name_index import FuzzyNameIndex
+
+    query   = req.query.strip()
+    keyword = req.keyword.strip() if req.keyword else ""
+
+    if not query and not keyword:
+        return JSONResponse({"error": "נדרש לפחות שדה חיפוש אחד"}, status_code=400)
+    if query and not _ok_question(query):
+        return JSONResponse({"error": "שאלה מכילה תווים לא חוקיים או ארוכה מדי"}, status_code=400)
+    if keyword and not _ok_question(keyword):
+        return JSONResponse({"error": "מילת מפתח מכילה תווים לא חוקיים או ארוכה מדי"}, status_code=400)
+
+    settings     = request.app.state.settings
+    sessions_dir = request.app.state.sessions_dir
+    chroma       = request.app.state.chroma
+    embedder     = request.app.state.embedder
+    embed_lock   = request.app.state.embed_lock
+
+    top_k = min(req.top_k or settings.TOP_K_BROWSE, _MAX_TOP_K)
+    top_n = settings.TOP_N_DIALOGS
+    knesset_num = 25   # matches the rest of app.py (get_meta, etc.) — no per-request selector yet
+
+    loop = asyncio.get_event_loop()
+    query_used = query or keyword
+
+    def _norm(s: str) -> str:
+        return s.replace("_", " ").strip()
+
+    # ── 1. Structural SQL prefilter ─────────────────────────────────────────
+    filt = req.filters
+    committees = [_norm(c) for c in filt.committees] if filt and filt.committees else None
+    date_from  = filt.date_from if filt and filt.date_from else None
+    date_to    = filt.date_to if filt and filt.date_to else None
+    parties    = list(filt.parties) if filt and filt.parties else None
+
+    mk_ids: list[str] = []
+    if filt and (filt.mks or filt.guest):
+        names = list(filt.mks or [])
+        if filt.guest:
+            names.append(filt.guest)
+
+        def _resolve_names() -> tuple[list[str], list[str]]:
+            resolved: list[str] = []
+            unresolved: list[str] = []
+            bm25_mks = _open_bm25("mks", knesset_num)
+            if bm25_mks is None:
+                print(f"[browse_rag] mks.db not built — cannot resolve MK/guest name "
+                      f"filter to mk_id; participant filter skipped for names={names}",
+                      flush=True)
+                return resolved, names
+            try:
+                fuzzy_mk_index = FuzzyNameIndex.from_bm25(bm25_mks)
+            except Exception as exc:
+                print(f"[browse_rag] failed to load mks fuzzy index: {exc}", flush=True)
+                return resolved, names
+            finally:
+                bm25_mks.close()
+            for name in names:
+                matches = fuzzy_mk_index.search(name, top_k=1, threshold=config.PARTICIPANT_FUZZY_THRESHOLD)
+                if matches:
+                    resolved.append(str(matches[0]["extra"].get("mk_id") or matches[0]["id"]))
+                else:
+                    unresolved.append(name)
+            return resolved, unresolved
+
+        mk_ids, unresolved_names = await loop.run_in_executor(None, _resolve_names)
+
+        # filt.guest is a single free-text name, not necessarily an MK — when it
+        # doesn't resolve against mks.db, pass it through as a LIKE-matched
+        # meeting_guests.name filter instead of silently dropping it (guests are
+        # ministry officials / private citizens who never get an mk_id — see
+        # meeting_guests table in retrieval/meeting_index.py, populated from
+        # extract_attendance() roster names that failed MK fuzzy-resolution).
+        guest_name = filt.guest if filt and filt.guest and filt.guest in unresolved_names else None
+
+        # Any remaining unresolved names (i.e. not filt.guest) are genuinely
+        # unmatchable MK filters — still dropped, still logged.
+        other_unresolved = [n for n in unresolved_names if n != guest_name]
+        if other_unresolved:
+            # Known limitation: meeting_index.db only tracks resolved MK ids (see
+            # its schema docstring). Not a crash, not silently "working" —
+            # logged so it's diagnosable.
+            print(f"[browse_rag] could not resolve to a known MK, filter skipped "
+                  f"for: {other_unresolved}", flush=True)
+    else:
+        guest_name = None
+
+    candidate_ids: list[str] | None = None
+    if committees or date_from or date_to or mk_ids or parties or guest_name:
+        try:
+            candidate_ids = await loop.run_in_executor(
+                None,
+                lambda: query_candidate_meeting_ids(
+                    knesset_num,
+                    committees=committees, date_from=date_from, date_to=date_to,
+                    mk_ids=mk_ids or None, parties=parties, guest_name=guest_name,
+                ),
+            )
+        except FileNotFoundError as exc:
+            print(f"[browse_rag] structural filter requested but meeting_index.db "
+                  f"missing: {exc}", flush=True)
+            return JSONResponse(
+                {"error": "אינדקס הסינון המבני (ועדה/תאריך/חבר כנסת) לא נבנה עדיין. "
+                          "יש להריץ scripts/build_meeting_index.py"},
+                status_code=503,
+            )
+
+    if candidate_ids is not None and not candidate_ids:
+        # Structural filters were supplied and matched nothing — legitimate
+        # zero-result case; no point running topic/keyword ranking at all.
+        session_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        save_session(ResearchSession(
+            session_id=session_id, status="done", original_question=query_used,
+            created_at=now, updated_at=now,
+            workspace_data={"meeting_paths": {}, "rag_chunks_by_meeting": {}, "selected_chunks": []},
+        ), sessions_dir)
+        return {"session_id": session_id, "meetings": [], "query_used": query_used}
+
+    # ── 2. Topic ranking (embeddings), scoped to the candidate set ─────────
+    topic_ranking: list[str] = []
+    meeting_scores: dict[str, float] = {}
+    selected_pass1: list[dict] = []
+    meeting_paths: dict[str, str] = {}
+
+    if query:
+        def _run_topic():
+            with embed_lock:
+                return query_retrieve(
+                    query, chroma_client=chroma, embedder=embedder,
+                    top_k=top_k, top_n=top_n,
+                    meeting_id_filter=candidate_ids,
+                )
+        context_str, debug = await loop.run_in_executor(None, _run_topic)
+        topic_ranking  = debug["meetings"]
+        meeting_scores = dict(debug.get("meeting_scores", {}))
+        selected_pass1 = debug["selected_pass1"]
+        meeting_paths  = dict(debug["meeting_paths"])
+        register_meeting_paths(meeting_paths)
+
+    # ── 3. Keyword ranking (BM25 over real speech text), scoped to candidates ─
+    keyword_ranking: list[str] = []
+    if keyword:
+        bm25_speeches = _open_bm25("speeches", knesset_num)
+        if bm25_speeches is None:
+            print("[browse_rag] speeches.db BM25 index not built — keyword search "
+                  "unavailable; falling back to topic ranking only", flush=True)
+        else:
+            def _run_keyword():
+                try:
+                    return search_speeches_bm25(
+                        bm25_speeches, keyword,
+                        meeting_ids=candidate_ids,
+                        top_k=config.KEYWORD_RERANK_TOP_K,
+                        sort="relevance",
+                    )
+                except Exception as exc:
+                    print(f"[browse_rag] keyword BM25 search failed: {exc}", flush=True)
+                    return []
+                finally:
+                    bm25_speeches.close()
+            rows = await loop.run_in_executor(None, _run_keyword)
+
+            # Aggregate speech-level hits to per-meeting best score. sqlite's
+            # bm25() convention: lower (more negative) = more relevant, and
+            # BM25Index.search() already returns rows ORDER BY score ASC, so
+            # the *first* occurrence of a meeting_id in `rows` is already its
+            # best (lowest) score — min() here just makes that explicit/robust
+            # instead of relying on iteration order.
+            best_score: dict[str, float] = {}
+            for r in rows:
+                extra = r.get("extra") if isinstance(r.get("extra"), dict) else {}
+                mid = extra.get("meeting_id")
+                if not mid:
+                    continue
+                score = float(r.get("score", 0.0))
+                if mid not in best_score or score < best_score[mid]:
+                    best_score[mid] = score
+            keyword_ranking = sorted(best_score, key=lambda m: best_score[m])
+            for mid in keyword_ranking:
+                if mid not in meeting_scores:
+                    meeting_scores[mid] = -best_score[mid]  # flip sign: higher = better, for display
+
+    # ── 4. Fuse ──────────────────────────────────────────────────────────────
+    if topic_ranking and keyword_ranking:
+        meeting_ids = rrf_fuse([topic_ranking, keyword_ranking],
+                                top_k=max(top_k, len(topic_ranking), len(keyword_ranking)))
+    elif topic_ranking:
+        meeting_ids = topic_ranking
+    elif keyword_ranking:
+        meeting_ids = keyword_ranking
+    else:
+        meeting_ids = []
+    meeting_ids = meeting_ids[:top_k]
+
+    # ── Resolve summary path / committee / date for every surviving meeting ──
+    # Topic ranking already registers meeting_paths + per-meeting committee/date
+    # via selected_pass1 metadata. Keyword-only (or keyword-widened) meetings
+    # need a fallback metadata lookup — a cheap Chroma metadata-only .get()
+    # against the bullets collection (no embedding call).
+    meta_by_meeting: dict[str, dict] = {}
+    for item in selected_pass1:
+        mid = item["meta"].get("meeting_id", "")
+        if mid and mid not in meta_by_meeting:
+            meta_by_meeting[mid] = item["meta"]
+
+    missing_meta = [mid for mid in meeting_ids if mid not in meta_by_meeting or mid not in meeting_paths]
+    if missing_meta:
+        def _fetch_missing_meta():
+            try:
+                coll = chroma.get_collection(config.BULLETS_COLLECTION)
+                return coll.get(
+                    where={"meeting_id": {"$in": missing_meta}},
+                    include=["metadatas"],
+                )
+            except Exception as exc:
+                print(f"[browse_rag] bullets metadata fallback lookup failed: {exc}", flush=True)
+                return {"metadatas": []}
+        rows = await loop.run_in_executor(None, _fetch_missing_meta)
+        for meta in rows.get("metadatas") or []:
+            mid = meta.get("meeting_id", "")
+            if not mid:
+                continue
+            if mid not in meta_by_meeting:
+                meta_by_meeting[mid] = meta
+            sp = meta.get("summary_path")
+            if sp and mid not in meeting_paths:
+                meeting_paths[mid] = sp
+    if missing_meta:
+        register_meeting_paths(meeting_paths)
+
+    def _parse_filename(path_str: str) -> tuple[str, str]:
+        p     = Path(path_str)
+        parts = p.stem.split("_")
+        date  = f"{parts[0]}/{parts[1]}/{parts[2]}" if len(parts) >= 4 else ""
+        return date, p.parent.name
+
+    def _first_bullet(path_str: str) -> str:
+        try:
+            bullets = parse_summary_bullets(Path(path_str))
+            for b in bullets:
+                return b["text"]
+        except Exception as exc:
+            print(f"[browse_rag] bullet parse failed: {exc}", flush=True)
+        return ""
+
+    meetings_out = []
+    for mid in meeting_ids:
+        meta = meta_by_meeting.get(mid)
+        if meta:
+            date      = meta.get("date", "")
+            committee = meta.get("committee", "")
+        else:
+            summary_p = get_summary_path_from_id(mid)
+            date, committee = _parse_filename(str(summary_p)) if summary_p else ("", "")
+
+        summary_p = get_summary_path_from_id(mid)
+        excerpt   = _first_bullet(str(summary_p)) if summary_p else ""
+        score     = meeting_scores.get(mid, 0.0)
+        title     = f"{committee} — {date}" if committee and date else mid
+        meetings_out.append({
+            "meeting_id":  mid,
+            "date":        date,
+            "committee":   committee,
+            "title":       title,
+            "excerpt":     excerpt,
+            "score":       score,
+        })
+
+    # RAG chunks index for heatmap (topic-ranked meetings only — keyword-only
+    # meetings have no pass-1 chunk selection to show in the heatmap).
+    surviving = {m["meeting_id"] for m in meetings_out}
+    rag_by_meeting: dict[str, list[dict]] = {}
+    for item in selected_pass1:
+        meta = item["meta"]
+        mid  = meta.get("meeting_id", "")
+        if not mid or mid not in surviving:
+            continue
+        rag_by_meeting.setdefault(mid, []).append({
+            "start": meta.get("start_speech_idx", 0),
+            "end":   meta.get("end_speech_idx",   0),
+            "sim":   round(float(item["p1_sim"]), 4),
+            "tvec":  item.get("topic_scores_vec", []),
+        })
+
+    # Create a browse session so subsequent /api/research/ endpoints work
+    session_id = str(uuid.uuid4())
+    now        = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    save_session(ResearchSession(
+        session_id         = session_id,
+        status             = "done",
+        original_question  = query_used,
+        created_at         = now,
+        updated_at         = now,
+        workspace_data     = {
+            "meeting_paths":          meeting_paths,
+            "rag_chunks_by_meeting":  rag_by_meeting,
+            "selected_chunks":        [],
+        },
+    ), sessions_dir)
+
+    return {"session_id": session_id, "meetings": meetings_out, "query_used": query_used}
 
 
 # ── Workspace models ──────────────────────────────────────────────────────────

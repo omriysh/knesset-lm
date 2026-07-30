@@ -35,6 +35,9 @@ let _panel     = null;   // root DOM element (.msg-agent wrapper)
 let _summary   = null;   // last fetched summary {topics:[]}
 let _activeTopicFilter = null;  // null = show all; number = show that topic index
 let _origQ     = '';     // original question (for summarize button)
+let _standalone = false; // true when embedded in reading tab (no chat bar)
+let _container  = null;  // DOM element the panel is appended into
+let _pendingScrollChunk = null; // chunk_id to scroll to once its meeting loads
 
 /* ── Heatmap state ──────────────────────────────────────────────── */
 let _hmChunks        = [];   // [{chunk_id, chars, simScore, topicScores}]
@@ -49,8 +52,18 @@ let _partCache       = {};          // meeting_id → string[] (lowercase speake
 let _partLoadedCount = 0;           // how many participant fetches completed
 
 /* ── Main entry point ───────────────────────────────────────────── */
+/**
+ * openProtocolBrowser(sessionId, meetingId, meetings, opts)
+ *
+ * opts.container    — DOM element to append into (default: #chat-column)
+ * opts.standalone   — true: fills the container, hides chat bar
+ * opts.postCompletion / opts.originalQuestion — as before
+ */
 function openProtocolBrowser(sessionId, meetingId, meetings, opts = {}) {
-  _sid      = sessionId;
+  _sid        = sessionId;
+  _standalone = !!opts.standalone;
+  _container  = opts.container || document.getElementById('chat-column');
+
   _meetings = (meetings || []).map(m => {
     const clean = s => String(s || '').replace(/_/g, ' ').trim();
     let title;
@@ -73,16 +86,17 @@ function openProtocolBrowser(sessionId, meetingId, meetings, opts = {}) {
   _partLoadedCount   = 0;
   _hmChunks          = [];
   _activeBulletIdx   = null;
+  _pendingScrollChunk = (opts.focusChunkId != null && opts.focusChunkId !== '')
+    ? String(opts.focusChunkId) : null;
 
   // Replace any existing panel
   if (_panel) _panel.remove();
 
   _panel = document.createElement('div');
-  _panel.className = 'msg-agent browser-wrapper';
+  _panel.className = _standalone ? 'browser-standalone-wrapper' : 'msg-agent browser-wrapper';
   _panel.innerHTML = _shellHtml(opts.postCompletion);
 
-  const chatColumn = document.getElementById('chat-column');
-  chatColumn.appendChild(_panel);
+  _container.appendChild(_panel);
 
   const qLabel = _panel.querySelector('#browser-question-label');
   if (qLabel) qLabel.textContent = _origQ || 'עיון בפרוטוקולים';
@@ -91,47 +105,88 @@ function openProtocolBrowser(sessionId, meetingId, meetings, opts = {}) {
   _loadMeeting(meetingId);
   _loadAllParticipants();
 
-  // Panel chat submit
-  _panel.querySelector('#browser-chat-submit').addEventListener('click', _browserAsk);
-  _panel.querySelector('#browser-chat-input').addEventListener('keydown', e => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); _browserAsk(); }
-  });
+  // On mobile, auto-collapse the sidebar in standalone mode
+  if (_standalone && window.innerWidth < 768) {
+    const sb = _panel.querySelector('#browser-sidebar');
+    if (sb) sb.classList.add('sidebar-collapsed');
+    const sideTab = _panel.querySelector('#sidebar-side-tab');
+    if (sideTab) sideTab.style.display = 'flex';
+  }
+
+  // Panel chat wiring (only when not standalone)
+  if (!_standalone) {
+    const chatSubmit = _panel.querySelector('#browser-chat-submit');
+    const chatInput  = _panel.querySelector('#browser-chat-input');
+    if (chatSubmit) chatSubmit.addEventListener('click', _browserAsk);
+    if (chatInput)  chatInput.addEventListener('keydown', e => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); _browserAsk(); }
+    });
+  }
 
   // Summarize button (if shown)
   const sumBtn = _panel.querySelector('#browser-summarize-btn');
   if (sumBtn) sumBtn.addEventListener('click', _browserSummarize);
 
-  chatColumn.scrollTop = chatColumn.scrollHeight;
+  _container.scrollTop = _container.scrollHeight;
 }
 
 /* ── Shell HTML ─────────────────────────────────────────────────── */
 function _shellHtml(postCompletion) {
-  const summarizeBtn = postCompletion ? '' :
+  // In standalone mode: no "summarize for me", no chat bar, no close button
+  const summarizeBtn = (postCompletion || _standalone) ? '' :
     `<button id="browser-summarize-btn" class="browser-summarize-btn" title="תמצת על בסיס הפרוטוקולים שנמצאו">
       תמצת עבורי
     </button>`;
+  const closeBtn = _standalone ? '' :
+    `<button class="browser-close-btn" onclick="closeProtocolBrowser()" title="סגור">✕</button>`;
+  const chatBar = _standalone ? '' : `
+  <div class="browser-chat-bar">
+    <textarea id="browser-chat-input" placeholder="שאל שאלה על הישיבה הזו… (Ctrl+Enter)" rows="1"></textarea>
+    <button id="browser-chat-submit" class="browser-chat-submit">שלח</button>
+  </div>`;
+
   return `
 <div class="browser-panel">
   <div class="browser-header">
-    <button class="sidebar-collapse-btn" id="sidebar-collapse-btn"
-            onclick="browserToggleSidebar()" title="הצג/הסתר סרגל">▶ הסתר ישיבות</button>
+    <!-- Mobile: always-visible sidebar toggle icon -->
+    <button class="sidebar-mob-btn" onclick="browserToggleSidebar()" title="ישיבות">
+      <span class="material-symbols-outlined" style="font-size:20px">format_list_bulleted</span>
+    </button>
+    <!-- Desktop: appears when sidebar is collapsed -->
+    <button class="sidebar-expand-btn" id="sidebar-expand-btn"
+            onclick="browserToggleSidebar()" title="הצג ישיבות" style="display:none">
+      <span class="material-symbols-outlined" style="font-size:15px">format_list_bulleted</span>
+      <span>ישיבות</span>
+    </button>
+    <button class="browser-summary-btn" id="browser-summary-btn" onclick="browserToggleSummary()" title="סיכום AI" style="display:none">
+      <span class="material-symbols-outlined" style="font-size:16px;font-variation-settings:'FILL' 1">auto_awesome</span>
+      <span>סיכום</span>
+    </button>
     <span class="browser-breadcrumb" id="browser-question-label"></span>
     <div class="browser-header-actions">
       ${summarizeBtn}
-      <button class="browser-close-btn" onclick="closeProtocolBrowser()" title="סגור">✕</button>
+      ${closeBtn}
     </div>
   </div>
+  <div class="browser-summary-bar" id="browser-summary-bar"></div>
   <div class="browser-body">
     <div class="browser-transcript-wrap">
+      <div class="browser-transcript-col" id="browser-transcript-col">
+        <div class="browser-loading">טוען…</div>
+      </div>
       <div class="heatmap-strip" id="heatmap-strip">
         <div class="hm-bands" id="hm-bands"></div>
         <div class="hm-viewport" id="hm-viewport"></div>
       </div>
-      <div class="browser-transcript-col" id="browser-transcript-col">
-        <div class="browser-loading">טוען…</div>
-      </div>
     </div>
     <div class="browser-sidebar" id="browser-sidebar">
+      <!-- Desktop: collapse button above meeting list -->
+      <div class="sidebar-top-header">
+        <span class="sidebar-top-title">ישיבות</span>
+        <button class="sidebar-top-close" onclick="browserToggleSidebar()" title="הסתר">
+          <span class="material-symbols-outlined" id="sidebar-top-arrow" style="font-size:18px">chevron_right</span>
+        </button>
+      </div>
       <div class="sidebar-inner">
         <div class="sidebar-controls">
           <div class="sidebar-sort-row">
@@ -155,10 +210,10 @@ function _shellHtml(postCompletion) {
       </div>
     </div>
   </div>
-  <div class="browser-chat-bar">
-    <textarea id="browser-chat-input" placeholder="שאל שאלה על הישיבה הזו… (Ctrl+Enter)" rows="1"></textarea>
-    <button id="browser-chat-submit" class="browser-chat-submit">שלח</button>
-  </div>
+  <button class="sidebar-side-tab" id="sidebar-side-tab" onclick="browserToggleSidebar()" title="פתח רשימת ישיבות" style="display:none">
+    <span class="material-symbols-outlined" id="sidebar-side-tab-icon" style="font-size:18px">format_list_bulleted</span>
+  </button>
+  ${chatBar}
 </div>`;
 }
 
@@ -290,11 +345,31 @@ function browserFilterParticipant(value) {
 }
 
 function browserToggleSidebar() {
-  const sb  = _panel?.querySelector('#browser-sidebar');
-  const btn = _panel?.querySelector('#sidebar-collapse-btn');
+  const sb = _panel?.querySelector('#browser-sidebar');
   if (!sb) return;
   const collapsed = sb.classList.toggle('sidebar-collapsed');
-  if (btn) btn.textContent = collapsed ? '◀ הצג ישיבות' : '▶ הסתר ישיבות';
+  // Desktop: show expand-btn in header when collapsed
+  const expandBtn = _panel?.querySelector('#sidebar-expand-btn');
+  if (expandBtn) expandBtn.style.display = collapsed ? 'flex' : 'none';
+  // Desktop: flip the arrow in the sidebar top header
+  const arrow = _panel?.querySelector('#sidebar-top-arrow');
+  if (arrow) arrow.textContent = collapsed ? 'chevron_left' : 'chevron_right';
+  // Mobile: flip the icon in the header button
+  const mobIcon = _panel?.querySelector('.sidebar-mob-btn .material-symbols-outlined');
+  if (mobIcon) mobIcon.textContent = collapsed ? 'format_list_bulleted' : 'close';
+  // Mobile: side-tab visible only when sidebar is collapsed
+  const sideTab = _panel?.querySelector('#sidebar-side-tab');
+  if (sideTab) sideTab.style.display = collapsed ? 'flex' : 'none';
+  const sideTabIcon = _panel?.querySelector('#sidebar-side-tab-icon');
+  if (sideTabIcon) sideTabIcon.textContent = 'format_list_bulleted';
+}
+
+function browserToggleSummary() {
+  const bar = _panel?.querySelector('#browser-summary-bar');
+  if (!bar) return;
+  const open = bar.classList.toggle('open');
+  const btn = _panel?.querySelector('#browser-summary-btn span:not(.material-symbols-outlined)');
+  if (btn) btn.textContent = open ? 'סגור' : 'סיכום';
 }
 
 /* ── Participant loading ─────────────────────────────────────────── */
@@ -356,9 +431,26 @@ async function _loadMeeting(meetingId) {
     _summary = summaryData;
     col.innerHTML =
       `<div class="transcript-inner">` +
-        _summaryHtml(summaryData) +
+        _summaryHtml(summaryData, m) +
         _transcriptHtml(transcriptData) +
       `</div>`;
+
+    // Populate header summary bar (desktop)
+    const summaryBar = _panel?.querySelector('#browser-summary-bar');
+    if (summaryBar) {
+      summaryBar.innerHTML = '<div class="summary-bar-inner">' + _summaryBodyHtml(summaryData) + '</div>';
+    }
+    const summaryBtn = _panel?.querySelector('#browser-summary-btn');
+    if (summaryBtn) summaryBtn.style.display = 'flex';
+    // Wire bullet clicks in header bar
+    _panel?.querySelectorAll('#browser-summary-bar .summary-bullet-btn[data-bullet-idx]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const idx = parseInt(btn.dataset.bulletIdx, 10);
+        _activeBulletIdx = (_activeBulletIdx === idx) ? null : idx;
+        _renderHeatmap();
+        _highlightBulletBtn(idx);
+      });
+    });
 
     // Wire summary bullet clicks for heatmap reranking
     col.querySelectorAll('.summary-bullet-btn[data-bullet-idx]').forEach(btn => {
@@ -386,15 +478,29 @@ async function _loadMeeting(meetingId) {
     // Async: score pass-2 chunks and fill heatmap colors
     _scoreAndRenderHeatmap(meetingId);
 
+    // Deep-link: scroll to the requested chunk once the transcript is laid out.
+    if (_pendingScrollChunk != null) {
+      const target = _pendingScrollChunk;
+      _pendingScrollChunk = null;
+      requestAnimationFrame(() => browserScrollToChunk(target));
+    }
+
   } catch (err) {
     col.innerHTML = `<div class="browser-loading"><div class="browser-error">שגיאה בטעינה: ${_esc(err.message)}</div></div>`;
   }
 }
 
 /* ── Summary panel ───────────────────────────────────────────────── */
-function _summaryHtml(data) {
+function _summaryHtml(data, m) {
   const topics = data.topics || [];
   if (!topics.length) return '';
+
+  const metaParts = [];
+  if (m?.committee) metaParts.push(_esc((m.committee + '').replace(/_/g, ' ').trim()));
+  if (m?.date)      metaParts.push(_esc((m.date + '').replace(/_/g, '/')));
+  const metaHtml = metaParts.length
+    ? `<span class="summary-toggle-sep">|</span><span class="summary-toggle-meta">${metaParts.join(' | ')}</span>`
+    : '';
 
   const sections = topics.map((t, i) => {
     const bullets = (t.bullets || []).map(b => {
@@ -422,9 +528,38 @@ function _summaryHtml(data) {
   <summary class="summary-toggle">
     <span class="summary-toggle-arrow">▼</span>
     <span>סיכום AI</span>
+    ${metaHtml}
   </summary>
   <div class="summary-body">${sections}</div>
 </details>`;
+}
+
+function _summaryBodyHtml(data) {
+  const topics = data.topics || [];
+  if (!topics.length) return '';
+  return topics.map((t, i) => {
+    const bullets = (t.bullets || []).map(b => {
+      const text      = typeof b === 'string' ? b : b.text;
+      const bulletIdx = typeof b === 'string' ? null : b.bullet_idx;
+      const idxAttr   = bulletIdx != null ? `data-bullet-idx="${bulletIdx}"` : '';
+      return `<li>
+        <button class="summary-bullet-btn" ${idxAttr}>
+          <span class="bullet-indicator"></span>
+          <span>${marked.parseInline(text)}</span>
+        </button>
+      </li>`;
+    }).join('');
+    return `<div class="summary-section">
+       <div class="summary-heading">${_esc(t.heading)}</div>
+       <ul class="summary-bullets">${bullets}</ul>
+     </div>`;
+  }).join('');
+}
+
+function _highlightBulletBtn(idx) {
+  _panel?.querySelectorAll('.summary-bullet-btn').forEach(b => {
+    b.classList.toggle('active', parseInt(b.dataset.bulletIdx, 10) === idx);
+  });
 }
 
 /* ── Transcript ──────────────────────────────────────────────────── */
@@ -433,18 +568,20 @@ function _transcriptHtml(data) {
   if (!chunks.length) return '<div class="browser-empty">אין תמלול זמין</div>';
 
   const rows = chunks.map(c => {
-    const color   = topicColor(c.topic_index);
+    const color    = topicColor(c.topic_index);
     const initials = _initials(c.speaker);
-    const pinBtn  = `<button class="chunk-pin" onclick="browserPinChunk('${_esc(c.chunk_id)}','${_esc(data.meeting_id)}')" title="הוסף לסל">📌</button>`;
+    const photoName = encodeURIComponent(_speakerPhotoKey(c.speaker));
     return `
 <div class="chunk-card" data-chunk-id="${_esc(c.chunk_id)}" data-topic-idx="${c.topic_index ?? ''}">
   <div class="chunk-left">
-    <div class="chunk-avatar" style="background:${color}20;color:${color}">${_esc(initials)}</div>
+    <div class="chunk-avatar" style="background:${color}20;color:${color}">
+      <span class="chunk-avatar-initials">${_esc(initials)}</span>
+      <img class="chunk-avatar-img" src="/mk-photo/${photoName}" alt="" loading="lazy" onerror="this.style.display='none'">
+    </div>
   </div>
   <div class="chunk-body" style="border-right-color:${color}">
     <div class="chunk-speaker-row">
       <span class="chunk-speaker">${_esc(c.speaker || '—')}</span>
-      ${pinBtn}
     </div>
     <div class="chunk-text">${_esc(c.text)}</div>
   </div>
@@ -565,7 +702,6 @@ function _filterByBullet(bulletIdx) {
     _activeBulletIdx  = null;
     _activeTopicFilter = null;
     _renderHeatmap(_hmChunks.map(c => c.simScore));
-    col.querySelectorAll('.chunk-card').forEach(c => c.classList.remove('dimmed'));
     col.querySelectorAll('.summary-bullet-btn').forEach(b => b.classList.remove('active'));
     return;
   }
@@ -583,19 +719,16 @@ function _filterByBullet(bulletIdx) {
 
   _renderHeatmap(normScores);
 
-  // Dim chunks in lower half of relevance for this bullet
-  col.querySelectorAll('.chunk-card').forEach((card, i) => {
-    const s = normScores[i] ?? 0;
-    card.classList.toggle('dimmed', s < 0.35);
-  });
-
   // Mark active bullet
   col.querySelectorAll('.summary-bullet-btn').forEach(b => {
     b.classList.toggle('active', parseInt(b.dataset.bulletIdx, 10) === bulletIdx);
   });
 
-  // Scroll to first relevant chunk
-  const first = col.querySelector('.chunk-card:not(.dimmed)');
+  // Scroll to highest-scoring chunk
+  const normMax = Math.max(...normScores.filter(s => s != null), 0);
+  const bestIdx = normScores.findIndex(s => s === normMax);
+  const cards   = col.querySelectorAll('.chunk-card');
+  const first   = bestIdx >= 0 ? cards[bestIdx] : null;
   if (first) {
     const target = col.scrollTop
       + first.getBoundingClientRect().top
@@ -617,6 +750,28 @@ function browserScrollToChunk(chunkId) {
     - col.clientHeight / 2
     + card.clientHeight / 2;
   col.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+}
+
+/* ── Deep-link from the agent answer → open protocol in reading tab ── */
+function openProtocolFromCitation(sid, meetingId, speechIdx) {
+  if (!meetingId) return;
+  // Seed the viewer sidebar with the answer's own cited meetings.
+  const seed = (window.__citedMeetings && window.__citedMeetings[sid]) || [];
+  const meetings = (seed.length && seed.some(m => String(m.meeting_id) === String(meetingId)))
+    ? seed
+    : [{ meeting_id: String(meetingId) }];
+
+  if (typeof switchTab === 'function') switchTab('reading');
+
+  const area = document.getElementById('reading-browser-area');
+  if (area) area.innerHTML = '';
+
+  openProtocolBrowser(sid, String(meetingId), meetings, {
+    container:      area || undefined,
+    standalone:     true,
+    postCompletion: true,
+    focusChunkId:   (speechIdx != null && speechIdx !== '') ? String(speechIdx) : null,
+  });
 }
 
 /* ── Sidebar switch meeting ──────────────────────────────────────── */
@@ -651,24 +806,6 @@ async function _loadNewParticipants(newMeetings) {
   if (_filterPart) _renderSidebar();
 }
 
-/* ── Pin chunk ───────────────────────────────────────────────────── */
-async function browserPinChunk(chunkId, meetingId) {
-  // Find the chunk text from DOM
-  const col   = _panel.querySelector('#browser-transcript-col');
-  const card  = col?.querySelector(`.chunk-card[data-chunk-id="${chunkId}"]`);
-  const text  = card?.querySelector('.chunk-text')?.textContent?.trim() || '';
-
-  try {
-    await fetch(`/api/research/${_sid}/workspace/select`, {
-      method:  'POST',
-      headers: {'Content-Type': 'application/json'},
-      body:    JSON.stringify({ chunk_id: chunkId, text, source_meeting_id: meetingId }),
-    });
-    // Visual feedback
-    const btn = card?.querySelector('.chunk-pin');
-    if (btn) { btn.textContent = '✅'; btn.disabled = true; }
-  } catch { /* silent */ }
-}
 
 /* ── Panel chat (ask about current meeting) ──────────────────────── */
 async function _browserAsk() {
@@ -706,7 +843,7 @@ async function _browserSummarize() {
 
 /* ── Stream /workspace/ask → new agent message in main chat ─────── */
 async function _streamWorkspaceAsk(question, meetingId) {
-  const chatColumn = document.getElementById('chat-column');
+  const chatColumn = document.getElementById('chat-column') || _container;
 
   // User bubble
   const userRow = document.createElement('div');
@@ -780,6 +917,14 @@ function _meetingLabel(m) {
 function _initials(name) {
   if (!name) return '?';
   return name.trim().split(/\s+/).map(w => w[0]).slice(0, 2).join('');
+}
+
+// Strip honorific prefixes so "ח\"כ נעמה לזימי" → "נעמה לזימי" for photo lookup
+function _speakerPhotoKey(name) {
+  if (!name) return '';
+  return name.trim()
+    .replace(/^(ח"כ|ח'כ|השר|השרה|שר|שרה|יו"ר|מנכ"ל|ד"ר|פרופ'?)\s+/u, '')
+    .trim();
 }
 
 function _esc(s) {

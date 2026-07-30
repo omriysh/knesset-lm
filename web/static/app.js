@@ -43,7 +43,7 @@ attachLazyToggleListener();
 // ── Textarea auto-resize + Ctrl/⌘+Enter submit ─────────────────────────
 queryInput.addEventListener('input', () => {
   queryInput.style.height = 'auto';
-  queryInput.style.height = Math.min(queryInput.scrollHeight, 160) + 'px';
+  queryInput.style.height = Math.max(48, Math.min(queryInput.scrollHeight, 160)) + 'px';
   clearQueryError();
 });
 

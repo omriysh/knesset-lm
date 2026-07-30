@@ -14,7 +14,7 @@ import {
 } from '../render/stage_card.js';
 import { addSubgraphWrapperCard, finaliseSubgraphCard } from '../render/stages.js';
 import {
-  appendAgentCard, appendErrorMsg, appendExploreSourcesButton, setStatusMsg,
+  appendAgentCard, appendErrorMsg, setStatusMsg,
 } from '../render/chat.js';
 import { renderUserInputPanel } from '../render/user_input.js';
 
@@ -81,7 +81,6 @@ function onDone(data, session) {
     const wrap = session.stagesEl?.parentElement;
     if (wrap && wrap.style.display === 'none') wrap.style.display = 'block';
   }
-  appendExploreSourcesButton(state.sessionId, state.lastQuestion);
 }
 
 function onError(data, session) {

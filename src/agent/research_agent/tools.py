@@ -147,7 +147,11 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
             "max_items": 20,
             "executor_selects": True,
             "item_spec": {
-                "drop_fields": ["speech_id", "speech_idx"],
+                # Keep speech_idx: it is the chunk anchor the synthesizer copies
+                # into the citation quote so the UI can deep-link to that speech
+                # in the protocol viewer (chunk_id == speech_idx). See
+                # Documentation/.../Claude/protocol-link-ux.md.
+                "drop_fields": ["speech_id"],
                 "text_fields": {"text": 400},
             },
         },

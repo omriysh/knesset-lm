@@ -294,9 +294,17 @@ def _format_committee_summary(name: str, stats: dict) -> str:
 
 
 def _bm25_phase(knesset_num: int) -> None:
-    """Rebuild bullets + speeches BM25 indexes for knesset_num."""
+    """Rebuild bullets + speeches + mks BM25 indexes for knesset_num.
+
+    mks is required here (not just bullets/speeches) because
+    _meeting_index_phase() below depends on Data/bm25/<knesset_num>/mks.db
+    to fuzzy-resolve speaker names to mk_id — without it, meeting_index.db's
+    meeting_participants table silently comes out empty.
+    committees/bills/votes are intentionally excluded — unrelated to this
+    pipeline's needs (summarization + RAG indexing + meeting_index).
+    """
     bm25_script = Path(__file__).parent / "build_bm25_indexes.py"
-    for target in ("bullets", "speeches"):
+    for target in ("bullets", "speeches", "mks"):
         tqdm.write(f"  BM25 [{target}] rebuilding…")
         result = subprocess.run(
             [sys.executable, str(bm25_script),
@@ -309,6 +317,27 @@ def _bm25_phase(knesset_num: int) -> None:
             tqdm.write(f"  [BM25 ERROR] {result.stderr[-500:]}")
         elif result.stdout.strip():
             tqdm.write(result.stdout.strip())
+
+
+def _meeting_index_phase(knesset_num: int) -> None:
+    """Rebuild the structural (committee/date/participant) meeting index.
+
+    Depends on mks.db, which _bm25_phase() above now rebuilds (target
+    "mks") before this runs — see main(), which calls _bm25_phase() then
+    _meeting_index_phase() in that order within the same invocation.
+    """
+    meeting_index_script = Path(__file__).parent / "build_meeting_index.py"
+    tqdm.write("  meeting_index rebuilding…")
+    result = subprocess.run(
+        [sys.executable, str(meeting_index_script),
+         "--knesset-num", str(knesset_num),
+         "--rebuild"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        tqdm.write(f"  [meeting_index ERROR] {result.stderr[-500:]}")
+    elif result.stdout.strip():
+        tqdm.write(result.stdout.strip())
 
 
 def _print_stats(stats: dict) -> None:
@@ -431,6 +460,8 @@ def main() -> None:
     if not args.skip_bm25:
         print("\nRebuilding BM25 indexes…")
         _bm25_phase(args.knesset)
+        print("\nRebuilding structural meeting index…")
+        _meeting_index_phase(args.knesset)
 
 
 if __name__ == "__main__":

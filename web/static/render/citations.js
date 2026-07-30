@@ -4,6 +4,71 @@
  */
 import { esc, QUOTE_SKIP } from '../util.js';
 
+// Session id for the answer currently being rendered — used by the citation
+// popup's "open in protocol viewer" action (the popup is a shared singleton).
+let _citeSid = '';
+
+/**
+ * Find a protocol anchor inside a quote object/array: the first node carrying a
+ * meeting_id, plus its chunk anchor (speech_idx / start_speech_idx) if present.
+ * Returns {meetingId, speechIdx} or null.
+ */
+function findQuoteAnchor(obj) {
+  if (obj == null || typeof obj !== 'object') return null;
+  if (Array.isArray(obj)) {
+    for (const it of obj) {
+      const a = findQuoteAnchor(it);
+      if (a) return a;
+    }
+    return null;
+  }
+  if (obj.meeting_id != null) {
+    const sidx = (obj.speech_idx != null) ? obj.speech_idx
+               : (obj.start_speech_idx != null ? obj.start_speech_idx : null);
+    return { meetingId: String(obj.meeting_id), speechIdx: sidx };
+  }
+  if (Array.isArray(obj.chunks)) {
+    for (const ch of obj.chunks) {
+      const a = findQuoteAnchor(ch);
+      if (a) return a;
+    }
+  }
+  return null;
+}
+
+const OPEN_ICON = '<span class="material-symbols-outlined ev-open-icon">library_books</span>';
+
+/** Build the "לפרוטוקול המלא →" link markup for a resolved anchor. */
+function openProtocolLinkHtml(sid, anchor) {
+  if (!anchor || !anchor.meetingId) return '';
+  const sidx = (anchor.speechIdx != null) ? String(anchor.speechIdx) : '';
+  return (
+    `<button type="button" class="ev-open-protocol" ` +
+    `onclick="openProtocolFromCitation('${esc(sid)}','${esc(anchor.meetingId)}',` +
+    `${sidx === '' ? 'null' : `'${esc(sidx)}'`})">` +
+    `${OPEN_ICON}<span>לפרוטוקול המלא ←</span></button>`
+  );
+}
+
+/** Collect distinct cited meetings ({meeting_id, date, committee}) from citations. */
+function collectCitedMeetings(citations) {
+  const byId = new Map();
+  const visit = (obj) => {
+    if (obj == null || typeof obj !== 'object') return;
+    if (Array.isArray(obj)) { obj.forEach(visit); return; }
+    if (obj.meeting_id != null && !byId.has(String(obj.meeting_id))) {
+      byId.set(String(obj.meeting_id), {
+        meeting_id: String(obj.meeting_id),
+        date:       obj.date || '',
+        committee:  obj.committee || '',
+      });
+    }
+    if (Array.isArray(obj.chunks)) obj.chunks.forEach(visit);
+  };
+  (citations || []).forEach(c => { if (c) visit(c.quote); });
+  return Array.from(byId.values());
+}
+
 let _evPopup = null;
 function getEvPopup() {
   if (!_evPopup) {
@@ -80,8 +145,13 @@ function showCitationPopup(supEl, quoteRaw, uiMeta) {
     : `<div class="ev-citation-quote">${esc(quoteRaw || '')}</div>`;
 
   const metaNote = (uiMeta && uiMeta.meta_note) ? uiMeta.meta_note : (uiMeta && uiMeta.tool_name) || '';
-  popup.innerHTML = contentHtml +
-    (metaNote ? `<div class="ev-citation-popup-source">${esc(metaNote)}</div>` : '');
+  const anchor   = quoteObj != null ? findQuoteAnchor(quoteObj) : null;
+  const noteHtml = metaNote ? `<div class="ev-citation-popup-source">${esc(metaNote)}</div>` : '';
+  const linkHtml = openProtocolLinkHtml(_citeSid, anchor);
+  const footerHtml = (noteHtml || linkHtml)
+    ? `<div class="ev-citation-popup-footer">${noteHtml}${linkHtml}</div>`
+    : '';
+  popup.innerHTML = contentHtml + footerHtml;
 
   popup.hidden = false;
   const sr = supEl.getBoundingClientRect();
@@ -99,7 +169,14 @@ function showCitationPopup(supEl, quoteRaw, uiMeta) {
   popup.style.setProperty('--tail-left', tailLeft + 'px');
 }
 
-export function applyEvidenceCitations(bodyEl, footnotes, citations) {
+export function applyEvidenceCitations(bodyEl, footnotes, citations, sid) {
+  _citeSid = sid || '';
+  // Stash this answer's cited meetings so the viewer sidebar can be seeded with
+  // them when the user opens a protocol from a citation or a source card.
+  if (_citeSid) {
+    window.__citedMeetings = window.__citedMeetings || {};
+    window.__citedMeetings[_citeSid] = collectCitedMeetings(citations);
+  }
   const citMap = {};
   (citations || []).forEach(c => { if (c && c.n != null) citMap[c.n] = c; });
   const evIdToIdx = {};
@@ -188,7 +265,7 @@ export function buildSourcesHtml(footnotes, sid) {
   );
 }
 
-export function renderEvidenceFull(text, toolName) {
+export function renderEvidenceFull(text, toolName, sid) {
   if (!text) return '<div class="ev-source-empty">אין תוכן</div>';
   let data;
   try { data = JSON.parse(text); } catch (exc) {
@@ -199,17 +276,17 @@ export function renderEvidenceFull(text, toolName) {
     if (data.length === 0) return '<div class="ev-source-empty">אין תוצאות</div>';
     const real      = data.filter(x => !(x && x._truncated));
     const truncItem = data.find(x => x && x._truncated);
-    const cards     = real.map(item => renderEvidenceCard(item)).join('');
+    const cards     = real.map(item => renderEvidenceCard(item, sid)).join('');
     const notice    = truncItem
       ? `<div class="ev-truncated-notice">עוד ${truncItem.items_removed} פריטים לא הוצגו</div>`
       : '';
     return `<div class="ev-full-cards">${cards}${notice}</div>`;
   }
-  if (typeof data === 'object' && data !== null) return renderEvidenceCard(data);
+  if (typeof data === 'object' && data !== null) return renderEvidenceCard(data, sid);
   return `<pre class="ev-full-json">${esc(JSON.stringify(data, null, 2))}</pre>`;
 }
 
-function renderEvidenceCard(item) {
+function renderEvidenceCard(item, sid) {
   if (typeof item !== 'object' || item === null) {
     return `<div class="ev-full-card"><pre class="ev-card-rest">${esc(String(item))}</pre></div>`;
   }
@@ -255,8 +332,10 @@ function renderEvidenceCard(item) {
   if (rest.length > 0) {
     bodyHtml += `<pre class="ev-card-rest">${esc(JSON.stringify(Object.fromEntries(rest), null, 2))}</pre>`;
   }
-  const headerHtml = (labelHtml || metaBadges)
-    ? `<div class="ev-card-header">${labelHtml}<span class="ev-card-metas">${metaBadges}</span></div>`
+  const anchor   = findQuoteAnchor(item);
+  const linkHtml = (sid && anchor) ? openProtocolLinkHtml(sid, anchor) : '';
+  const headerHtml = (labelHtml || metaBadges || linkHtml)
+    ? `<div class="ev-card-header">${labelHtml}<span class="ev-card-metas">${metaBadges}</span>${linkHtml}</div>`
     : '';
   return (
     `<div class="ev-full-card">` +
