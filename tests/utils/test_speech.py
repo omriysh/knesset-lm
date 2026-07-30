@@ -5,7 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from utils.speech import _name_matches, get_mk_speeches_in_committee
+from utils.speech import (
+    _name_matches,
+    get_mk_speeches_in_committee,
+    name_query_matches,
+    name_tokens,
+)
 
 
 # ── _name_matches ─────────────────────────────────────────────────────────────
@@ -17,14 +22,21 @@ class TestNameMatches:
     def test_substring_query_in_speaker(self):
         assert _name_matches("לוי", 'ח"כ יצחק לוי') is True
 
-    def test_substring_speaker_in_query(self):
-        assert _name_matches("יצחק לוי שמעון", "יצחק לוי") is True
+    def test_extra_middle_name_on_query_side(self):
+        # Speaker's tokens are a subset of a fuller query (added middle name);
+        # same surname → still the same person.
+        assert _name_matches("יצחק משה לוי", "יצחק לוי") is True
+
+    def test_appended_different_surname_no_longer_matches(self):
+        # Regression for the surname-anchor: appending a *different* family
+        # name ("שמעון") must NOT match — these are not the same person.
+        assert _name_matches("יצחק לוי שמעון", "יצחק לוי") is False
 
     def test_hck_prefix_stripped(self):
         assert _name_matches('ח"כ יצחק לוי', "יצחק לוי") is True
 
     def test_fuzzy_match(self):
-        # Slight typo — still above 0.65 threshold
+        # Slight typo — still above the fuzzy threshold
         assert _name_matches("יצחק לויי", "יצחק לוי") is True
 
     def test_no_match(self):
@@ -35,6 +47,52 @@ class TestNameMatches:
 
     def test_empty_speaker_returns_false(self):
         assert _name_matches("יצחק לוי", "") is False
+
+
+# ── name_query_matches — real-world MK speaker forms ──────────────────────────
+
+class TestNameQueryMatchesRealWorld:
+    """Cases drawn from the actual speaker strings stored for Orit Struck in
+    the k25 speeches index — the bug where search_protocols_keyword found zero
+    of her speeches because her name appears under a ministerial title / with a
+    middle name and the old filter only matched a contiguous substring."""
+
+    QUERY = "אורית סטרוק"
+
+    def test_matches_ministerial_title_form(self):
+        # 79 speeches are stored under this title form.
+        assert name_query_matches(
+            self.QUERY, "שרת ההתיישבות והמשימות הלאומיות אורית סטרוק"
+        ) is True
+
+    def test_matches_middle_name_form(self):
+        # 20 speeches: "אורית מלכה סטרוק"
+        assert name_query_matches(self.QUERY, "אורית מלכה סטרוק") is True
+
+    def test_matches_other_title_and_middle_name_form(self):
+        assert name_query_matches(
+            self.QUERY, "השרה למשימות לאומיות אורית מלכה סטרוק"
+        ) is True
+
+    def test_matches_party_parenthetical_form(self):
+        # "אורית מלכה סטרוק (הציונות הדתית)" — party tag stripped before match.
+        assert name_query_matches(self.QUERY, "אורית מלכה סטרוק (הציונות הדתית)") is True
+
+    def test_rejects_different_person_sharing_a_token(self):
+        # A fuller query must not latch onto a different speaker who only shares
+        # a first/middle name but has a different (or missing) surname.
+        assert name_query_matches("אורית מלכה סטרוק", "אורי מלכה") is False
+
+    def test_rejects_same_surname_different_first_name(self):
+        assert name_query_matches("משה כהן", "דוד כהן") is False
+
+    def test_surname_only_query_matches(self):
+        assert name_query_matches("סטרוק", "אורית מלכה סטרוק") is True
+
+    def test_party_parenthetical_stripped_from_tokens(self):
+        assert name_tokens("אורית מלכה סטרוק (הציונות הדתית)") == [
+            "אורית", "מלכה", "סטרוק",
+        ]
 
 
 # ── get_mk_speeches_in_committee ──────────────────────────────────────────────

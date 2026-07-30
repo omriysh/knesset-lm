@@ -23,19 +23,66 @@ _HCK_RE = re.compile(r'''ח["׳']\s*כ\s*''')
 # ── Name matching ─────────────────────────────────────────────────────────────
 
 def _clean_name(name: str) -> str:
-    """Remove ח\"כ prefix and normalise whitespace."""
-    return _HCK_RE.sub("", name).strip()
+    """Remove ח\"כ prefix, drop party/faction parentheticals, normalise space."""
+    name = _HCK_RE.sub("", name)
+    name = re.sub(r"\([^)]*\)", " ", name)   # e.g. "... סטרוק (הציונות הדתית)"
+    return name.strip()
 
 
-def _name_matches(query: str, speaker: str, threshold: float = 0.65) -> bool:
-    """True if query fuzzy-matches the speaker field."""
-    q = _clean_name(query)
-    s = _clean_name(speaker)
+def name_tokens(name: str) -> list[str]:
+    """Whitespace-split tokens of a name, with the ח\"כ prefix removed.
+
+    Titles/middle names survive as their own tokens so token-subset matching
+    can tolerate them (see :func:`name_query_matches`)."""
+    return [t for t in re.split(r"\s+", _clean_name(name)) if t]
+
+
+def _tok_match(a: str, b: str, threshold: float) -> bool:
+    return a == b or SequenceMatcher(None, a, b).ratio() >= threshold
+
+
+def _tokens_subset(a: list[str], b: list[str], threshold: float) -> bool:
+    """True if every token in *a* matches (exact or fuzzy) some token in *b*."""
+    return all(any(_tok_match(ta, tb, threshold) for tb in b) for ta in a)
+
+
+def name_query_matches(query: str, speaker: str, *, threshold: float = 0.82) -> bool:
+    """True if *query* and *speaker* name the same person, token-subset style.
+
+    Matches when the smaller token set is a (fuzzy) subset of the larger, so
+    extra tokens on *either* side are tolerated —
+
+      * ministerial titles on the speaker side
+        (``"אורית סטרוק"`` ⊆ ``"שרת ההתיישבות והמשימות הלאומיות אורית סטרוק"``)
+      * a middle name on the speaker side
+        (``"אורית סטרוק"`` ⊆ ``"אורית מלכה סטרוק"``)
+      * a fuller query than the stored form
+        (``"אורית מלכה סטרוק"`` ⊇ ``"אורית סטרוק"``)
+
+    For multi-token names on both sides the surname (last token — Hebrew MK
+    names carry the family name last, titles come first) must also agree. That
+    stops a *different* person who merely shares a first/middle name from
+    matching (e.g. query ``"אורית מלכה סטרוק"`` must NOT match ``"אורי מלכה"``).
+    Single-token queries (first- or last-name only) skip the surname anchor —
+    they are inherently broad.
+
+    Replaces the old contiguous-substring test, which silently missed a
+    speaker whenever a title or middle name broke up the queried name.
+    """
+    q = name_tokens(query)
+    s = name_tokens(speaker)
     if not q or not s:
         return False
-    if q in s or s in q:
+    if not (_tokens_subset(q, s, threshold) or _tokens_subset(s, q, threshold)):
+        return False
+    if len(q) == 1 or len(s) == 1:
         return True
-    return SequenceMatcher(None, q, s).ratio() >= threshold
+    return _tok_match(q[-1], s[-1], threshold)
+
+
+def _name_matches(query: str, speaker: str, threshold: float = 0.82) -> bool:
+    """True if query matches the speaker field (token-subset, fuzzy-tolerant)."""
+    return name_query_matches(query, speaker, threshold=threshold)
 
 
 # ── Committee directory lookup ────────────────────────────────────────────────

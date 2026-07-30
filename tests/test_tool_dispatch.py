@@ -308,6 +308,101 @@ class TestSearchSpeechesBm25Helper:
         assert best_score["m2"] == min(m2_scores)      # ...one entry, the best of the two
 
 
+class _MkSpeakerFixture:
+    """Speeches fixture mirroring the real spread of stored speaker strings for
+    a single MK (Orit Struck) — ministerial title, middle name, party tag — plus
+    a decoy MK who shares a first/middle-name token, and an unrelated speaker.
+
+    Every body carries the standalone token ``התיישבות`` so a single query hits
+    all rows and the assertions isolate the *speaker* filter, not text ranking.
+    """
+
+    ROWS = [
+        # Orit Struck — under her ministerial title (the form that carried 79
+        # real speeches, none of which the old contiguous-substring filter hit).
+        {"id": "t_title", "label": "", "label_lemmatized": "",
+         "body": "דיון בנושא התיישבות וביטחון",
+         "body_lemmatized": "דיון בנושא התיישבות וביטחון",
+         "extra": {"meeting_id": "mA", "committee": "ועדת החוץ והביטחון", "speech_idx": 0,
+                   "speaker": "שרת ההתיישבות והמשימות הלאומיות אורית סטרוק"}},
+        # Orit Struck — with middle name.
+        {"id": "t_middle", "label": "", "label_lemmatized": "",
+         "body": "התיישבות היא נושא מרכזי",
+         "body_lemmatized": "התיישבות היא נושא מרכזי",
+         "extra": {"meeting_id": "mA", "committee": "ועדת החוץ והביטחון", "speech_idx": 1,
+                   "speaker": "אורית מלכה סטרוק"}},
+        # Orit Struck — with a party parenthetical.
+        {"id": "t_party", "label": "", "label_lemmatized": "",
+         "body": "לקדם התיישבות ביהודה",
+         "body_lemmatized": "לקדם התיישבות ביהודה",
+         "extra": {"meeting_id": "mB", "committee": "ועדת החוץ והביטחון", "speech_idx": 0,
+                   "speaker": "אורית מלכה סטרוק (הציונות הדתית)"}},
+        # Decoy: different person sharing the middle-name token + a fuzzy first
+        # name, but a different/missing surname — must be excluded.
+        {"id": "t_decoy", "label": "", "label_lemmatized": "",
+         "body": "תומך בקידום התיישבות",
+         "body_lemmatized": "תומך בקידום התיישבות",
+         "extra": {"meeting_id": "mB", "committee": "ועדת החוץ והביטחון", "speech_idx": 1,
+                   "speaker": "אורי מלכה"}},
+        # Unrelated speaker.
+        {"id": "t_other", "label": "", "label_lemmatized": "",
+         "body": "התיישבות בהיבט הכלכלי",
+         "body_lemmatized": "התיישבות בהיבט הכלכלי",
+         "extra": {"meeting_id": "mC", "committee": "ועדת הכספים", "speech_idx": 0,
+                   "speaker": "משה כהן"}},
+    ]
+
+    @classmethod
+    def build(cls, path) -> BM25Index:
+        idx = BM25Index(path)
+        idx.create_table()
+        idx.insert_many(cls.ROWS)
+        return idx
+
+
+class TestSpeakerFilterRealWorld:
+    """Regression tests for the speaker-matching bug: search_protocols_keyword
+    returned zero speeches for an MK whose name is stored under a ministerial
+    title / with a middle name, because the FTS filter matched only a contiguous
+    substring of the speaker field."""
+
+    def test_finds_all_speaker_forms_of_one_mk(self, tmp_path):
+        bm25 = _MkSpeakerFixture.build(tmp_path / "speeches.db")
+        try:
+            rows = search_speeches_bm25(bm25, "התיישבות", speaker="אורית סטרוק")
+        finally:
+            bm25.close()
+        ids = {r["id"] for r in rows}
+        assert ids == {"t_title", "t_middle", "t_party"}
+
+    def test_excludes_different_person_sharing_a_token(self, tmp_path):
+        bm25 = _MkSpeakerFixture.build(tmp_path / "speeches.db")
+        try:
+            rows = search_speeches_bm25(bm25, "התיישבות", speaker="אורית מלכה סטרוק")
+        finally:
+            bm25.close()
+        speakers = {r["extra"]["speaker"] for r in rows}
+        assert "אורי מלכה" not in speakers
+        assert "משה כהן" not in speakers
+
+    def test_title_form_is_matched(self, tmp_path):
+        """The specific real failure: the ministerial-title form must be found."""
+        bm25 = _MkSpeakerFixture.build(tmp_path / "speeches.db")
+        try:
+            rows = search_speeches_bm25(bm25, "וביטחון", speaker="אורית סטרוק")
+        finally:
+            bm25.close()
+        assert [r["id"] for r in rows] == ["t_title"]
+
+    def test_surname_only_query_matches_all_forms(self, tmp_path):
+        bm25 = _MkSpeakerFixture.build(tmp_path / "speeches.db")
+        try:
+            rows = search_speeches_bm25(bm25, "התיישבות", speaker="סטרוק")
+        finally:
+            bm25.close()
+        assert {r["id"] for r in rows} == {"t_title", "t_middle", "t_party"}
+
+
 class TestHandleSearchProtocolsKeywordUnchanged:
     """handle_search_protocols_keyword's external contract (ToolEnvelope shape,
     payload fields) must be unaffected by extracting search_speeches_bm25 out

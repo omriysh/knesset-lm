@@ -35,6 +35,7 @@ import config
 from agent.subgraph.evidence import ToolEnvelope
 from retrieval.bm25_index import BM25Index
 from retrieval.lemmatize import lemmatize
+from utils.speech import name_query_matches, name_tokens
 from utils.knesset_db import (
     _get_bill_details_by_id,
     _get_bill_text_by_id,
@@ -396,7 +397,17 @@ def _build_speeches_where(
         )
         where_parts.append(f"({group})")
     if speaker:
-        where_parts.append(f"extra LIKE '%\"speaker\": \"%{_sql_safe(speaker)}%\"%'")
+        # Coarse pre-filter: keep any speech whose speaker value contains at
+        # least one query name-token (OR-ed). This is a *superset* of the real
+        # token-subset match — a title ("שרת ... אורית סטרוק") or a middle name
+        # ("אורית מלכה סטרוק") no longer breaks a contiguous-substring LIKE.
+        # search_speeches_bm25 refines these rows down with name_query_matches.
+        toks = name_tokens(speaker)
+        if toks:
+            group = " OR ".join(
+                f"extra LIKE '%\"speaker\": \"%{_sql_safe(t)}%\"%'" for t in toks
+            )
+            where_parts.append(f"({group})")
 
     return " AND ".join(where_parts) if where_parts else None
 
@@ -430,11 +441,23 @@ def search_speeches_bm25(
     where = _build_speeches_where(
         committee_ids=committee_ids, meeting_ids=meeting_ids, speaker=speaker,
     )
-    return bm25.search(
+    rows = bm25.search(
         _quote_match(lemmatize(query)) or query,
         top_k=max(top_k, config.KEYWORD_RERANK_TOP_K) if sort == "relevance" else top_k,
         where=where,
     )
+    # Precise speaker refine: the SQL WHERE only coarsely OR-filters on any
+    # single name-token; enforce true token-subset name matching here so a row
+    # sharing just one token (e.g. a different MK named "אורית") is dropped.
+    if speaker:
+        rows = [
+            r for r in rows
+            if name_query_matches(
+                speaker, (r.get("extra") or {}).get("speaker", "")
+                if isinstance(r.get("extra"), dict) else "",
+            )
+        ]
+    return rows
 
 
 def handle_search_protocols_keyword(args: dict) -> ToolEnvelope:
