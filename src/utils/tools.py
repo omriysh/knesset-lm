@@ -34,6 +34,7 @@ from typing import Any, Callable
 import config
 from agent.subgraph.evidence import ToolEnvelope
 from retrieval.bm25_index import BM25Index
+from retrieval.ktiv import expand_token
 from retrieval.lemmatize import lemmatize
 from utils.speech import name_query_matches, name_tokens
 from utils.knesset_db import (
@@ -441,8 +442,10 @@ def search_speeches_bm25(
     where = _build_speeches_where(
         committee_ids=committee_ids, meeting_ids=meeting_ids, speaker=speaker,
     )
+    normalized = lemmatize(query)
+    match_expr = _expand_match(normalized, bm25.path) or _quote_match(normalized) or query
     rows = bm25.search(
-        _quote_match(lemmatize(query)) or query,
+        match_expr,
         top_k=max(top_k, config.KEYWORD_RERANK_TOP_K) if sort == "relevance" else top_k,
         where=where,
     )
@@ -1224,6 +1227,36 @@ def _quote_match(text: str) -> str:
     if not tokens:
         return text
     return " ".join(f'"{_safe_match(tok)}"' for tok in tokens if _safe_match(tok))
+
+
+def _expand_match(text: str, db_path) -> str:
+    """Build an FTS5 MATCH expression with query-side ktiv male/haser expansion.
+
+    Each whitespace token becomes an OR-slot of its corpus spelling variants
+    (``("בטחון" OR "ביטחון")``) so a query in one ktiv spelling matches speeches
+    written in the other. Slots are AND-ed (space) exactly as ``_quote_match``.
+    Falls back to the bare token when it has no extra variants.
+    """
+    slots: list[str] = []
+    for tok in text.split():
+        if not tok.strip():
+            continue
+        safe = [s for s in (_safe_match(v) for v in expand_token(tok, db_path)) if s]
+        # de-dup while preserving order (safe_match can collapse two variants)
+        seen: list[str] = []
+        for s in safe:
+            if s not in seen:
+                seen.append(s)
+        if not seen:
+            continue
+        slots.append(
+            f'"{seen[0]}"' if len(seen) == 1
+            else "(" + " OR ".join(f'"{v}"' for v in seen) + ")"
+        )
+    # Join with explicit AND: FTS5 accepts implicit-AND between bare phrases
+    # ("a" "b") but NOT between a phrase and a parenthesised OR-group
+    # ("a" (...)), which is exactly what expansion produces.
+    return " AND ".join(slots)
 
 
 # Suppress unused-import warnings — these are part of the public dispatch

@@ -50,6 +50,12 @@ class BM25Index:
         self._path = Path(path)
         self._con: sqlite3.Connection | None = None
 
+    @property
+    def path(self) -> Path:
+        """Filesystem path of the backing SQLite db (used by query-side ktiv
+        expansion to read the index vocabulary)."""
+        return self._path
+
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
     def _connect(self) -> sqlite3.Connection:
