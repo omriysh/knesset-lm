@@ -17,7 +17,9 @@ canonical mk_id (utils.tool_helpers.fuzzy_name_index):
      originally-known limitation of speaker-only derivation. (Earlier
      versions of this builder didn't use extract_attendance() at all,
      because its full_text parsing was broken — see git history / that
-     function's docstring for the real-data-backed rewrite.)
+     function's docstring for the real-data-backed rewrite. Its
+     "speeches"-shape parsing was fixed later still, and depends on this
+     same mks.db as a name lexicon — see _mk_name_lexicon().)
 Names from either source that DON'T resolve to a known mk_id (ministry
 officials, private citizens, etc.) go into meeting_guests (name rows)
 instead — see insert_guests() / meeting_guests schema in meeting_index.py.

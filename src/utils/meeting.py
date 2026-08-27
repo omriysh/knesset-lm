@@ -6,6 +6,7 @@ Helpers for loading and preparing meeting protocol data.
 
 import json
 import re
+from functools import lru_cache
 from pathlib import Path
 
 from config import MAX_CHUNK_CHARS
@@ -49,6 +50,11 @@ from config import MAX_CHUNK_CHARS
 # plain "-" would mangle these into truncated fragments.
 _EN_DASH = "–"
 
+# A plain hyphen IS a role separator when whitespace touches it on either side
+# ('אליהו רביבו- היו"ר', 'אריאל צרפתי - מתמחה'). Hyphenated surnames never have
+# that whitespace ('רום בר-אב', 'מירי פרנקל-שור'), so they survive intact.
+_SPACED_HYPHEN_RE = re.compile(r"\s-|-\s")
+
 # End-of-attendance-block anchor. Verified present (with only cosmetic
 # whitespace/typo drift observed in real data — missing/truncated "רשימת"
 # prefix, "המידע" mistyped "המיודע", "המוזמנים" occasionally split as
@@ -82,6 +88,7 @@ _GUEST_LABELS = {
     "משתתפים",
     "משתתפים (באמצעים מקוונים)",
     "משתתפים באמצעים מקוונים",
+    "משתתפים באמצעים דיגיטליים",
     "משתתפים באופן מקוון",
     "משתתף באמצעים מקוונים",
     "משתתפת באמצעים מקוונים",
@@ -101,6 +108,159 @@ _HEADER_LINE_MAX_LEN = 40
 # Longest real name candidate accepted by _parse_attendance_section's add()
 # (see its docstring re: the fallback-cap-swallows-dialogue edge case).
 _MAX_NAME_LEN = 40
+
+# Non-name transcript header/artifact tokens that surface as bogus "speaker
+# turns" — both when parse_full_text_speeches() splits full_text on
+# colon-terminated lines and when a converted full_text document arrives in
+# "speeches" shape with its נכחו: header turned into pseudo-speeches (see
+# _structured_header_text). Left in, they cause false-positive fuzzy matches
+# downstream (e.g. "קריאה" resolving to an unrelated MK by partial-ratio).
+_SPEAKER_STOPLIST = {
+    "קריאה", "קריאות", "קריאת ביניים", "סדר היום", "חברי הוועדה",
+    "חברי הועדה", "חברי הכנסת", "חברי כנסת", "מוזמנים",
+    "מוזמנים באמצעים מקוונים", "מוזמנים באמצעים דיגיטליים",
+    "משתתפים", "משתתפים באמצעים מקוונים", "משתתפים באמצעים דיגיטליים",
+    "נכחו", "נוכחים", "השתתפו", "השתתפו באמצעים מקוונים",
+    "ייעוץ משפטי", "יועץ משפטי", "יועצת משפטית",
+    "מנהל הוועדה", "מנהלת הוועדה", "מנהל/ת הוועדה", "מזכירת הוועדה",
+    "רישום פרלמנטרי", "רשמת פרלמנטרית", "קצרנית", "קצרן",
+}
+
+# Stage directions and editorial notes that the converted-protocol pipeline
+# emits as "speakers" — e.g. "(מוקרן סרטון, להלן התמלול)",
+# "(תרגום חופשי מהשפה האנגלית)". A label wrapped entirely in parentheses is
+# never a person. A party/role suffix on a real name is NOT wrapped
+# ("מיכל מרים וולדיגר (הציונות הדתית)"), so those survive.
+_PARENTHESIZED_ONLY_RE = re.compile(r"^\(.*\)$", re.S)
+# Latin letters are allowed: foreign guests appear under their English name
+# (real example: "Dr. Gautam nand Allahbadia").
+_NAME_WORD_RE = re.compile(r"[א-תA-Za-z]{2,}")
+
+# Committee-staff section labels are open-ended ("ראש תחום ...", "רכזת
+# פרלמנטרית בוועדה", ...), so header detection matches on suffix rather than
+# an exhaustive enum.
+_HEADER_LABEL_SUFFIXES = ("הוועדה", "הועדה", "משפטי", "משפטית",
+                          "פרלמנטרי", "פרלמנטרית")
+
+# The reconstructed header of a "speeches"-shape protocol never runs past the
+# first handful of pseudo-speeches; hard cap so a malformed file can't drag
+# real dialogue into the attendance section.
+_MAX_HEADER_SPEECHES = 20
+
+# "<section label>: <body>" collapsed onto one line inside a pseudo-speech
+# body (real example: the "נכחו" pseudo-speech carries "חברי הוועדה: <roster>").
+_INLINE_LABEL_RE = re.compile(r"^([^:\n]{1,40}):[ \t]*")
+
+
+def _is_person_name(name: str) -> bool:
+    """True if a speaker/roster label plausibly names a person."""
+    text = name.strip()
+    if not text or text in _SPEAKER_STOPLIST or _PARENTHESIZED_ONLY_RE.match(text):
+        return False
+    without_suffix = re.sub(r"\([^)]*\)", " ", text).strip()
+    if not without_suffix or without_suffix in _SPEAKER_STOPLIST:
+        return False
+    return bool(_NAME_WORD_RE.search(without_suffix))
+
+
+def _is_attendance_header_label(label: str) -> bool:
+    """True if a pseudo-speech `speaker` is an attendance-header section label."""
+    text = label.strip().rstrip(":").strip()
+    if not text or len(text) > _HEADER_LINE_MAX_LEN:
+        return False
+    return (text in _SPEAKER_STOPLIST
+            or text in _GUEST_LABELS
+            or text.endswith(_HEADER_LABEL_SUFFIXES))
+
+
+@lru_cache(maxsize=4)
+def _mk_name_lexicon(knesset_num: int = 25) -> tuple[str, ...]:
+    """Canonical multi-token MK names for a Knesset, read from the mks BM25 db.
+
+    Needed only by the "speeches"-shape attendance parser: those protocols are
+    converted full_text documents whose roster lost every line break, so names
+    are glued with no separator at all ("טלי גוטליבשלום דנינו") and can only be
+    segmented against a known-name lexicon. Returns () when mks.db hasn't been
+    built yet — the parser then degrades to speaker-only attendance, i.e. the
+    behaviour that predated this lexicon.
+    """
+    import config
+    path = config.BM25_DIR / str(knesset_num) / "mks.db"
+    if not path.exists():
+        print(f"[meeting] mks.db not found ({path}); glued attendance rosters in "
+              f"'speeches'-shape protocols cannot be split")
+        return ()
+    try:
+        from retrieval.bm25_index import BM25Index
+        index = BM25Index(path)
+        try:
+            rows = index._connect().execute("SELECT label FROM entries").fetchall()
+        finally:
+            index.close()
+    except Exception as exc:
+        print(f"[meeting] MK name lexicon load failed from {path}: {exc}")
+        return ()
+    labels = {str(row[0]).strip() for row in rows if row[0]}
+    return tuple(sorted(label for label in labels if len(label.split()) >= 2))
+
+
+def _split_glued_roster_line(line: str, name_lexicon: tuple[str, ...]) -> list[str]:
+    """Segment a roster line whose names lost their separators.
+
+    Picks leftmost-longest non-overlapping lexicon matches, so role markers and
+    glue characters between names ('– היו"ר', '– מ"מ היו"ר', '- היו"ר', a bare
+    space, a tab, or nothing at all — all observed in real files) are simply
+    skipped as unmatched filler. Returns [] when nothing matches, which is the
+    caller's signal to fall back to the one-name-per-line rule.
+    """
+    hits: list[tuple[int, int, str]] = []
+    for name in name_lexicon:
+        start = line.find(name)
+        while start != -1:
+            hits.append((start, start + len(name), name))
+            start = line.find(name, start + 1)
+    hits.sort(key=lambda hit: (hit[0], -hit[1]))
+
+    found: list[str] = []
+    cursor = 0
+    for start, end, name in hits:
+        if start >= cursor:
+            found.append(name)
+            cursor = end
+    return found
+
+
+def _structured_header_text(meeting: dict) -> str:
+    '''Rebuild the נכחו: header region of a "speeches"-shape protocol.
+
+    These files are not speech-by-speech scrapes — they are converted full_text
+    documents whose header became a run of leading pseudo-speeches: `speaker` is
+    the section label ("נכחו", "חברי הכנסת", "ייעוץ משפטי", ...) and `text_he`
+    is that section's body. Re-emitting them as "label:\\nbody" lines produces
+    exactly the shape _find_attendance_section/_parse_attendance_section already
+    parse.
+
+    Guest sections are dropped: unlike the full_text form (name / lone en-dash /
+    role on separate lines) their bodies are "name - role, org" entries glued
+    end-to-end with no separator, so the guest name can't be told apart from the
+    previous entry's organisation. Guests who spoke still come from the speaker
+    list.
+    '''
+    lines: list[str] = []
+    for speech in meeting.get("speeches", [])[:_MAX_HEADER_SPEECHES]:
+        label = (speech.get("speaker") or "").strip()
+        body = (speech.get("text_he") or "").strip()
+        if not label:
+            continue
+        if not _is_attendance_header_label(label):
+            break
+        label = label.rstrip(":").strip()
+        if label not in _GUEST_LABELS:
+            lines.append(f"{label}:")
+            lines.append(_INLINE_LABEL_RE.sub(r"\1:\n", body, count=1))
+        if _ATTENDANCE_END_RE.search(body):
+            break
+    return "\n".join(lines)
 
 # Matches speaker-turn headers in OData full_text protocols.
 # Handles:  "היו"ר שם:"  "ח"כ שם:"  "שם (מפלגה):"  "שם:"
@@ -221,10 +381,14 @@ def _find_attendance_section(full_text: str) -> str:
     return text[start:end]
 
 
-def _parse_attendance_section(section_text: str) -> list[str]:
+def _parse_attendance_section(section_text: str, name_lexicon: tuple[str, ...] = ()) -> list[str]:
     """
     Section-aware line-by-line parser for a נכחו: attendance block (already
     isolated by _find_attendance_section).
+
+    ``name_lexicon`` (see _mk_name_lexicon) is only passed for "speeches"-shape
+    protocols, whose roster lines hold several separator-less names at once; it
+    is left empty for full_text, where one line really is one name.
 
     Recognizes short colon-terminated lines as sub-section headers, switching
     parse mode:
@@ -282,9 +446,16 @@ def _parse_attendance_section(section_text: str) -> list[str]:
         if mode == "guest":
             guest_buffer.append(line)
         else:
+            glued = _split_glued_roster_line(line, name_lexicon) if name_lexicon else []
+            if glued:
+                for name in glued:
+                    add(name)
+                continue
+            hyphen = _SPACED_HYPHEN_RE.search(line)
             idx_dash = line.find(_EN_DASH)
             idx_comma = line.find(",")
-            candidates = [i for i in (idx_dash, idx_comma) if i >= 0]
+            idx_hyphen = hyphen.start() if hyphen else -1
+            candidates = [i for i in (idx_dash, idx_comma, idx_hyphen) if i >= 0]
             add(line[:min(candidates)] if candidates else line)
 
     if mode == "guest":
@@ -297,8 +468,14 @@ def extract_attendance(meeting: dict) -> list[str]:
     """
     Extract attendee names from a meeting protocol.
 
-    For structured (speeches) format: returns unique speaker names in order of
-    first appearance. Includes MKs, ministers, officials — whoever spoke.
+    For structured (speeches) format: returns the נכחו: roster names first,
+    then unique speaker names, both in order of first appearance. These files
+    are converted full_text documents whose header survives as leading
+    pseudo-speeches (see _structured_header_text), so the roster is recovered
+    by rebuilding that header and running the same section parser used for
+    full_text — with an MK name lexicon, because the conversion glued the
+    roster names together with no separator. Speakers alone (the previous
+    behaviour) silently dropped every attendee who never took the floor.
 
     For full_text (raw OData PDF/Word extraction) format: parses the נכחו:
     attendance header — a labeled roster (חברי הוועדה: / חברי הכנסת: / ייעוץ
@@ -316,14 +493,27 @@ def extract_attendance(meeting: dict) -> list[str]:
     Returns an empty list if no names are found.
     """
     if "speeches" in meeting:
-        seen: list[str] = []
+        names: list[str] = []
         seen_set: set[str] = set()
+
+        def collect(candidate: str) -> None:
+            if candidate and candidate not in seen_set and _is_person_name(candidate):
+                seen_set.add(candidate)
+                names.append(candidate)
+
+        section = _find_attendance_section(_structured_header_text(meeting))
+        if section:
+            try:
+                knesset_num = int(meeting.get("knesset_num") or 25)
+            except (TypeError, ValueError) as exc:
+                print(f"[meeting] bad knesset_num {meeting.get('knesset_num')!r}: {exc}")
+                knesset_num = 25
+            for name in _parse_attendance_section(section, _mk_name_lexicon(knesset_num)):
+                collect(name)
+
         for speech in meeting["speeches"]:
-            speaker = speech.get("speaker", "").strip()
-            if speaker and speaker not in seen_set:
-                seen.append(speaker)
-                seen_set.add(speaker)
-        return seen
+            collect((speech.get("speaker") or "").strip())
+        return names
 
     if "full_text" in meeting:
         section = _find_attendance_section(meeting["full_text"])
@@ -334,30 +524,14 @@ def extract_attendance(meeting: dict) -> list[str]:
     return []
 
 
-# Non-name transcript header/artifact tokens that surface as bogus "speaker
-# turns" when parse_full_text_speeches() splits on colon-terminated lines
-# (section headers like "מוזמנים:", interjection markers like "קריאה:").
-# Filtered out of get_meeting_speakers() before MK name resolution — left
-# in, they cause false-positive fuzzy matches (e.g. "קריאה" incorrectly
-# resolving to an unrelated MK by RapidFuzz partial-ratio).
-_SPEAKER_STOPLIST = {
-    "קריאה", "קריאות", "קריאת ביניים", "סדר היום", "חברי הוועדה",
-    "חברי הכנסת", "מוזמנים", "ייעוץ משפטי", "יועץ משפטי", "יועצת משפטית",
-    "מנהל הוועדה", "מנהלת הוועדה", "רישום פרלמנטרי", "נכחו", "משתתפים",
-    "קצרנית", "קצרן", "מזכירת הוועדה", "מנהל/ת הוועדה",
-}
-
-
 def get_meeting_speakers(meeting: dict) -> list[str]:
     """
     Return deduplicated speaker names who actually spoke in this meeting,
     in order of first appearance.
 
-    This is the replacement for attendance extraction (see
-    extract_attendance() docstring for why the נכחו: header can't be
-    parsed reliably for full_text-format protocols). Deliberately derived
-    from who *spoke*, not who's listed as attending — a known, accepted
-    tradeoff: silently-present attendees who never spoke are not captured.
+    Deliberately derived from who *spoke*, not who's listed as attending:
+    silently-present attendees come from extract_attendance() instead, and
+    build_meeting_index.py unions the two.
 
     Supports both meeting JSON formats:
     - structured ('speeches' field): speaker names taken directly.
@@ -367,9 +541,9 @@ def get_meeting_speakers(meeting: dict) -> list[str]:
       preserves real line breaks (only the נכחו: header section glues
       names together with no whitespace).
 
-    A small stoplist filters out obvious non-name transcript artifacts
-    (section headers, interjection markers) that parse_full_text_speeches()
-    picks up as "speakers" because they're colon-terminated lines too.
+    _is_person_name() filters out non-name transcript artifacts (section
+    headers, interjection markers, parenthesized stage directions) that get
+    picked up as "speakers" because they're colon-terminated lines too.
     """
     if "speeches" in meeting:
         speeches = meeting["speeches"]
@@ -381,7 +555,7 @@ def get_meeting_speakers(meeting: dict) -> list[str]:
     seen_set: set[str] = set()
     for speech in speeches:
         speaker = (speech.get("speaker") or "").strip()
-        if not speaker or speaker in seen_set or speaker in _SPEAKER_STOPLIST:
+        if not speaker or speaker in seen_set or not _is_person_name(speaker):
             continue
         seen.append(speaker)
         seen_set.add(speaker)

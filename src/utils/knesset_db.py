@@ -2,11 +2,15 @@
 knesset_db.py
 
 Data access layer for Knesset member data.
-Uses the backend.oknesset.org REST API as primary source.
+Uses the backend.oknesset.org REST API for member identity (ids, altnames) and
+the official Knesset OData v4 service for Knesset membership and factions —
+oknesset currently returns ``factions: [null]`` for every member, and only the
+OData positions table covers ministers and Norwegian-law replacements.
 
 API endpoints:
     https://backend.oknesset.org/members?is_current=true   — current MKs
     https://backend.oknesset.org/members?is_current=false  — former MKs
+    https://knesset.gov.il/OdataV4/ParliamentInfo/KNS_PersonToPosition — roster
 
 Each member record contains:
     mk_individual_id, mk_individual_first_name, mk_individual_name,
@@ -43,6 +47,7 @@ import config as _config
 OKNESSET_API = "https://backend.oknesset.org"
 OFFICIAL_KNESSET_NEW_API = "https://knesset.gov.il/OdataV4/ParliamentInfo"
 TIMEOUT = 60
+ODATA_PAGE_SIZE = 100  # the OData service silently caps $top at 100
 
 SESSION_TYPE_CLASSIFIED  = 160  # חסויה — classified session; no public transcript
 _PROTOCOL_NAME_SUBSTRINGS = ("פרוטוקול", "protocol")
@@ -108,22 +113,189 @@ def _fetch_members(is_current: bool) -> list[dict]:
     return response.json()
 
 
+@lru_cache(maxsize=4)
+def _fetch_person_positions(knesset_num: int) -> tuple[dict, ...]:
+    """
+    Every KNS_PersonToPosition row of a given Knesset, with KNS_Person expanded.
+    This is the authoritative roster source: it covers plain MKs, ministers,
+    deputy ministers and Norwegian-law replacements, which the oknesset
+    /members payload does not reliably expose.
+    """
+    url  = f"{OFFICIAL_KNESSET_NEW_API}/KNS_PersonToPosition"
+    rows: list[dict] = []
+    skip = 0
+    while True:
+        params = {
+            "$filter":  f"KnessetNum eq {knesset_num}",
+            "$expand":  "KNS_Person",
+            "$orderby": "Id asc",
+            "$top":     ODATA_PAGE_SIZE,
+            "$skip":    skip,
+        }
+        response = _retry_get(url, params=params, timeout=TIMEOUT)
+        response.raise_for_status()
+        page = response.json().get("value", [])
+        if not page:
+            break
+        rows.extend(page)
+        skip += len(page)
+    return tuple(rows)
+
+
+def _dedupe_factions(factions: list[dict]) -> list[dict]:
+    seen: dict[tuple, dict] = {}
+    for faction in factions:
+        key = (faction.get("faction_id"), faction.get("faction_name"), faction.get("start_date"))
+        seen.setdefault(key, faction)
+    return list(seen.values())
+
+
+def _odata_roster(knesset_num: int) -> dict[int, dict]:
+    """
+    Build ``PersonID -> partial member record`` from the official OData positions
+    table. Faction records are shaped like the oknesset ones so that
+    ``_most_recent_faction`` and every downstream consumer keep working.
+    """
+    try:
+        rows = _fetch_person_positions(knesset_num)
+    except Exception as exc:
+        print(
+            f"[knesset_db] OData roster fetch failed for knesset {knesset_num} ({exc}); "
+            f"falling back to the oknesset roster only",
+            flush=True,
+        )
+        return {}
+
+    roster: dict[int, dict] = {}
+    for row in rows:
+        person_id = row.get("PersonID")
+        if person_id is None:
+            continue
+        person = row.get("KNS_Person") or {}
+        entry  = roster.setdefault(person_id, {
+            "PersonID":                 person_id,
+            "mk_individual_first_name": (person.get("FirstName") or "").strip(),
+            "mk_individual_name":       (person.get("LastName") or "").strip(),
+            "mk_individual_email":      person.get("Email"),
+            "GenderID":                 person.get("GenderID"),
+            "GenderDesc":               person.get("GenderDesc"),
+            "IsCurrent":                bool(person.get("IsCurrent")),
+            "factions":                 [],
+        })
+        faction_name = (row.get("FactionName") or "").strip()
+        if faction_name:
+            entry["factions"].append({
+                "faction_id":   row.get("FactionID"),
+                "faction_name": faction_name,
+                "start_date":   row.get("StartDate"),
+                "finish_date":  row.get("FinishDate"),
+                "knesset":      knesset_num,
+            })
+
+    for entry in roster.values():
+        entry["factions"] = _dedupe_factions(entry["factions"])
+
+    if not roster:
+        print(
+            f"[knesset_db] OData KNS_PersonToPosition returned no person for knesset "
+            f"{knesset_num} — the roster will be incomplete",
+            flush=True,
+        )
+    return roster
+
+
 def _get_all_members_raw(knesset_num: int = 25) -> list[dict]:
-    """Return all members (current + former) filtered to a given Knesset."""
+    """
+    Return all members (current + former) who served in a given Knesset.
+
+    The oknesset ``/members`` payload currently ships ``factions: [null]`` for
+    every member, so filtering on it alone yields an empty roster. The official
+    OData positions table is merged in as the authoritative membership source,
+    while the oknesset records still supply ``mk_individual_id`` and altnames.
+    """
     current = _fetch_members(True)
     former  = _fetch_members(False)
     all_members = current + former
 
+    if not all_members:
+        print(
+            f"[knesset_db] oknesset /members returned no member at all "
+            f"(current={len(current)}, former={len(former)})",
+            flush=True,
+        )
+
     if knesset_num is None:
         return all_members
 
-    # Keep only members who had a faction in the requested Knesset
-    result = []
+    oknesset_by_person_id: dict[int, dict] = {}
+    for mk in all_members:
+        person_id = mk.get("PersonID")
+        if person_id is not None:
+            oknesset_by_person_id.setdefault(person_id, mk)
+
+    result: list[dict] = []
+    seen_person_ids: set[int] = set()
     for mk in all_members:
         factions = [f for f in (mk.get("factions") or []) if f and f.get("knesset") == knesset_num]
         if factions:
             result.append(mk)
+            if mk.get("PersonID") is not None:
+                seen_person_ids.add(mk["PersonID"])
+
+    if not result:
+        print(
+            f"[knesset_db] no oknesset member carries a faction record for knesset "
+            f"{knesset_num} — relying entirely on the official OData roster",
+            flush=True,
+        )
+
+    for person_id, odata_entry in _odata_roster(knesset_num).items():
+        if person_id in seen_person_ids:
+            continue
+        oknesset_record = oknesset_by_person_id.get(person_id)
+        if oknesset_record is None:
+            member = dict(odata_entry)
+            member["mk_individual_id"]     = person_id
+            member["altnames"]             = []
+            member["committee_positions"]  = []
+            member["faction_chairpersons"] = []
+            member["govministries"]        = []
+        else:
+            member = dict(oknesset_record)
+            member["factions"] = odata_entry["factions"]
+            for field in ("mk_individual_first_name", "mk_individual_name"):
+                if not (member.get(field) or "").strip():
+                    member[field] = odata_entry[field]
+        result.append(member)
+        seen_person_ids.add(person_id)
+
+    if not result:
+        print(
+            f"[knesset_db] EMPTY roster for knesset {knesset_num} — both the oknesset "
+            f"REST API and the official OData endpoint yielded nothing. Any index "
+            f"rebuilt from this roster would be empty; aborting is strongly advised.",
+            flush=True,
+        )
     return result
+
+
+def mk_name_variants(first_name: str, last_name: str) -> list[str]:
+    """
+    Plausible written forms of an MK name, for alias-style retrieval.
+    Rosters store the full legal name ("אביחי אברהם בוארון", "ששון ששי גואטה")
+    while protocols usually print a shorter everyday form.
+    """
+    first  = " ".join((first_name or "").split())
+    last   = " ".join((last_name or "").split())
+    if not first and not last:
+        return []
+
+    variants = [f"{first} {last}".strip()]
+    first_tokens = first.split()
+    if len(first_tokens) > 1 and last:
+        variants.append(f"{first_tokens[0]} {last}")
+        variants.append(f"{first_tokens[-1]} {last}")
+    return list(dict.fromkeys(v for v in variants if v))
 
 
 def _most_recent_faction(factions: list[dict], knesset_num: int) -> dict | None:
@@ -338,8 +510,8 @@ def get_all_mks(knesset_num: int = 25) -> list[dict]:
     Each entry contains: mk_id, full_name, party, is_current, email.
     """
     members = _get_all_members_raw(knesset_num)
-    result  = [mk for mk in members]
-    result.sort(key=lambda x: x.get("last_name", ""))
+    result  = list(members)
+    result.sort(key=lambda x: x.get("mk_individual_name") or "")
     return result
 
 

@@ -9,8 +9,9 @@ Usage
     python scripts/build_bm25_indexes.py --knesset-num 25 --target mks
     python scripts/build_bm25_indexes.py --knesset-num 25 --target all --rebuild
     python scripts/build_bm25_indexes.py --knesset-num 25 --target bullets --no-lemma
+    python scripts/build_bm25_indexes.py --target mks --rebuild --out-dir C:/tmp/bm25
 
-Output files: Data/bm25/<knesset_num>/<target>.db
+Output files: Data/bm25/<knesset_num>/<target>.db (or <out-dir>/<knesset_num>/<target>.db)
 """
 
 import argparse
@@ -41,13 +42,17 @@ def parse_args() -> argparse.Namespace:
                    help="Force passthrough lemmatizer (no Dicta-BERT)")
     p.add_argument("--rebuild", action="store_true",
                    help="Drop and recreate the table even if it already exists")
+    p.add_argument("--out-dir", type=Path, default=None, metavar="DIR",
+                   help="Write the indexes under DIR/<knesset_num>/ instead of config.BM25_DIR "
+                        "(use it to verify a rebuild without touching production)")
     return p.parse_args()
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-def _db_path(knesset_num: int, target: str) -> Path:
-    return config.BM25_DIR / str(knesset_num) / f"{target}.db"
+def _db_path(knesset_num: int, target: str, out_dir: Path | None = None) -> Path:
+    root = out_dir if out_dir is not None else config.BM25_DIR
+    return root / str(knesset_num) / f"{target}.db"
 
 
 def _lem(text: str) -> str:
@@ -74,7 +79,7 @@ def _make_row(
 # ── per-target builders ───────────────────────────────────────────────────────
 
 def build_mks(knesset_num: int) -> list[dict]:
-    from utils.knesset_db import get_all_mks
+    from utils.knesset_db import get_all_mks, mk_name_variants
     mks = get_all_mks(knesset_num)
     rows = []
     for mk in mks:
@@ -92,9 +97,10 @@ def build_mks(knesset_num: int) -> list[dict]:
                 faction_parts.append(f.get("faction_name", "").strip())
 
         body_parts = [full]
+        body_parts.extend(mk_name_variants(first, last))
         body_parts.extend(a for a in altnames if a)
         body_parts.extend(faction_parts)
-        body = " | ".join(p for p in body_parts if p)
+        body = " | ".join(dict.fromkeys(p for p in body_parts if p))
 
         extra = {
             "mk_id":    str(mk_id),
@@ -336,14 +342,19 @@ _BUILDERS = {
 }
 
 
-def run_target(target: str, knesset_num: int, rebuild: bool) -> None:
-    db_path = _db_path(knesset_num, target)
+def run_target(target: str, knesset_num: int, rebuild: bool, out_dir: Path | None = None) -> None:
+    db_path = _db_path(knesset_num, target, out_dir)
     print(f"\n[{target}] -> {db_path}")
     t0 = time.time()
     try:
         rows = _BUILDERS[target](knesset_num)
     except Exception as exc:
         print(f"  ERROR building rows: {exc}")
+        return
+
+    if not rows:
+        print(f"  ERROR: builder produced 0 rows for '{target}' — refusing to write "
+              f"{db_path}, an empty index would silently break every consumer")
         return
 
     try:
@@ -370,10 +381,11 @@ def main() -> None:
     targets = list(TARGETS) if args.target == "all" else [args.target]
 
     print(f"Building BM25 indexes: knesset={args.knesset_num}  targets={targets}  "
-          f"lemma={config.USE_DICTABERT_LEMMA}  rebuild={args.rebuild}")
+          f"lemma={config.USE_DICTABERT_LEMMA}  rebuild={args.rebuild}  "
+          f"out_dir={args.out_dir or config.BM25_DIR}")
 
     for target in targets:
-        run_target(target, args.knesset_num, args.rebuild)
+        run_target(target, args.knesset_num, args.rebuild, args.out_dir)
 
     print("\nDone.")
 

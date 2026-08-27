@@ -159,6 +159,10 @@ KEYWORD_RERANK_TOP_K               = 200    # cosine rerank window when sort=rel
 NAME_RESOLUTION_AUTO_THRESHOLD     = 0.35
 FUZZY_SEARCH_THRESHOLD             = 55.0   # minimum RapidFuzz score (0–100) to include a candidate
 FUZZY_BODY_SCORE_WEIGHT            = 0.85   # body match weighted lower than label match
+# Score given when query and label differ only by an interior middle name
+# and agree on both first and last token ("אביחי בוארון" vs "אביחי אברהם
+# בוארון"). WRatio puts those at 85, below PARTICIPANT_FUZZY_THRESHOLD.
+FUZZY_TOKEN_CONTAINMENT_SCORE      = 95.0
 
 # Stricter bar for meeting-participant/guest MK resolution (speaker/roster
 # names -> mk_id, in build_meeting_index.py and web/app.py::browse_rag).
