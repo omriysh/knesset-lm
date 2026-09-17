@@ -364,6 +364,151 @@ def _embed_bullet_ranking(*, query: str, top_k: int) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# search_opinions — MK-scoped hybrid search over opinion bullets
+# ---------------------------------------------------------------------------
+
+
+def handle_search_opinions(args: dict) -> ToolEnvelope:
+    """Hybrid BM25 + dense search over summary bullets of a single MK.
+
+    Relies on the ``mk_id`` metadata written into both stores by
+    ``scripts/backfill_bullet_mk_ids.py`` (bullet speaker-prefix → mk_id
+    resolution, see indexing/bullet_mk_link.py). The mk_id filter is a hard
+    guarantee: bullets without a matching ``mk_id`` are never returned, even
+    if the dense side surfaces them. Embedding-side failures degrade to
+    BM25-only with an ``embedding_unavailable`` warning, mirroring
+    handle_search_topics.
+    """
+    query = (args.get("query") or "").strip()
+    mk_id = str(args.get("mk_id") or "").strip()
+    knesset_num = int(args.get("knesset_num") or 25)
+    top_k = int(args.get("top_k") or config.SEARCH_OPINIONS_DEFAULT_TOP_K)
+    top_k = max(1, min(top_k, config.SEARCH_OPINIONS_MAX_TOP_K))
+
+    if not query:
+        return _validation_error("missing_query", kind="search", source="hybrid",
+                                 query=query, mk_id=mk_id, knesset_num=knesset_num)
+    if not mk_id:
+        return _validation_error("missing_mk_id", kind="search", source="hybrid",
+                                 query=query, mk_id=mk_id, knesset_num=knesset_num)
+
+    bm25 = _open_bm25("bullets", knesset_num)
+    if bm25 is None:
+        return _bm25_missing_envelope("bullets", knesset_num)
+
+    mk_where = f"extra LIKE '%\"mk_id\": \"{_sql_safe(mk_id)}\"%'"
+
+    warnings: list[str] = []
+    bm25_ranking: list[str] = []
+    bm25_rows: dict[str, dict] = {}
+    try:
+        rows = bm25.search(
+            _quote_match(lemmatize(query)) or query,
+            top_k=config.HYBRID_FIRST_STAGE_TOP_K,
+            where=mk_where,
+        )
+        for r in rows:
+            rid = str(r.get("id") or "")
+            if rid:
+                bm25_rows[rid] = r
+                bm25_ranking.append(rid)
+    except Exception as exc:
+        bm25.close()
+        return ToolEnvelope(
+            summary="",
+            full="",
+            metadata={"kind": "error", "source": "bm25", "count": 0,
+                      "exception": str(exc)},
+            provenance={"query": query, "mk_id": mk_id, "knesset_num": knesset_num},
+            error="bm25_search_failed",
+        )
+
+    embed_ranking: list[str] = []
+    try:
+        embed_ranking = _embed_opinion_ranking(
+            query=query,
+            mk_id=mk_id,
+            top_k=config.HYBRID_FIRST_STAGE_TOP_K,
+        )
+    except Exception as exc:
+        print(f"[search_opinions] embedding side unavailable: {exc}")
+        warnings.append("embedding_unavailable")
+
+    if embed_ranking:
+        from retrieval.hybrid import rrf_fuse  # local import: optional dep
+        fused = rrf_fuse([bm25_ranking, embed_ranking], top_k=top_k)
+    else:
+        fused = bm25_ranking[:top_k]
+
+    missing = [rid for rid in fused if rid not in bm25_rows]
+    if missing:
+        bm25_rows.update(bm25.fetch_by_ids(missing))
+    bm25.close()
+
+    payload: list[dict] = []
+    for rid in fused:
+        row = bm25_rows.get(rid)
+        extra = row.get("extra") if (row and isinstance(row.get("extra"), dict)) else {}
+        # Hard mk filter: dense ids come from Chroma metadata, which could
+        # drift from the BM25 extras — never trust them blindly.
+        if str(extra.get("mk_id") or "") != mk_id:
+            continue
+        payload.append({
+            "bullet_id":  rid,
+            "text":       (row or {}).get("body") or "",
+            "speaker":    extra.get("speaker"),
+            "mk_id":      mk_id,
+            "meeting_id": extra.get("meeting_id"),
+            "committee":  extra.get("committee"),
+            "date":       extra.get("date"),
+        })
+
+    metadata = {
+        "kind":        "search",
+        "source":      "hybrid",
+        "count":       len(payload),
+        "total_match": len(bm25_ranking),
+    }
+    if warnings:
+        metadata["warnings"] = warnings
+
+    return ToolEnvelope(
+        summary="",
+        full=json.dumps(payload, ensure_ascii=False),
+        metadata=metadata,
+        provenance={"query": query, "mk_id": mk_id,
+                    "knesset_num": knesset_num, "top_k": top_k},
+    )
+
+
+def _embed_opinion_ranking(*, query: str, mk_id: str, top_k: int) -> list[str]:
+    """Chroma id ranking over the bullets collection, filtered to one MK.
+
+    Local imports for the same reason as _embed_bullet_ranking: don't pay the
+    chromadb/transformers import cost when the dense side is unavailable.
+    """
+    import chromadb
+    from contextlib import nullcontext
+
+    client = chromadb.PersistentClient(path=str(config.CHROMA_DIR))
+    coll = client.get_collection(config.BULLETS_COLLECTION)
+    from indexing.embedder import ProtocolEmbedder, get_global_embedder
+    embedder, embed_lock = get_global_embedder()
+    if embedder is None:
+        embedder = ProtocolEmbedder()
+        embed_lock = None
+    with embed_lock if embed_lock is not None else nullcontext():
+        q_emb = embedder.embed([query], ProtocolEmbedder.INSTR_QUERY)
+    res = coll.query(
+        query_embeddings=q_emb.tolist(),
+        n_results=top_k,
+        where={"mk_id": mk_id},
+        include=["metadatas"],
+    )
+    return [str(i) for i in (res.get("ids") or [[]])[0]]
+
+
+# ---------------------------------------------------------------------------
 # search_protocols_keyword — BM25 over speech text
 # ---------------------------------------------------------------------------
 

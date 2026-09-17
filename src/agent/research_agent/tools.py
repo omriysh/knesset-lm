@@ -34,6 +34,7 @@ from utils.tools import (
     handle_get_committee_sessions,
     handle_get_meeting_summary,
     handle_query_voting_records,
+    handle_search_opinions,
     handle_search_protocols_keyword,
     handle_search_topics,
 )
@@ -89,6 +90,50 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
             "max_items": 20,
             "executor_selects": True,
             "item_spec": {"drop_fields": ["bullet_id", "bullet_idx"]},
+        },
+    ),
+
+    ToolSpec(
+        name="search_opinions",
+        schema={
+            "type": "object",
+            "description": (
+                "Find stated positions/opinions of a specific MK on a topic. "
+                "Hybrid BM25 + embedding search over summary opinion bullets "
+                "pre-linked to MK identities — the go-to tool for questions "
+                "like 'what does MK X think about Y'. Requires mk_id: call "
+                "find_mk first. Each hit is one opinion bullet with its "
+                "meeting context; follow up with deep_dive_meeting on the "
+                "strongest meetings when verbatim quotes are needed."
+            ),
+            "properties": {
+                "query": {
+                    "type":        "string",
+                    "description": "Topic in Hebrew, a few key words (not the MK's name)",
+                },
+                "mk_id": {"type": "string"},
+                "top_k": {
+                    "type":    "integer",
+                    "default": config.SEARCH_OPINIONS_DEFAULT_TOP_K,
+                    "minimum": 1,
+                    "maximum": config.SEARCH_OPINIONS_MAX_TOP_K,
+                },
+                "knesset_num": {"type": "integer", "default": 25},
+            },
+            "required": ["query", "mk_id"],
+        },
+        handler=handle_search_opinions,
+        task_kinds=["discover", "filter"],
+        cost_hint="cheap",
+        ui={
+            "meta_note": "עמדה שהובעה בישיבת ועדה, מתוך סיכום AI של הישיבה",
+            "enrich_fields": ["meeting_id"],
+        },
+        compact_spec={
+            "kind": "list",
+            "max_items": 20,
+            "executor_selects": True,
+            "item_spec": {"drop_fields": ["bullet_id", "mk_id"]},
         },
     ),
 

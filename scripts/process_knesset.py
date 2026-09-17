@@ -293,6 +293,16 @@ def _format_committee_summary(name: str, stats: dict) -> str:
     return f"  {name[:40]}: {body}"
 
 
+# TODO: add opinion indexing to this pipeline. The bullets rebuild below
+# (--rebuild) drops bullets.db and rewrites every row without mk_id/speaker,
+# and index_meeting() upserts new meetings into Chroma without them, so every
+# full run wipes the tagging that search_opinions depends on until
+# scripts/backfill_bullet_mk_ids.py is rerun by hand. In the current design
+# it's acceptable that only part of the bullets carry an mk_id (opinions are
+# a subset of bullets), but that is the real problem: bullets and opinions
+# should be split into two tables/collections, with opinion rows always
+# linked to an MK at build time (indexing/bullet_mk_link.py) — not patched
+# afterwards by a backfill.
 def _bm25_phase(knesset_num: int) -> None:
     """Rebuild bullets + speeches + mks BM25 indexes for knesset_num.
 
