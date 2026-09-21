@@ -260,11 +260,78 @@ from agent.machine import StateMachine
 from agent.runner import MachineRunner, build_tool_registry
 from agent.research_agent.tools import RESEARCH_TOOL_REGISTRY
 from indexing.embedder import ProtocolEmbedder
-from indexing.parse_summary import parse_summary_bullets
+from retrieval import knesset_db_store as store
 from retrieval.protocol_rag import query_retrieve
-from utils.meeting import register_meeting_paths, get_summary_path_from_id, get_transcript_path_from_id
+from utils.meeting import get_transcript_path_from_id
 from utils.speech import get_mk_speeches_in_committee
 from utils.tools import dispatch as knesset_dispatch
+
+
+# ── Summary helpers (knesset.db) ──────────────────────────────────────────────
+
+_SECTION_BY_NUM = {1: "topics", 2: "opinions", 3: "attendance"}
+
+
+def _load_meeting_summary(meeting_id: str) -> dict | None:
+    """{meeting, topics, opinions, attendance} from knesset.db, or None when the meeting has no summary."""
+    if not store.exists():
+        print(f"[web] {store.db_path()} not built; run scripts/build_knesset_db.py", flush=True)
+        return None
+    conn = store.connect()
+    try:
+        meeting = store.get_meeting(conn, meeting_id)
+        if meeting is None or meeting.get("is_protocol") is None:
+            return None
+        return {
+            "meeting":    meeting,
+            "topics":     [t["text"] for t in store.get_topics(conn, meeting_id)],
+            "opinions":   store.get_opinions(conn, meeting_id),
+            "attendance": store.get_attendance(conn, meeting_id),
+        }
+    except Exception as exc:
+        print(f"[web] summary lookup failed for {meeting_id}: {exc}", flush=True)
+        return None
+    finally:
+        conn.close()
+
+
+def _summary_excerpt(meeting_id: str) -> str:
+    data = _load_meeting_summary(meeting_id)
+    return data["topics"][0] if data and data["topics"] else ""
+
+
+def _summary_sections(data: dict) -> list[dict]:
+    """Sections for the reading tab: attendance, topics, opinions grouped by speaker."""
+    attendance = [{"text": f"{a['name']} ({a['party']})" if a.get("party") else a["name"],
+                   "mk_id": a.get("mk_id")} for a in data["attendance"]]
+    topics = [{"text": t} for t in data["topics"]]
+    by_speaker: dict[str, list[dict]] = {}
+    for o in data["opinions"]:
+        by_speaker.setdefault(o.get("speaker_name") or o["speaker"], []).append(o)
+    opinions = []
+    for speaker, items in by_speaker.items():
+        for o in items:
+            opinions.append({
+                "text":           f"**{speaker}**: {o['opinion']}",
+                "quote":          o.get("quote") or "",
+                "quote_verified": bool(o.get("quote_verified")),
+                "speech_idx":     o.get("speech_idx"),
+                "quote_offset":   o.get("quote_offset"),
+                "mk_id":          o.get("mk_id"),
+            })
+    return [
+        {"index": 0, "heading": "נוכחים", "bullets": attendance},
+        {"index": 1, "heading": "נושאים", "bullets": topics},
+        {"index": 2, "heading": "עמדות",  "bullets": opinions},
+    ]
+
+
+def _meeting_title(meeting: dict, meeting_id: str) -> tuple[str, str, str]:
+    """(date dd/mm/yyyy, committee, title)."""
+    iso = meeting.get("date") or ""
+    date = f"{iso[8:10]}/{iso[5:7]}/{iso[0:4]}" if len(iso) == 10 else ""
+    committee = meeting.get("committee") or ""
+    return date, committee, (f"{committee} — {date}" if committee and date else meeting_id)
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
@@ -304,28 +371,22 @@ async def lifespan(app: FastAPI):
     backend = GemmaLlamaBackend(url=settings.LLAMA_SERVER)
 
     # ── Summary tools (look up paths via global meeting registry) ────────────
-    summaries_root = settings.SUMMARIES_ROOT
 
     def _summary_executor(name: str, args: dict) -> str:
-        from utils.meeting import get_summary_path_from_id
+        from summarization.summary_io import render_summary_text
         meeting_id = str(args.get("meeting_id", "")).strip()
-        path = get_summary_path_from_id(meeting_id)
-        if not path:
-            return f"ישיבה '{meeting_id}' לא נמצאה. הרץ שאילתת RAG תחילה."
-        if not path.exists():
-            return f"קובץ הסיכום לא נמצא: {path}"
-        if name == "get_meeting_summary":
-            text = path.read_text(encoding="utf-8")
-            return text[:6000] + ("\n…[קוצר]" if len(text) > 6000 else "")
+        data = _load_meeting_summary(meeting_id)
+        if data is None:
+            return f"לא נמצא סיכום לישיבה '{meeting_id}'."
+        section = None
         if name == "get_meeting_summary_section":
-            section_num = int(args.get("section_num", 1))
-            bullets = parse_summary_bullets(path, frozenset({section_num}))
-            if bullets:
-                return "\n".join(f"• {b['text']}" for b in bullets)
-            all_b = parse_summary_bullets(path)
-            avail = sorted({b["section"] for b in all_b})
-            return f"נושא {section_num} לא נמצא. נושאים קיימים: {avail}"
-        return f"כלי לא מוכר: {name}"
+            section = _SECTION_BY_NUM.get(int(args.get("section_num", 1)))
+            if section is None:
+                return f"נושא {args.get('section_num')} לא קיים. נושאים קיימים: 1 נושאים, 2 עמדות, 3 נוכחים"
+        elif name != "get_meeting_summary":
+            return f"כלי לא מוכר: {name}"
+        text = render_summary_text(data["topics"], data["opinions"], data["attendance"], section=section)
+        return text[:6000] + ("\n…[קוצר]" if len(text) > 6000 else "")
 
     # ── Speech tool ───────────────────────────────────────────────────────────
     transcriptions_root = settings.TRANSCRIPTIONS_ROOT
@@ -416,23 +477,24 @@ def _get_mk_fuzzy_index():
     if _mk_fuzzy_loaded:
         return _mk_fuzzy_index
     _mk_fuzzy_loaded = True
-    try:
-        from retrieval.bm25_index import BM25Index
-        from utils.tool_helpers.fuzzy_name_index import FuzzyNameIndex
-        mks_db = config.BM25_DIR / "25" / "mks.db"
-        if not mks_db.exists():
-            print(f"[mk_photo] mks.db not found ({mks_db}); "
-                  f"photo name resolution limited to exact filename match")
-            return None
-        bm = BM25Index(mks_db)
-        try:
-            _mk_fuzzy_index = FuzzyNameIndex.from_bm25(bm)
-        finally:
-            bm.close()
-    except Exception as exc:
-        print(f"[mk_photo] failed to load mks fuzzy index: {exc}")
-        _mk_fuzzy_index = None
+    _mk_fuzzy_index = _load_mk_fuzzy_index(25)
     return _mk_fuzzy_index
+
+
+def _load_mk_fuzzy_index(knesset_num: int):
+    from utils.tool_helpers.fuzzy_name_index import FuzzyNameIndex
+    if not store.exists():
+        print(f"[web] {store.db_path()} not found; MK name resolution unavailable", flush=True)
+        return None
+    try:
+        conn = store.connect()
+        try:
+            return FuzzyNameIndex(store.name_entries(conn, "mks", knesset_num))
+        finally:
+            conn.close()
+    except Exception as exc:
+        print(f"[web] failed to load mks fuzzy index: {exc}", flush=True)
+        return None
 
 
 def _photo_file_for(stem: str) -> "Path | None":
@@ -780,7 +842,6 @@ async def research_start(req: ResearchStartRequest, request: Request):
                         _rcbm = _cv.get("rag_chunks_by_meeting") or {}
                         _ws: dict = {}
                         if _mp:
-                            register_meeting_paths(_mp)
                             _ws = {"meeting_paths": _mp, "rag_chunks_by_meeting": _rcbm,
                                    "selected_chunks": []}
                         save_session(ResearchSession(
@@ -864,7 +925,6 @@ async def research_start(req: ResearchStartRequest, request: Request):
                     rag_chunks_by_mtg    = ctx_vars.get("rag_chunks_by_meeting") or {}
                     workspace_snap: dict = {}
                     if meeting_paths_snap:
-                        register_meeting_paths(meeting_paths_snap)
                         workspace_snap["meeting_paths"]       = meeting_paths_snap
                         workspace_snap["rag_chunks_by_meeting"] = rag_chunks_by_mtg
                         workspace_snap.setdefault("selected_chunks", [])
@@ -1107,7 +1167,6 @@ async def research_respond(
                         _rcbm = _cv.get("rag_chunks_by_meeting") or {}
                         _prev = session.workspace_data or {}
                         if _mp:
-                            register_meeting_paths(_mp)
                             _ws = {
                                 **_prev,
                                 "meeting_paths":         {**_prev.get("meeting_paths", {}), **_mp},
@@ -1192,8 +1251,6 @@ async def research_respond(
                     ctx_vars2   = ctx_snap2.get("vars", {})
                     mp2         = ctx_vars2.get("meeting_paths") or {}
                     rcbm2       = ctx_vars2.get("rag_chunks_by_meeting") or {}
-                    if mp2:
-                        register_meeting_paths(mp2)
                     prev_workspace = session.workspace_data or {}
                     if mp2:
                         merged_workspace: dict = {
@@ -1341,16 +1398,13 @@ async def browse_rag(req: BrowseSearchRequest, request: Request):
     """
     Session-less entry point for the reading tab.
 
-    Flow (structural-prefilter-first, replacing the old retrieve-then-post-filter
-    approach that silently dropped on-topic meetings outside a fixed top-k window
-    and unconditionally failed under any MK/party/guest filter — see
-    src/retrieval/meeting_index.py and utils.tools.search_speeches_bm25 docstrings):
+    Flow (structural-prefilter-first):
 
-      1. Structural SQL prefilter (committee / date / MK / party) against
-         meeting_index.db → candidate meeting_id set (or None = unrestricted).
+      1. Structural SQL prefilter (committee / date / MK / party / guest) against
+         knesset.db → candidate meeting_id set (or None = unrestricted).
       2. Topic ranking (embeddings) scoped to the candidate set, if `query` given.
-      3. Keyword ranking (BM25 over actual speech text) scoped to the candidate
-         set, if `keyword` given.
+      3. Keyword ranking (FTS over speech text in knesset.db) scoped to the
+         candidate set, if `keyword` given.
       4. RRF-fuse the two rankings (or use whichever one ran alone).
 
     Creates a fresh ResearchSession, persists meeting_paths into that session's
@@ -1360,10 +1414,8 @@ async def browse_rag(req: BrowseSearchRequest, request: Request):
     """
     from web.session import ResearchSession, save_session
     from datetime import datetime, timezone
-    from retrieval.meeting_index import query_candidate_meeting_ids
     from retrieval.hybrid import rrf_fuse
-    from utils.tools import _open_bm25, search_speeches_bm25
-    from utils.tool_helpers.fuzzy_name_index import FuzzyNameIndex
+    from utils.tools import search_speeches
 
     query   = req.query.strip()
     keyword = req.keyword.strip() if req.keyword else ""
@@ -1407,19 +1459,11 @@ async def browse_rag(req: BrowseSearchRequest, request: Request):
         def _resolve_names() -> tuple[list[str], list[str]]:
             resolved: list[str] = []
             unresolved: list[str] = []
-            bm25_mks = _open_bm25("mks", knesset_num)
-            if bm25_mks is None:
-                print(f"[browse_rag] mks.db not built — cannot resolve MK/guest name "
-                      f"filter to mk_id; participant filter skipped for names={names}",
-                      flush=True)
+            fuzzy_mk_index = _load_mk_fuzzy_index(knesset_num)
+            if fuzzy_mk_index is None:
+                print(f"[browse_rag] cannot resolve MK/guest name filter to mk_id; "
+                      f"participant filter skipped for names={names}", flush=True)
                 return resolved, names
-            try:
-                fuzzy_mk_index = FuzzyNameIndex.from_bm25(bm25_mks)
-            except Exception as exc:
-                print(f"[browse_rag] failed to load mks fuzzy index: {exc}", flush=True)
-                return resolved, names
-            finally:
-                bm25_mks.close()
             for name in names:
                 matches = fuzzy_mk_index.search(name, top_k=1, threshold=config.PARTICIPANT_FUZZY_THRESHOLD)
                 if matches:
@@ -1431,20 +1475,14 @@ async def browse_rag(req: BrowseSearchRequest, request: Request):
         mk_ids, unresolved_names = await loop.run_in_executor(None, _resolve_names)
 
         # filt.guest is a single free-text name, not necessarily an MK — when it
-        # doesn't resolve against mks.db, pass it through as a LIKE-matched
-        # meeting_guests.name filter instead of silently dropping it (guests are
-        # ministry officials / private citizens who never get an mk_id — see
-        # meeting_guests table in retrieval/meeting_index.py, populated from
-        # extract_attendance() roster names that failed MK fuzzy-resolution).
+        # doesn't resolve to an mk_id, pass it through as a LIKE-matched
+        # attendance.name filter instead of silently dropping it.
         guest_name = filt.guest if filt and filt.guest and filt.guest in unresolved_names else None
 
         # Any remaining unresolved names (i.e. not filt.guest) are genuinely
         # unmatchable MK filters — still dropped, still logged.
         other_unresolved = [n for n in unresolved_names if n != guest_name]
         if other_unresolved:
-            # Known limitation: meeting_index.db only tracks resolved MK ids (see
-            # its schema docstring). Not a crash, not silently "working" —
-            # logged so it's diagnosable.
             print(f"[browse_rag] could not resolve to a known MK, filter skipped "
                   f"for: {other_unresolved}", flush=True)
     else:
@@ -1452,23 +1490,25 @@ async def browse_rag(req: BrowseSearchRequest, request: Request):
 
     candidate_ids: list[str] | None = None
     if committees or date_from or date_to or mk_ids or parties or guest_name:
-        try:
-            candidate_ids = await loop.run_in_executor(
-                None,
-                lambda: query_candidate_meeting_ids(
-                    knesset_num,
-                    committees=committees, date_from=date_from, date_to=date_to,
-                    mk_ids=mk_ids or None, parties=parties, guest_name=guest_name,
-                ),
-            )
-        except FileNotFoundError as exc:
-            print(f"[browse_rag] structural filter requested but meeting_index.db "
-                  f"missing: {exc}", flush=True)
+        if not store.exists():
+            print(f"[browse_rag] structural filter requested but {store.db_path()} missing", flush=True)
             return JSONResponse(
-                {"error": "אינדקס הסינון המבני (ועדה/תאריך/חבר כנסת) לא נבנה עדיין. "
-                          "יש להריץ scripts/build_meeting_index.py"},
+                {"error": "מסד הנתונים (ועדה/תאריך/חבר כנסת) לא נבנה עדיין. "
+                          "יש להריץ scripts/build_knesset_db.py"},
                 status_code=503,
             )
+
+        def _candidates():
+            conn = store.connect()
+            try:
+                return store.query_candidate_meeting_ids(
+                    conn, knesset_num,
+                    committees=committees, date_from=date_from, date_to=date_to,
+                    mk_ids=mk_ids or None, parties=parties, guest_name=guest_name,
+                )
+            finally:
+                conn.close()
+        candidate_ids = await loop.run_in_executor(None, _candidates)
 
     if candidate_ids is not None and not candidate_ids:
         # Structural filters were supplied and matched nothing — legitimate
@@ -1501,41 +1541,33 @@ async def browse_rag(req: BrowseSearchRequest, request: Request):
         meeting_scores = dict(debug.get("meeting_scores", {}))
         selected_pass1 = debug["selected_pass1"]
         meeting_paths  = dict(debug["meeting_paths"])
-        register_meeting_paths(meeting_paths)
-
     # ── 3. Keyword ranking (BM25 over real speech text), scoped to candidates ─
     keyword_ranking: list[str] = []
     if keyword:
-        bm25_speeches = _open_bm25("speeches", knesset_num)
-        if bm25_speeches is None:
-            print("[browse_rag] speeches.db BM25 index not built — keyword search "
-                  "unavailable; falling back to topic ranking only", flush=True)
+        if not store.exists():
+            print("[browse_rag] knesset.db not built — keyword search unavailable; "
+                  "falling back to topic ranking only", flush=True)
         else:
             def _run_keyword():
+                conn = store.connect()
                 try:
-                    return search_speeches_bm25(
-                        bm25_speeches, keyword,
+                    return search_speeches(
+                        conn, keyword, knesset_num=knesset_num,
                         meeting_ids=candidate_ids,
                         top_k=config.KEYWORD_RERANK_TOP_K,
                         sort="relevance",
                     )
                 except Exception as exc:
-                    print(f"[browse_rag] keyword BM25 search failed: {exc}", flush=True)
+                    print(f"[browse_rag] keyword search failed: {exc}", flush=True)
                     return []
                 finally:
-                    bm25_speeches.close()
+                    conn.close()
             rows = await loop.run_in_executor(None, _run_keyword)
 
-            # Aggregate speech-level hits to per-meeting best score. sqlite's
-            # bm25() convention: lower (more negative) = more relevant, and
-            # BM25Index.search() already returns rows ORDER BY score ASC, so
-            # the *first* occurrence of a meeting_id in `rows` is already its
-            # best (lowest) score — min() here just makes that explicit/robust
-            # instead of relying on iteration order.
+            # Speech-level hits -> per-meeting best score (sqlite bm25: lower = better).
             best_score: dict[str, float] = {}
             for r in rows:
-                extra = r.get("extra") if isinstance(r.get("extra"), dict) else {}
-                mid = extra.get("meeting_id")
+                mid = r.get("meeting_id")
                 if not mid:
                     continue
                 score = float(r.get("score", 0.0))
@@ -1558,79 +1590,30 @@ async def browse_rag(req: BrowseSearchRequest, request: Request):
         meeting_ids = []
     meeting_ids = meeting_ids[:top_k]
 
-    # ── Resolve summary path / committee / date for every surviving meeting ──
-    # Topic ranking already registers meeting_paths + per-meeting committee/date
-    # via selected_pass1 metadata. Keyword-only (or keyword-widened) meetings
-    # need a fallback metadata lookup — a cheap Chroma metadata-only .get()
-    # against the bullets collection (no embedding call).
+    # ── Resolve committee / date / excerpt for every surviving meeting ──────
     meta_by_meeting: dict[str, dict] = {}
     for item in selected_pass1:
         mid = item["meta"].get("meeting_id", "")
         if mid and mid not in meta_by_meeting:
             meta_by_meeting[mid] = item["meta"]
 
-    missing_meta = [mid for mid in meeting_ids if mid not in meta_by_meeting or mid not in meeting_paths]
-    if missing_meta:
-        def _fetch_missing_meta():
-            try:
-                coll = chroma.get_collection(config.BULLETS_COLLECTION)
-                return coll.get(
-                    where={"meeting_id": {"$in": missing_meta}},
-                    include=["metadatas"],
-                )
-            except Exception as exc:
-                print(f"[browse_rag] bullets metadata fallback lookup failed: {exc}", flush=True)
-                return {"metadatas": []}
-        rows = await loop.run_in_executor(None, _fetch_missing_meta)
-        for meta in rows.get("metadatas") or []:
-            mid = meta.get("meeting_id", "")
-            if not mid:
-                continue
-            if mid not in meta_by_meeting:
-                meta_by_meeting[mid] = meta
-            sp = meta.get("summary_path")
-            if sp and mid not in meeting_paths:
-                meeting_paths[mid] = sp
-    if missing_meta:
-        register_meeting_paths(meeting_paths)
-
-    def _parse_filename(path_str: str) -> tuple[str, str]:
-        p     = Path(path_str)
-        parts = p.stem.split("_")
-        date  = f"{parts[0]}/{parts[1]}/{parts[2]}" if len(parts) >= 4 else ""
-        return date, p.parent.name
-
-    def _first_bullet(path_str: str) -> str:
-        try:
-            bullets = parse_summary_bullets(Path(path_str))
-            for b in bullets:
-                return b["text"]
-        except Exception as exc:
-            print(f"[browse_rag] bullet parse failed: {exc}", flush=True)
-        return ""
-
-    meetings_out = []
-    for mid in meeting_ids:
-        meta = meta_by_meeting.get(mid)
-        if meta:
-            date      = meta.get("date", "")
-            committee = meta.get("committee", "")
-        else:
-            summary_p = get_summary_path_from_id(mid)
-            date, committee = _parse_filename(str(summary_p)) if summary_p else ("", "")
-
-        summary_p = get_summary_path_from_id(mid)
-        excerpt   = _first_bullet(str(summary_p)) if summary_p else ""
-        score     = meeting_scores.get(mid, 0.0)
-        title     = f"{committee} — {date}" if committee and date else mid
-        meetings_out.append({
-            "meeting_id":  mid,
-            "date":        date,
-            "committee":   committee,
-            "title":       title,
-            "excerpt":     excerpt,
-            "score":       score,
-        })
+    def _meetings_out():
+        out = []
+        for mid in meeting_ids:
+            data = _load_meeting_summary(mid)
+            if data:
+                date, committee, title = _meeting_title(data["meeting"], mid)
+                excerpt = data["topics"][0] if data["topics"] else ""
+            else:
+                meta = meta_by_meeting.get(mid) or {}
+                date, committee = meta.get("date", ""), meta.get("committee", "")
+                title, excerpt = (f"{committee} — {date}" if committee and date else mid), ""
+            out.append({
+                "meeting_id": mid, "date": date, "committee": committee, "title": title,
+                "excerpt": excerpt, "score": meeting_scores.get(mid, 0.0),
+            })
+        return out
+    meetings_out = await loop.run_in_executor(None, _meetings_out)
 
     # RAG chunks index for heatmap (topic-ranked meetings only — keyword-only
     # meetings have no pass-1 chunk selection to show in the heatmap).
@@ -1682,7 +1665,6 @@ class WorkspaceAskRequest(BaseModel):
 
 # ── Workspace routes ──────────────────────────────────────────────────────────
 
-_ATTEND_RE = __import__("re").compile(r"נוכח|נעדר|חסר")
 
 
 @app.get("/api/research/{session_id}/rag")
@@ -1724,8 +1706,6 @@ async def research_rag(session_id: str, query: str, request: Request, top_k: int
     meeting_scores: dict[str, float] = debug.get("meeting_scores", {})
     selected_pass1: list[dict] = debug["selected_pass1"]
     meeting_paths: dict[str, str] = debug["meeting_paths"]
-    register_meeting_paths(meeting_paths)
-
     # Build a quick lookup: meeting_id → first pass-1 chunk meta
     meta_by_meeting: dict[str, dict] = {}
     for item in selected_pass1:
@@ -1733,42 +1713,15 @@ async def research_rag(session_id: str, query: str, request: Request, top_k: int
         if mid and mid not in meta_by_meeting:
             meta_by_meeting[mid] = item["meta"]
 
-    # Derive date/committee from pass-1 meta or fall back to filename
-    def _parse_filename(path_str: str) -> tuple[str, str]:
-        """Return (date, committee) from a summary .txt filename."""
-        p = Path(path_str)
-        # Filename: DD_MM_YYYY_<session_id>.txt  →  parts[-1] = committee dir
-        name = p.stem  # e.g. "14_07_2023_12345"
-        parts = name.split("_")
-        if len(parts) >= 4:
-            date_str = f"{parts[0]}/{parts[1]}/{parts[2]}"
-        else:
-            date_str = ""
-        committee = p.parent.name
-        return date_str, committee
-
-    def _first_non_attendance_bullet(path_str: str) -> str:
-        """Return the text of the first non-attendance bullet in a summary."""
-        try:
-            bullets = parse_summary_bullets(Path(path_str))
-            for b in bullets:
-                return b["text"]
-        except Exception:
-            pass
-        return ""
-
     meetings_out = []
     for rank, mid in enumerate(meeting_ids):
-        meta = meta_by_meeting.get(mid)
-        if meta:
-            date = meta.get("date", "")
-            committee = meta.get("committee", "")
+        data = _load_meeting_summary(mid)
+        if data:
+            date, committee, _ = _meeting_title(data["meeting"], mid)
+            excerpt = data["topics"][0] if data["topics"] else ""
         else:
-            summary_p = get_summary_path_from_id(mid)
-            date, committee = _parse_filename(str(summary_p)) if summary_p else ("", "")
-
-        summary_p = get_summary_path_from_id(mid)
-        excerpt = _first_non_attendance_bullet(str(summary_p)) if summary_p else ""
+            meta = meta_by_meeting.get(mid) or {}
+            date, committee, excerpt = meta.get("date", ""), meta.get("committee", ""), ""
 
         score = meeting_scores.get(mid, 0.0)
 
@@ -1818,7 +1771,7 @@ async def research_rag(session_id: str, query: str, request: Request, top_k: int
 @app.get("/api/research/{session_id}/meeting/{meeting_id}/summary")
 async def research_meeting_summary(session_id: str, meeting_id: str, request: Request):
     """
-    Return the parsed summary of a retrieved meeting, grouped by topic section.
+    Return a meeting's summary as sections (attendance, topics, opinions) for the reading tab.
     """
     if not _ok_session_id(session_id) or not meeting_id.isdigit():
         return JSONResponse({"error": "Invalid parameters"}, status_code=400)
@@ -1829,81 +1782,17 @@ async def research_meeting_summary(session_id: str, meeting_id: str, request: Re
     session = load_session(session_id, sessions_dir)
     if session is None:
         return JSONResponse({"error": "Session not found"}, status_code=404)
-
-    register_meeting_paths((session.workspace_data or {}).get("meeting_paths", {}))
-    summary_path = get_summary_path_from_id(meeting_id)
-    if not summary_path:
-        return JSONResponse(
-            {"error": f"Meeting '{meeting_id}' not in workspace. Run /rag first."},
-            status_code=404,
-        )
-    if not summary_path.exists():
-        return JSONResponse(
-            {"error": f"Summary file not found: {summary_path}"},
-            status_code=404,
-        )
-
-    bullets = parse_summary_bullets(summary_path)
-
-    # Group bullets by section; preserve global bullet_idx for heatmap reranking
-    sections_map: dict[int, list[dict]] = {}
-    for b in bullets:
-        sections_map.setdefault(b["section"], []).append({
-            "text":       b["text"],
-            "bullet_idx": b["idx"],
-        })
-
-    # Re-read raw headings for proper labels
-    raw_text = summary_path.read_text(encoding="utf-8")
-    import re as _re
-    _NUMBERED_SEC = _re.compile(r"^(?:#{1,4}\s+|\*\*\s*)(\d+)[.\s]+(.*)")
-    _MD_HEADING   = _re.compile(r"^#{1,4}\s+\D(.*)")
-    _STOP_PAT     = _re.compile(r"^#{1,2}\s+.*חוק", _re.UNICODE)
-    headings: dict[int, str] = {}
-    current_num: int | None = None
-    auto_counter = 0
-    for line in raw_text.split("\n"):
-        stripped = line.strip()
-        if _STOP_PAT.match(stripped):
-            break
-        m = _NUMBERED_SEC.match(stripped)
-        if m:
-            current_num = int(m.group(1))
-            heading_text = _re.sub(r"\*\*(.+?)\*\*", r"\1", m.group(2)).strip()
-            headings[current_num] = heading_text or f"נושא {current_num}"
-            continue
-        m2 = _MD_HEADING.match(stripped)
-        if m2:
-            auto_counter = (current_num + 1) if current_num is not None else (auto_counter + 1)
-            current_num = auto_counter
-            heading_text = _re.sub(r"\*\*(.+?)\*\*", r"\1", m2.group(0).lstrip("#").strip())
-            headings[current_num] = heading_text or f"נושא {current_num}"
-
-    # Build topics list, skipping attendance sections
-    topics = []
-    for idx, sec_num in enumerate(sorted(sections_map)):
-        heading = headings.get(sec_num, f"נושא {sec_num}")
-        if _ATTEND_RE.search(heading):
-            continue
-        topics.append({
-            "index": idx,
-            "heading": heading,
-            "bullets": sections_map[sec_num],
-        })
-
-    # Derive date and committee from filename
-    name = summary_path.stem
-    parts = name.split("_")
-    date = f"{parts[0]}/{parts[1]}/{parts[2]}" if len(parts) >= 4 else ""
-    committee = summary_path.parent.name
-    title = f"{committee} — {date}" if committee and date else meeting_id
-
+    data = await asyncio.get_event_loop().run_in_executor(None, _load_meeting_summary, meeting_id)
+    if data is None:
+        return JSONResponse({"error": f"No summary for meeting '{meeting_id}'"}, status_code=404)
+    date, committee, title = _meeting_title(data["meeting"], meeting_id)
     return {
-        "meeting_id": meeting_id,
-        "date": date,
-        "committee": committee,
-        "title": title,
-        "topics": topics,
+        "meeting_id":  meeting_id,
+        "date":        date,
+        "committee":   committee,
+        "title":       title,
+        "is_protocol": bool(data["meeting"].get("is_protocol")),
+        "topics":      _summary_sections(data),
     }
 
 
@@ -1923,8 +1812,6 @@ async def research_meeting_transcript(session_id: str, meeting_id: str, request:
         return JSONResponse({"error": "Session not found"}, status_code=404)
 
     from utils.meeting import load_meeting, format_meeting_chunks
-
-    register_meeting_paths((session.workspace_data or {}).get("meeting_paths", {}))
     transcript_path = get_transcript_path_from_id(meeting_id)
     if not transcript_path:
         return JSONResponse(
@@ -2059,8 +1946,6 @@ async def research_meeting_participants(session_id: str, meeting_id: str, reques
         return JSONResponse({"error": "Session not found"}, status_code=404)
 
     from utils.meeting import load_meeting, extract_attendance
-
-    register_meeting_paths((session.workspace_data or {}).get("meeting_paths", {}))
     transcript_path = get_transcript_path_from_id(meeting_id)
     if not transcript_path or not transcript_path.exists():
         return JSONResponse({"participants": []})
@@ -2140,7 +2025,6 @@ async def workspace_ask(
         return JSONResponse({"error": "שאלה מכילה תווים לא חוקיים או ארוכה מדי"}, status_code=400)
 
     workspace = session.workspace_data or {}
-    register_meeting_paths(workspace.get("meeting_paths", {}))
     selected_chunks: list[dict] = workspace.get("selected_chunks", [])
 
     # Build context from selected chunks (capped at ~8000 chars)
@@ -2160,16 +2044,13 @@ async def workspace_ask(
 
     # Optionally append meeting summary for the requested meeting_id
     if req.meeting_id and used_chars < MAX_CTX_CHARS:
-        summary_path = get_summary_path_from_id(req.meeting_id)
-        if summary_path and summary_path.exists():
-            try:
-                bullets = parse_summary_bullets(summary_path)
-                summary_lines = [b["text"] for b in bullets[:30]]
-                summary_block = "סיכום ישיבה:\n" + "\n".join(f"• {l}" for l in summary_lines)
-                if used_chars + len(summary_block) <= MAX_CTX_CHARS:
-                    context_parts.insert(0, summary_block)
-            except Exception:
-                pass
+        data = _load_meeting_summary(req.meeting_id)
+        if data:
+            from summarization.summary_io import render_summary_text
+            summary_block = "סיכום ישיבה:\n" + render_summary_text(
+                data["topics"], data["opinions"][:30], data["attendance"])
+            if used_chars + len(summary_block) <= MAX_CTX_CHARS:
+                context_parts.insert(0, summary_block)
 
     context = "\n\n---\n\n".join(context_parts) if context_parts else "(אין מידע נבחר)"
 

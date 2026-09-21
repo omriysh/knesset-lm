@@ -62,9 +62,9 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         schema={
             "type": "object",
             "description": (
-                "Discover meetings whose topical bullets match the query. "
-                "Hybrid BM25 + embedding scored via Reciprocal Rank Fusion. "
-                "Return up to top_k bullets with their meeting IDs."
+                "Discover meetings whose summary topics match the query "
+                "(full-text search, BM25 ranked). Return up to top_k topics "
+                "with their meeting IDs, committee and date."
             ),
             "properties": {
                 "query":       {"type": "string"},
@@ -89,7 +89,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
             "kind": "list",
             "max_items": 20,
             "executor_selects": True,
-            "item_spec": {"drop_fields": ["bullet_id", "bullet_idx"]},
+            "item_spec": {"drop_fields": ["topic_id", "topic_idx"]},
         },
     ),
 
@@ -98,13 +98,11 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         schema={
             "type": "object",
             "description": (
-                "Find stated positions/opinions of a specific MK on a topic. "
-                "Hybrid BM25 + embedding search over summary opinion bullets "
-                "pre-linked to MK identities — the go-to tool for questions "
-                "like 'what does MK X think about Y'. Requires mk_id: call "
-                "find_mk first. Each hit is one opinion bullet with its "
-                "meeting context; follow up with deep_dive_meeting on the "
-                "strongest meetings when verbatim quotes are needed."
+                "Find stated positions of a specific MK on a topic. Full-text "
+                "search over summary opinions linked to MK identities, each "
+                "with a verbatim quote from the protocol — the go-to tool for "
+                "'what does MK X think about Y'. Requires mk_id: call find_mk "
+                "first. An empty query lists the MK's opinions, newest first."
             ),
             "properties": {
                 "query": {
@@ -120,7 +118,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
                 },
                 "knesset_num": {"type": "integer", "default": 25},
             },
-            "required": ["query", "mk_id"],
+            "required": ["mk_id"],
         },
         handler=handle_search_opinions,
         task_kinds=["discover", "filter"],
@@ -133,7 +131,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
             "kind": "list",
             "max_items": 20,
             "executor_selects": True,
-            "item_spec": {"drop_fields": ["bullet_id", "mk_id"]},
+            "item_spec": {"drop_fields": ["opinion_id", "mk_id", "speaker_label", "speech_idx", "quote_offset"]},
         },
     ),
 
@@ -355,13 +353,16 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         name="get_meeting_summary",
         schema={
             "type": "object",
-            "description": "Return the raw text summary for a single meeting.",
+            "description": (
+                "Return a meeting's AI summary: attendance, discussion topics and "
+                "the opinions each speaker expressed (with quotes)."
+            ),
             "properties": {
-                "meeting_id":  {"type": "string"},
-                "section_num": {
-                    "type":        "integer",
-                    "description": "Optional 1-indexed section to return only one section.",
-                    "minimum":     1,
+                "meeting_id": {"type": "string"},
+                "section": {
+                    "type":        "string",
+                    "enum":        ["topics", "opinions", "attendance"],
+                    "description": "Optional: return only one section.",
                 },
             },
             "required": ["meeting_id"],

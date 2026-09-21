@@ -1264,6 +1264,21 @@ details[open] > .sub-summary::before { transform: rotate(90deg); }
 }
 .summary-bullet-btn.active .bullet-indicator { background: #2e7d32; }
 
+.summary-quote {
+  margin: 0.1rem 1.6rem 0.4rem 0;
+  padding-right: 0.6rem;
+  border-right: 2px solid #c8d6c8;
+  font-size: 0.8rem;
+  color: #555;
+  font-style: italic;
+}
+.summary-quote.unverified { border-right-color: #e0b04a; }
+.summary-jump-btn {
+  background: none; border: none; cursor: pointer; padding: 0 0.2rem;
+  vertical-align: middle; color: #2e7d32;
+}
+.summary-jump-btn .material-symbols-outlined { font-size: 0.95rem; }
+
 /* ── Transcript ─────────────────────────────────────────────── */
 .transcript-body {
   display: flex;

@@ -49,9 +49,6 @@ MACHINE_PATH: Path = Path(
 TRANSCRIPTIONS_ROOT: Path = Path(
     os.environ.get("KNESSET_TRANSCRIPTIONS_DIR", str(_cfg.DATA_DIR / "raw_transcriptions"))
 )
-SUMMARIES_ROOT: Path = Path(
-    os.environ.get("KNESSET_SUMMARIES_DIR", str(_cfg.DATA_DIR / "summaries"))
-)
 
 # ── RAG retrieval ─────────────────────────────────────────────────────────────
 

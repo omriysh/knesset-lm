@@ -33,15 +33,7 @@ CHARS_PER_TOK       = 2      # rough estimate for Hebrew
 API_RETRY_ATTEMPTS  = 5      # number of attempts for external API calls
 API_RETRY_SLEEP     = 30     # seconds between retries
 
-NOT_PROTOCOL        = "לא פרוטוקול"   # sentinel returned by summarize_meeting when LLM detects non-protocol
-
-# Chunk sizing: reserve space for system prompt, partial summary, and response
-_ESTIMATED_SUMMARY_TOKENS = 2048
-_RESERVED_TOKENS = 2048 + MAX_TOKENS + _ESTIMATED_SUMMARY_TOKENS
-MAX_CHUNK_CHARS  = (CTX_SIZE - _RESERVED_TOKENS) * CHARS_PER_TOK
-
-# Meetings that would require more chunks than this are skipped (likely non-protocol documents)
-MAX_SUMMARIZATION_CHUNKS = 10
+NOT_PROTOCOL        = "לא פרוטוקול"   # sentinel the summarization prompts return for non-protocol documents
 
 # ── Embedding model ───────────────────────────────────────────────────────────
 # Override with environment variables for non-standard installs.
@@ -143,7 +135,7 @@ RESEARCH_PER_TOOL_TIMEOUT_SECONDS       = 90
 RESEARCH_DAG_MAX_WORKERS         = 4
 
 # BM25 / morphology
-BM25_DIR             = DATA_DIR / "bm25"
+KNESSET_DB           = DATA_DIR / "knesset.db"   # built by scripts/build_knesset_db.py
 USE_DICTABERT_LEMMA  = False
 DICTABERT_MODEL      = "dicta-il/dictabert-seg"
 DICTABERT_DEVICE     = "cuda"   # used only when USE_DICTABERT_LEMMA=True

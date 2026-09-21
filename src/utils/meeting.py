@@ -9,7 +9,6 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
-from config import MAX_CHUNK_CHARS
 
 # ── extract_attendance() full_text parsing ───────────────────────────────────
 #
@@ -175,32 +174,28 @@ def _is_attendance_header_label(label: str) -> bool:
 
 @lru_cache(maxsize=4)
 def _mk_name_lexicon(knesset_num: int = 25) -> tuple[str, ...]:
-    """Canonical multi-token MK names for a Knesset, read from the mks BM25 db.
+    """Canonical multi-token MK names for a Knesset, read from knesset.db.
 
     Needed only by the "speeches"-shape attendance parser: those protocols are
     converted full_text documents whose roster lost every line break, so names
     are glued with no separator at all ("טלי גוטליבשלום דנינו") and can only be
-    segmented against a known-name lexicon. Returns () when mks.db hasn't been
-    built yet — the parser then degrades to speaker-only attendance, i.e. the
-    behaviour that predated this lexicon.
+    segmented against a known-name lexicon. Returns () when the mks table hasn't
+    been built yet — the parser then degrades to speaker-only attendance.
     """
-    import config
-    path = config.BM25_DIR / str(knesset_num) / "mks.db"
-    if not path.exists():
-        print(f"[meeting] mks.db not found ({path}); glued attendance rosters in "
+    from retrieval import knesset_db_store as store
+    if not store.exists():
+        print(f"[meeting] {store.db_path()} not found; glued attendance rosters in "
               f"'speeches'-shape protocols cannot be split")
         return ()
     try:
-        from retrieval.bm25_index import BM25Index
-        index = BM25Index(path)
+        conn = store.connect()
         try:
-            rows = index._connect().execute("SELECT label FROM entries").fetchall()
+            labels = {name.strip() for name in store.mk_names(conn, knesset_num) if name}
         finally:
-            index.close()
+            conn.close()
     except Exception as exc:
-        print(f"[meeting] MK name lexicon load failed from {path}: {exc}")
+        print(f"[meeting] MK name lexicon load failed: {exc}")
         return ()
-    labels = {str(row[0]).strip() for row in rows if row[0]}
     return tuple(sorted(label for label in labels if len(label.split()) >= 2))
 
 
@@ -280,54 +275,41 @@ _SPEAKER_TURN_RE = re.compile(
 )
 
 
-_meeting_registry: dict[str, str] = {}  # meeting_id → summary .txt path
-
-
-def register_meeting_paths(paths: dict[str, str]) -> None:
-    """Register a batch of meeting_id → summary-path mappings into the global registry."""
-    _meeting_registry.update(paths)
-
-
-def _find_summary_on_disk(meeting_id: str) -> Path | None:
-    """Locate a meeting's summary .txt by its id suffix under Data/summaries.
-
-    Summary files are named ``DD_MM_YYYY_<session_id>.txt`` and the meeting_id
-    IS that trailing session_id, so a ``*_<meeting_id>.txt`` glob resolves it
-    regardless of committee-folder or knesset-number nesting.
-    """
-    if not meeting_id.isdigit():
+def _meeting_row(meeting_id: str) -> dict | None:
+    from retrieval import knesset_db_store as store
+    if not store.exists():
         return None
-    import config
-    root = config.DATA_DIR / "summaries"
     try:
-        return next(root.glob(f"**/*_{meeting_id}.txt"), None)
+        conn = store.connect()
+        try:
+            return store.get_meeting(conn, str(meeting_id))
+        finally:
+            conn.close()
     except Exception as exc:
-        print(f"[meeting] summary glob failed for {meeting_id!r}: {exc}")
+        print(f"[meeting] knesset.db lookup failed for {meeting_id!r}: {exc}")
         return None
 
 
 def get_summary_path_from_id(meeting_id: str) -> Path | None:
-    """Return the summary .txt Path for a meeting_id, or None if not found.
-
-    Fast path: the in-memory registry populated by ``register_meeting_paths``
-    during a RAG run. Fallback: glob the summaries tree so meetings that were
-    never registered (e.g. opened from an agent citation) still resolve; hits
-    are cached back into the registry.
-    """
-    mid = str(meeting_id)
-    p = _meeting_registry.get(mid)
-    if p:
-        return Path(p)
-    found = _find_summary_on_disk(mid)
-    if found is not None:
-        _meeting_registry[mid] = str(found)
-    return found
+    """Summary JSON path for a meeting_id: knesset.db first, then a glob over Data/summaries."""
+    from summarization.summary_io import find_summary_path
+    row = _meeting_row(meeting_id)
+    if row and row.get("summary_path") and Path(row["summary_path"]).exists():
+        return Path(row["summary_path"])
+    return find_summary_path(str(meeting_id))
 
 
 def get_transcript_path_from_id(meeting_id: str) -> Path | None:
-    """Return the raw transcript JSON Path for a meeting_id, or None if not registered."""
+    """Raw transcript JSON path for a meeting_id: knesset.db first, then derived from the summary path."""
+    from summarization.summary_io import transcript_path_for_summary
+    row = _meeting_row(meeting_id)
+    if row and row.get("transcript_path") and Path(row["transcript_path"]).exists():
+        return Path(row["transcript_path"])
     summary = get_summary_path_from_id(meeting_id)
-    return transcript_path_from_summary(summary) if summary else None
+    if summary is None:
+        return None
+    transcript = transcript_path_for_summary(summary)
+    return transcript if transcript.exists() else None
 
 
 def load_meeting(filepath: str | Path) -> dict:
@@ -589,15 +571,6 @@ def parse_full_text_speeches(full_text: str) -> list[dict] | None:
     return speeches if speeches else None
 
 
-def transcript_path_from_summary(summary_path: Path) -> Path:
-    """Derive the raw transcript JSON path from a summary .txt path."""
-    return Path(
-        str(summary_path)
-        .replace("summaries", "raw_transcriptions", 1)
-        .replace(".txt", ".json")
-    )
-
-
 def format_meeting_chunks(meeting: dict) -> list[dict]:
     """
     Format a meeting into display chunks for the web UI.
@@ -646,27 +619,4 @@ def format_meeting_chunks(meeting: dict) -> list[dict]:
                     "speaker":  "",
                     "text":     para,
                 })
-    return chunks
-
-
-def chunk_transcript(text: str, max_chars: int = MAX_CHUNK_CHARS) -> list[str]:
-    """
-    Split a transcript into chunks that each fit within max_chars.
-    Splits on speech boundaries (double newline). Returns a list of chunk strings.
-    """
-    if len(text) <= max_chars:
-        return [text]
-
-    chunks = []
-    remaining = text
-    while len(remaining) > max_chars:
-        cutoff = remaining.rfind("\n\n", 0, max_chars)
-        if cutoff == -1:
-            cutoff = max_chars
-        chunks.append(remaining[:cutoff])
-        remaining = remaining[cutoff:].lstrip()
-
-    if remaining:
-        chunks.append(remaining)
-
     return chunks

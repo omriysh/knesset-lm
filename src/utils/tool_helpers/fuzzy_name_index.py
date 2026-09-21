@@ -16,7 +16,6 @@ Public surface:
 
 from __future__ import annotations
 
-import json
 import re
 
 import config
@@ -72,34 +71,13 @@ def _is_middle_name_variant(query_tokens: list[str], label_tokens: list[str]) ->
 
 
 class FuzzyNameIndex:
-    """In-memory fuzzy index built from a :class:`BM25Index` data store."""
+    """In-memory fuzzy index over ``[{id, label, body, extra}, ...]`` entries
+    (see retrieval.knesset_db_store.name_entries)."""
 
     def __init__(self, entries: list[dict]) -> None:
         self._entries = entries  # [{id, label, body, extra}]
         self._normalized_labels = [_normalize_name(e["label"]) for e in entries]
         self._label_tokens = [_name_tokens(e["label"]) for e in entries]
-
-    @classmethod
-    def from_bm25(cls, bm25_index) -> "FuzzyNameIndex":
-        """Scan all rows of an open BM25Index into memory."""
-        con = bm25_index._connect()
-        rows = con.execute("SELECT id, label, body, extra FROM entries").fetchall()
-        entries: list[dict] = []
-        for row in rows:
-            extra = row["extra"] or "{}"
-            if isinstance(extra, str):
-                try:
-                    extra = json.loads(extra)
-                except Exception as exc:
-                    print(f"[fuzzy_name_index] bad extra JSON for id={row['id']!r}: {exc}")
-                    extra = {}
-            entries.append({
-                "id":    str(row["id"] or ""),
-                "label": str(row["label"] or ""),
-                "body":  str(row["body"] or ""),
-                "extra": extra,
-            })
-        return cls(entries)
 
     def search(
         self,

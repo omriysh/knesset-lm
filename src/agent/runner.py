@@ -41,7 +41,6 @@ from agent.parsers import get_loop_control, parse_output
 from agent.research_agent.agent import ResearchAgent
 from agent.subgraph.base import SubgraphEvent
 from agent.subgraph.hooks import HookRouter, parse_hook_config
-from utils.meeting import register_meeting_paths
 
 
 # ── Subgraph implementation registry ──────────────────────────────────────────
@@ -367,7 +366,6 @@ class MachineRunner:
                 existing_paths = ctx.get("meeting_paths") or {}
                 new_paths = {**existing_paths, **debug.get("meeting_paths", {})}
                 ctx.set("meeting_paths", new_paths)
-                register_meeting_paths(new_paths)
                 ctx.set("rag_context", context_str)
 
                 # Build per-meeting RAG chunk index for the heatmap (pass-1 only).
@@ -588,7 +586,6 @@ class MachineRunner:
             existing_paths = ctx.get("meeting_paths") or {}
             new_paths = {**existing_paths, **debug.get("meeting_paths", {})}
             ctx.set("meeting_paths", new_paths)
-            register_meeting_paths(new_paths)
             ctx.set("rag_context", context_str)
 
             # Build per-meeting RAG chunk index for the heatmap (pass-1 only).

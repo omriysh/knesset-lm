@@ -459,6 +459,8 @@ async function _loadMeeting(meetingId) {
         _filterByBullet(idx);
       });
     });
+    _wireSummaryJumps(col);
+    _wireSummaryJumps(_panel?.querySelector('#browser-summary-bar'));
 
     // Init heatmap with grey bands (no scores yet)
     _initHeatmap(transcriptData.chunks || []);
@@ -491,6 +493,34 @@ async function _loadMeeting(meetingId) {
 }
 
 /* ── Summary panel ───────────────────────────────────────────────── */
+function _bulletHtml(b) {
+  // b: {text, bullet_idx?, quote?, quote_verified?, speech_idx?} or a plain string (legacy)
+  const text      = typeof b === 'string' ? b : b.text;
+  const bulletIdx = typeof b === 'string' ? null : b.bullet_idx;
+  const idxAttr   = bulletIdx != null ? `data-bullet-idx="${bulletIdx}"` : '';
+  const speechIdx = typeof b === 'string' ? null : b.speech_idx;
+  const quote     = typeof b === 'string' ? '' : (b.quote || '');
+  const jump = speechIdx != null
+    ? `<button class="summary-jump-btn" data-speech-idx="${speechIdx}" title="קפוץ לציטוט בפרוטוקול"><span class="material-symbols-outlined">arrow_outward</span></button>`
+    : '';
+  const quoteHtml = quote
+    ? `<div class="summary-quote${b.quote_verified ? '' : ' unverified'}">„${_esc(quote)}”${jump}</div>`
+    : '';
+  return `<li>
+    <button class="summary-bullet-btn" ${idxAttr}>
+      <span class="bullet-indicator"></span>
+      <span>${marked.parseInline(text)}</span>
+    </button>${quoteHtml}
+  </li>`;
+}
+
+function _summarySectionsHtml(topics) {
+  return topics.map(t => `<div class="summary-section">
+       <div class="summary-heading">${_esc(t.heading)}</div>
+       <ul class="summary-bullets">${(t.bullets || []).map(_bulletHtml).join('')}</ul>
+     </div>`).join('');
+}
+
 function _summaryHtml(data, m) {
   const topics = data.topics || [];
   if (!topics.length) return '';
@@ -502,27 +532,6 @@ function _summaryHtml(data, m) {
     ? `<span class="summary-toggle-sep">|</span><span class="summary-toggle-meta">${metaParts.join(' | ')}</span>`
     : '';
 
-  const sections = topics.map((t, i) => {
-    const bullets = (t.bullets || []).map(b => {
-      // b is {text, bullet_idx} (new API) or a plain string (legacy)
-      const text      = typeof b === 'string' ? b : b.text;
-      const bulletIdx = typeof b === 'string' ? null : b.bullet_idx;
-      const idxAttr   = bulletIdx != null ? `data-bullet-idx="${bulletIdx}"` : '';
-      return `<li>
-        <button class="summary-bullet-btn" ${idxAttr}>
-          <span class="bullet-indicator"></span>
-          <span>${marked.parseInline(text)}</span>
-        </button>
-      </li>`;
-    }).join('');
-    return `<div class="summary-section">
-       <div class="summary-heading">
-         ${_esc(t.heading)}
-       </div>
-       <ul class="summary-bullets">${bullets}</ul>
-     </div>`;
-  }).join('');
-
   return `
 <details class="summary-panel">
   <summary class="summary-toggle">
@@ -530,30 +539,23 @@ function _summaryHtml(data, m) {
     <span>סיכום AI</span>
     ${metaHtml}
   </summary>
-  <div class="summary-body">${sections}</div>
+  <div class="summary-body">${_summarySectionsHtml(topics)}</div>
 </details>`;
 }
 
 function _summaryBodyHtml(data) {
   const topics = data.topics || [];
   if (!topics.length) return '';
-  return topics.map((t, i) => {
-    const bullets = (t.bullets || []).map(b => {
-      const text      = typeof b === 'string' ? b : b.text;
-      const bulletIdx = typeof b === 'string' ? null : b.bullet_idx;
-      const idxAttr   = bulletIdx != null ? `data-bullet-idx="${bulletIdx}"` : '';
-      return `<li>
-        <button class="summary-bullet-btn" ${idxAttr}>
-          <span class="bullet-indicator"></span>
-          <span>${marked.parseInline(text)}</span>
-        </button>
-      </li>`;
-    }).join('');
-    return `<div class="summary-section">
-       <div class="summary-heading">${_esc(t.heading)}</div>
-       <ul class="summary-bullets">${bullets}</ul>
-     </div>`;
-  }).join('');
+  return _summarySectionsHtml(topics);
+}
+
+function _wireSummaryJumps(root) {
+  root?.querySelectorAll('.summary-jump-btn[data-speech-idx]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      browserScrollToChunk(btn.dataset.speechIdx);
+    });
+  });
 }
 
 function _highlightBulletBtn(idx) {

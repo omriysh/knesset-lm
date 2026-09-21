@@ -14,3 +14,4 @@ web/query_log.jsonl
 temp_*.py
 exp_*.py
 batch_state_*.json
+pilot*.json

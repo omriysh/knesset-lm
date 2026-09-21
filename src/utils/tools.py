@@ -18,7 +18,7 @@ import convention), so the registry has to live one layer up.
 ToolEnvelope contract: every handler returns a
 :class:`agent.subgraph.evidence.ToolEnvelope` — never raises, never returns
 ``None``. Argument-validation failures and infrastructure errors (missing
-BM25 db, network exception, etc.) are reported via the envelope's ``error``
+knesset.db, network exception, etc.) are reported via the envelope's ``error``
 field per §4.3.
 """
 
@@ -33,7 +33,7 @@ from typing import Any, Callable
 
 import config
 from agent.subgraph.evidence import ToolEnvelope
-from retrieval.bm25_index import BM25Index
+from retrieval import knesset_db_store as store
 from retrieval.ktiv import expand_token
 from retrieval.lemmatize import lemmatize
 from utils.speech import name_query_matches, name_tokens
@@ -184,328 +184,141 @@ def _safe_args(args: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Shared infra: BM25 index resolution
+# Shared infra: knesset.db
 # ---------------------------------------------------------------------------
 
 
-def _bm25_path(target: str, knesset_num: int) -> Path:
-    """Path layout matches ``scripts/build_bm25_indexes.py``."""
-    return config.BM25_DIR / str(knesset_num) / f"{target}.db"
-
-
-def _open_bm25(target: str, knesset_num: int) -> BM25Index | None:
-    """Return an opened :class:`BM25Index` or ``None`` if the db file is missing.
-
-    The ``.db`` file is built offline by ``scripts/build_bm25_indexes.py``;
-    if a deployment hasn't run that script yet, the find_* tools must fail
-    with a clean ``bm25_db_missing`` error rather than crashing.
-    """
-    path = _bm25_path(target, knesset_num)
-    if not path.exists():
+def _open_db():
+    """Open knesset.db (built offline by scripts/build_knesset_db.py) or None when missing."""
+    if not store.exists():
         return None
-    return BM25Index(path)
+    return store.connect()
 
 
-def _bm25_missing_envelope(target: str, knesset_num: int) -> ToolEnvelope:
+def _db_missing_envelope(target: str, knesset_num: int) -> ToolEnvelope:
     return ToolEnvelope(
         summary="",
         full="",
-        metadata={"kind": "error", "source": "bm25", "count": 0, "target": target},
+        metadata={"kind": "error", "source": "knesset_db", "count": 0, "target": target},
         provenance={"target": target, "knesset_num": knesset_num,
-                    "expected_path": str(_bm25_path(target, knesset_num))},
-        error="bm25_db_missing",
+                    "expected_path": str(store.db_path())},
+        error="knesset_db_missing",
+    )
+
+
+def _db_error_envelope(exc: Exception, source: str, **prov) -> ToolEnvelope:
+    print(f"[tools] {source} query failed: {exc}")
+    return ToolEnvelope(
+        summary="",
+        full="",
+        metadata={"kind": "error", "source": source, "count": 0, "exception": str(exc)},
+        provenance=prov,
+        error="db_search_failed",
     )
 
 
 # ---------------------------------------------------------------------------
-# search_topics — bullets-only L1 hybrid search
+# search_topics — FTS over summary topics
 # ---------------------------------------------------------------------------
 
 
 def handle_search_topics(args: dict) -> ToolEnvelope:
-    """Hybrid BM25 (FTS5) + dense (Chroma) search over summary bullets.
-
-    Returns the top-``top_k`` bullets after RRF fusion. Each result carries
-    enough metadata for the executor to know which meeting and section the
-    bullet came from. Embedding-side failures degrade to BM25-only with a
-    ``embedding_unavailable`` warning instead of erroring out — keeps the
-    tool useful when llama-server / GPU isn't up.
-    """
+    """FTS5 (BM25-ranked) search over the summary topics table."""
     query = (args.get("query") or "").strip()
     knesset_num = int(args.get("knesset_num") or 25)
     top_k = int(args.get("top_k") or config.SEARCH_TOPICS_DEFAULT_TOP_K)
     top_k = max(1, min(top_k, config.SEARCH_TOPICS_MAX_TOP_K))
+    committees = [str(c).replace("_", " ") for c in (args.get("committees") or [])]
+    date_from = (args.get("date_from") or "").strip() or None
+    date_to = (args.get("date_to") or "").strip() or None
 
     if not query:
-        return _validation_error("missing_query", kind="search", source="hybrid",
+        return _validation_error("missing_query", kind="search", source="topics",
                                  query=query, knesset_num=knesset_num)
 
-    bm25 = _open_bm25("bullets", knesset_num)
-    if bm25 is None:
-        return _bm25_missing_envelope("bullets", knesset_num)
-
-    warnings: list[str] = []
-    bm25_ranking: list[str] = []
+    conn = _open_db()
+    if conn is None:
+        return _db_missing_envelope("topics", knesset_num)
     try:
-        rows = bm25.search(
-            _quote_match(lemmatize(query)) or query,
-            top_k=config.HYBRID_FIRST_STAGE_TOP_K,
-        )
-        bm25_rows: dict[str, dict] = {}
-        for r in rows:
-            rid = str(r.get("id") or "")
-            if rid:
-                bm25_rows[rid] = r
-                bm25_ranking.append(rid)
+        rows = store.search_topics(
+            conn, _expand_match(lemmatize(query), "topics_fts") or query, knesset_num,
+            top_k=top_k, committees=committees or None, date_from=date_from, date_to=date_to)
     except Exception as exc:
-        bm25.close()
-        return ToolEnvelope(
-            summary="",
-            full="",
-            metadata={"kind": "error", "source": "bm25", "count": 0,
-                      "exception": str(exc)},
-            provenance={"query": query, "knesset_num": knesset_num},
-            error="bm25_search_failed",
-        )
+        return _db_error_envelope(exc, "topics", query=query, knesset_num=knesset_num)
+    finally:
+        conn.close()
 
-    # Optional dense rerank via Chroma. We *try* it but don't make the tool
-    # depend on it — a fresh checkout without an indexed Chroma collection
-    # should still get BM25-only results.
-    embed_ranking: list[str] = []
-    try:
-        embed_ranking = _embed_bullet_ranking(
-            query=query,
-            top_k=config.HYBRID_FIRST_STAGE_TOP_K,
-        )
-    except Exception:
-        warnings.append("embedding_unavailable")
-
-    # RRF fuse — only when both sides produced something.
-    if embed_ranking:
-        from retrieval.hybrid import rrf_fuse  # local import: optional dep
-        fused = rrf_fuse([bm25_ranking, embed_ranking], top_k=top_k)
-    else:
-        fused = bm25_ranking[:top_k]
-
-    # Fetch any Chroma-only IDs (not in BM25 search results) before closing.
-    missing = [rid for rid in fused if rid not in bm25_rows]
-    if missing:
-        bm25_rows.update(bm25.fetch_by_ids(missing))
-
-    bm25.close()
-
-    if not fused:
-        return ToolEnvelope(
-            summary="",
-            full=json.dumps([], ensure_ascii=False),
-            metadata={"kind": "search", "source": "hybrid", "count": 0,
-                      "total_match": len(bm25_ranking),
-                      **({"warnings": warnings} if warnings else {})},
-            provenance={"query": query, "knesset_num": knesset_num, "top_k": top_k},
-        )
-
-    # Build full result list from BM25 rows (richer metadata than embed
-    # rankings, which only have ids).
-    payload: list[dict] = []
-    for rid in fused:
-        row = bm25_rows.get(rid)
-        extra = row.get("extra") if (row and isinstance(row.get("extra"), dict)) else {}
-        payload.append({
-            "bullet_id":  rid,
-            "label":      (row or {}).get("label") or "",
-            "text":       (row or {}).get("body") or "",
-            "meeting_id": extra.get("meeting_id"),
-            "committee":  extra.get("committee"),
-            "bullet_idx": extra.get("bullet_idx"),
-        })
-
-    metadata = {
-        "kind":        "search",
-        "source":      "hybrid",
-        "count":       len(payload),
-        "total_match": len(bm25_ranking),
-    }
-    if warnings:
-        metadata["warnings"] = warnings
-
+    payload = [{
+        "topic_id":   r["id"],
+        "text":       r["text"],
+        "meeting_id": r["meeting_id"],
+        "committee":  r["committee"],
+        "date":       r["date"],
+        "topic_idx":  r["idx"],
+    } for r in rows]
     return ToolEnvelope(
         summary="",
         full=json.dumps(payload, ensure_ascii=False),
-        metadata=metadata,
+        metadata={"kind": "search", "source": "topics", "count": len(payload)},
         provenance={"query": query, "knesset_num": knesset_num, "top_k": top_k},
     )
 
 
-def _embed_bullet_ranking(*, query: str, top_k: int) -> list[str]:
-    """Return Chroma's id ranking for the bullets collection.
-
-    Imports are local: this is the only path that pulls in chromadb /
-    transformers, and we don't want to pay that import cost when the
-    embedding side is unavailable.
-    """
-    import chromadb
-    from contextlib import nullcontext
-
-    client = chromadb.PersistentClient(path=str(config.CHROMA_DIR))
-    coll = client.get_collection(config.BULLETS_COLLECTION)
-    from indexing.embedder import ProtocolEmbedder, get_global_embedder
-    embedder, embed_lock = get_global_embedder()
-    if embedder is None:
-        embedder = ProtocolEmbedder()
-        embed_lock = None
-    with embed_lock if embed_lock is not None else nullcontext():
-        q_emb = embedder.embed([query], ProtocolEmbedder.INSTR_QUERY)
-    res = coll.query(
-        query_embeddings=q_emb.tolist(),
-        n_results=top_k,
-        include=["metadatas"],
-    )
-    return [str(i) for i in (res.get("ids") or [[]])[0]]
-
-
 # ---------------------------------------------------------------------------
-# search_opinions — MK-scoped hybrid search over opinion bullets
+# search_opinions — MK-scoped FTS over opinions (verified quotes only)
 # ---------------------------------------------------------------------------
 
 
 def handle_search_opinions(args: dict) -> ToolEnvelope:
-    """Hybrid BM25 + dense search over summary bullets of a single MK.
+    """FTS5 search over opinion + quote text, hard-filtered to one MK (or party).
 
-    Relies on the ``mk_id`` metadata written into both stores by
-    ``scripts/backfill_bullet_mk_ids.py`` (bullet speaker-prefix → mk_id
-    resolution, see indexing/bullet_mk_link.py). The mk_id filter is a hard
-    guarantee: bullets without a matching ``mk_id`` are never returned, even
-    if the dense side surfaces them. Embedding-side failures degrade to
-    BM25-only with an ``embedding_unavailable`` warning, mirroring
-    handle_search_topics.
+    Only opinions whose quote was verified verbatim against the transcript are
+    returned. An empty query lists the MK's opinions newest first.
     """
     query = (args.get("query") or "").strip()
     mk_id = str(args.get("mk_id") or "").strip()
+    party = (args.get("party") or "").strip()
     knesset_num = int(args.get("knesset_num") or 25)
     top_k = int(args.get("top_k") or config.SEARCH_OPINIONS_DEFAULT_TOP_K)
     top_k = max(1, min(top_k, config.SEARCH_OPINIONS_MAX_TOP_K))
 
-    if not query:
-        return _validation_error("missing_query", kind="search", source="hybrid",
-                                 query=query, mk_id=mk_id, knesset_num=knesset_num)
-    if not mk_id:
-        return _validation_error("missing_mk_id", kind="search", source="hybrid",
+    if not mk_id and not party:
+        return _validation_error("missing_mk_id", kind="search", source="opinions",
                                  query=query, mk_id=mk_id, knesset_num=knesset_num)
 
-    bm25 = _open_bm25("bullets", knesset_num)
-    if bm25 is None:
-        return _bm25_missing_envelope("bullets", knesset_num)
-
-    mk_where = f"extra LIKE '%\"mk_id\": \"{_sql_safe(mk_id)}\"%'"
-
-    warnings: list[str] = []
-    bm25_ranking: list[str] = []
-    bm25_rows: dict[str, dict] = {}
+    conn = _open_db()
+    if conn is None:
+        return _db_missing_envelope("opinions", knesset_num)
     try:
-        rows = bm25.search(
-            _quote_match(lemmatize(query)) or query,
-            top_k=config.HYBRID_FIRST_STAGE_TOP_K,
-            where=mk_where,
-        )
-        for r in rows:
-            rid = str(r.get("id") or "")
-            if rid:
-                bm25_rows[rid] = r
-                bm25_ranking.append(rid)
+        rows = store.search_opinions(
+            conn, _expand_match(lemmatize(query), "opinions_fts") if query else None, knesset_num,
+            top_k=top_k, mk_id=mk_id or None, party=party or None, verified_only=True)
     except Exception as exc:
-        bm25.close()
-        return ToolEnvelope(
-            summary="",
-            full="",
-            metadata={"kind": "error", "source": "bm25", "count": 0,
-                      "exception": str(exc)},
-            provenance={"query": query, "mk_id": mk_id, "knesset_num": knesset_num},
-            error="bm25_search_failed",
-        )
+        return _db_error_envelope(exc, "opinions", query=query, mk_id=mk_id, knesset_num=knesset_num)
+    finally:
+        conn.close()
 
-    embed_ranking: list[str] = []
-    try:
-        embed_ranking = _embed_opinion_ranking(
-            query=query,
-            mk_id=mk_id,
-            top_k=config.HYBRID_FIRST_STAGE_TOP_K,
-        )
-    except Exception as exc:
-        print(f"[search_opinions] embedding side unavailable: {exc}")
-        warnings.append("embedding_unavailable")
-
-    if embed_ranking:
-        from retrieval.hybrid import rrf_fuse  # local import: optional dep
-        fused = rrf_fuse([bm25_ranking, embed_ranking], top_k=top_k)
-    else:
-        fused = bm25_ranking[:top_k]
-
-    missing = [rid for rid in fused if rid not in bm25_rows]
-    if missing:
-        bm25_rows.update(bm25.fetch_by_ids(missing))
-    bm25.close()
-
-    payload: list[dict] = []
-    for rid in fused:
-        row = bm25_rows.get(rid)
-        extra = row.get("extra") if (row and isinstance(row.get("extra"), dict)) else {}
-        # Hard mk filter: dense ids come from Chroma metadata, which could
-        # drift from the BM25 extras — never trust them blindly.
-        if str(extra.get("mk_id") or "") != mk_id:
-            continue
-        payload.append({
-            "bullet_id":  rid,
-            "text":       (row or {}).get("body") or "",
-            "speaker":    extra.get("speaker"),
-            "mk_id":      mk_id,
-            "meeting_id": extra.get("meeting_id"),
-            "committee":  extra.get("committee"),
-            "date":       extra.get("date"),
-        })
-
-    metadata = {
-        "kind":        "search",
-        "source":      "hybrid",
-        "count":       len(payload),
-        "total_match": len(bm25_ranking),
-    }
-    if warnings:
-        metadata["warnings"] = warnings
-
+    payload = [{
+        "opinion_id":    r["id"],
+        "speaker":       r["speaker_name"],
+        "speaker_label": r["speaker"],
+        "mk_id":         r["mk_id"],
+        "party":         r["party"],
+        "opinion":       r["opinion"],
+        "quote":         r["quote"],
+        "meeting_id":    r["meeting_id"],
+        "committee":     r["committee"],
+        "date":          r["date"],
+        "speech_idx":    r["speech_idx"],
+        "quote_offset":  r["quote_offset"],
+    } for r in rows]
     return ToolEnvelope(
         summary="",
         full=json.dumps(payload, ensure_ascii=False),
-        metadata=metadata,
-        provenance={"query": query, "mk_id": mk_id,
+        metadata={"kind": "search", "source": "opinions", "count": len(payload)},
+        provenance={"query": query, "mk_id": mk_id, "party": party,
                     "knesset_num": knesset_num, "top_k": top_k},
     )
-
-
-def _embed_opinion_ranking(*, query: str, mk_id: str, top_k: int) -> list[str]:
-    """Chroma id ranking over the bullets collection, filtered to one MK.
-
-    Local imports for the same reason as _embed_bullet_ranking: don't pay the
-    chromadb/transformers import cost when the dense side is unavailable.
-    """
-    import chromadb
-    from contextlib import nullcontext
-
-    client = chromadb.PersistentClient(path=str(config.CHROMA_DIR))
-    coll = client.get_collection(config.BULLETS_COLLECTION)
-    from indexing.embedder import ProtocolEmbedder, get_global_embedder
-    embedder, embed_lock = get_global_embedder()
-    if embedder is None:
-        embedder = ProtocolEmbedder()
-        embed_lock = None
-    with embed_lock if embed_lock is not None else nullcontext():
-        q_emb = embedder.embed([query], ProtocolEmbedder.INSTR_QUERY)
-    res = coll.query(
-        query_embeddings=q_emb.tolist(),
-        n_results=top_k,
-        where={"mk_id": mk_id},
-        include=["metadatas"],
-    )
-    return [str(i) for i in (res.get("ids") or [[]])[0]]
 
 
 # ---------------------------------------------------------------------------
@@ -513,109 +326,41 @@ def _embed_opinion_ranking(*, query: str, mk_id: str, top_k: int) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def _build_speeches_where(
-    *,
-    committee_ids: list | None = None,
-    meeting_ids: list | None = None,
-    speaker: str | None = None,
-) -> str | None:
-    """Build the FTS5 WHERE fragment for the ``speeches`` index.
-
-    Each filter *group* (committee_ids, meeting_ids) is OR-ed internally —
-    "any of these committees" / "any of these meetings" — and the groups
-    are AND-ed together with the speaker filter. (An earlier version AND-ed
-    every individual id together, which meant passing more than one
-    committee_id or meeting_id could never match — a single row's ``extra``
-    only ever carries one committee/meeting. Fixed here since the new
-    reading-tab candidate-set scoping needs to pass many meeting_ids at
-    once.)
-    """
-    where_parts: list[str] = []
-
-    if committee_ids:
-        group = " OR ".join(
-            f"extra LIKE '%\"committee\": \"{_sql_safe(str(cid))}\"%'" for cid in committee_ids
-        )
-        where_parts.append(f"({group})")
-    if meeting_ids:
-        group = " OR ".join(
-            f"extra LIKE '%\"meeting_id\": \"{_sql_safe(str(mid))}\"%'" for mid in meeting_ids
-        )
-        where_parts.append(f"({group})")
-    if speaker:
-        # Coarse pre-filter: keep any speech whose speaker value contains at
-        # least one query name-token (OR-ed). This is a *superset* of the real
-        # token-subset match — a title ("שרת ... אורית סטרוק") or a middle name
-        # ("אורית מלכה סטרוק") no longer breaks a contiguous-substring LIKE.
-        # search_speeches_bm25 refines these rows down with name_query_matches.
-        toks = name_tokens(speaker)
-        if toks:
-            group = " OR ".join(
-                f"extra LIKE '%\"speaker\": \"%{_sql_safe(t)}%\"%'" for t in toks
-            )
-            where_parts.append(f"({group})")
-
-    return " AND ".join(where_parts) if where_parts else None
-
-
-def search_speeches_bm25(
-    bm25: BM25Index,
+def search_speeches(
+    conn,
     query: str,
     *,
-    committee_ids: list | None = None,
+    knesset_num: int = 25,
+    committees: list | None = None,
     meeting_ids: list | None = None,
     speaker: str | None = None,
     top_k: int = config.SEARCH_PROTOCOLS_DEFAULT_TOP_K,
     sort: str = "relevance",
 ) -> list[dict]:
-    """Run a BM25 FTS5 search against an already-open ``speeches`` index.
+    """FTS search over speeches, shared by the agent tool and web.app.browse_rag.
 
-    Extracted out of handle_search_protocols_keyword so both the agent tool
-    handler (which wraps the result in a ToolEnvelope) and
-    web.app.browse_rag (reading-tab keyword search, not an agent context —
-    no envelope) share identical WHERE-building + search-call logic instead
-    of diverging.
-
-    Returns raw BM25Index.search() rows: dicts with keys id, label,
-    label_lemmatized, body, body_lemmatized, extra, score. ``score`` is
-    sqlite's bm25() value — lower / more negative = more relevant (already
-    ORDER BY score ASC inside BM25Index.search()).
-
-    Caller owns opening/closing the BM25Index (mirrors _open_bm25 /
-    _bm25_missing_envelope at the call site) and any exception handling.
+    The SQL speaker filter is a coarse OR over name tokens; rows are then
+    refined with name_query_matches so a speech sharing one token with the
+    requested name (a different MK called "אורית") is dropped. Rows carry
+    id, meeting_id, speech_idx, speaker, mk_id, text, committee, date, score
+    (sqlite bm25: lower = more relevant, already sorted).
     """
-    where = _build_speeches_where(
-        committee_ids=committee_ids, meeting_ids=meeting_ids, speaker=speaker,
-    )
     normalized = lemmatize(query)
-    match_expr = _expand_match(normalized, bm25.path) or _quote_match(normalized) or query
-    rows = bm25.search(
-        match_expr,
+    match_expr = _expand_match(normalized, "speeches_fts") or _quote_match(normalized) or query
+    rows = store.search_speeches(
+        conn, match_expr, knesset_num,
         top_k=max(top_k, config.KEYWORD_RERANK_TOP_K) if sort == "relevance" else top_k,
-        where=where,
+        meeting_ids=[str(m) for m in meeting_ids] if meeting_ids else None,
+        committees=[str(c).replace("_", " ") for c in committees] if committees else None,
+        speaker_tokens=name_tokens(speaker) if speaker else None,
     )
-    # Precise speaker refine: the SQL WHERE only coarsely OR-filters on any
-    # single name-token; enforce true token-subset name matching here so a row
-    # sharing just one token (e.g. a different MK named "אורית") is dropped.
     if speaker:
-        rows = [
-            r for r in rows
-            if name_query_matches(
-                speaker, (r.get("extra") or {}).get("speaker", "")
-                if isinstance(r.get("extra"), dict) else "",
-            )
-        ]
+        rows = [r for r in rows if name_query_matches(speaker, r.get("speaker") or "")]
     return rows
 
 
 def handle_search_protocols_keyword(args: dict) -> ToolEnvelope:
-    """BM25 over indexed speeches with optional axis filters.
-
-    Filters (committee, meeting, speaker, date range) are applied via the
-    FTS5 WHERE clause against the row's ``extra`` JSON column; this is
-    cheap because FTS5 evaluates the MATCH first and only filters the
-    candidate set.
-    """
+    """FTS over speeches with optional committee / meeting / speaker / date filters."""
     query = (args.get("query") or "").strip()
     knesset_num = int(args.get("knesset_num") or 25)
     top_k = int(args.get("top_k") or config.SEARCH_PROTOCOLS_DEFAULT_TOP_K)
@@ -623,108 +368,70 @@ def handle_search_protocols_keyword(args: dict) -> ToolEnvelope:
     sort = (args.get("sort") or "relevance").lower()
 
     if not query:
-        return _validation_error("missing_query", kind="search", source="bm25",
+        return _validation_error("missing_query", kind="search", source="speeches",
                                  query=query, knesset_num=knesset_num)
-
-    bm25 = _open_bm25("speeches", knesset_num)
-    if bm25 is None:
-        return _bm25_missing_envelope("speeches", knesset_num)
 
     committee_ids = args.get("committee_ids") or []
     meeting_ids = args.get("meeting_ids") or []
     speaker = (args.get("speaker") or "").strip()
     date_from = (args.get("date_from") or "").strip()
     date_to = (args.get("date_to") or "").strip()
+    filters = {"committee_ids": list(committee_ids), "meeting_ids": list(meeting_ids),
+               "speaker": speaker or None, "date_from": date_from or None, "date_to": date_to or None}
 
+    conn = _open_db()
+    if conn is None:
+        return _db_missing_envelope("speeches", knesset_num)
     try:
-        rows = search_speeches_bm25(
-            bm25, query,
-            committee_ids=committee_ids,
-            meeting_ids=meeting_ids,
-            speaker=speaker,
-            top_k=top_k,
-            sort=sort,
+        rows = search_speeches(
+            conn, query, knesset_num=knesset_num,
+            committees=committee_ids, meeting_ids=meeting_ids, speaker=speaker,
+            top_k=top_k, sort=sort,
         )
     except Exception as exc:
-        bm25.close()
-        return ToolEnvelope(
-            summary="",
-            full="",
-            metadata={"kind": "error", "source": "bm25", "count": 0,
-                      "exception": str(exc)},
-            provenance={"query": query, "knesset_num": knesset_num,
-                        "filters": {"committee_ids": committee_ids,
-                                    "meeting_ids": meeting_ids,
-                                    "speaker": speaker,
-                                    "date_from": date_from,
-                                    "date_to": date_to}},
-            error="bm25_search_failed",
-        )
+        return _db_error_envelope(exc, "speeches", query=query, knesset_num=knesset_num, filters=filters)
     finally:
-        bm25.close()
+        conn.close()
 
-    # Date filters: applied post-fetch since the FTS5 row's ``extra`` carries
-    # ``meeting_id`` (a numeric session id), not a literal date. The caller
-    # who needs date scoping has typically narrowed to a committee already.
     if date_from or date_to:
-        # We don't have date metadata on the speech row itself; this is a
-        # known v1 limitation. Surface it as a warning instead of silently
-        # dropping the filter.
-        rows = rows  # noqa: PLW0127 — intentional no-op; warning below
-        warnings_extra = ["date_filter_unsupported_v1"]
-    else:
-        warnings_extra = []
+        rows = [r for r in rows if (not date_from or (r.get("date") or "") >= date_from)
+                and (not date_to or (r.get("date") or "") <= date_to)]
 
-    payload: list[dict] = []
-    for r in rows[:top_k]:
-        extra = r.get("extra") if isinstance(r.get("extra"), dict) else {}
-        payload.append({
-            "speech_id":  str(r.get("id") or ""),
-            "label":      r.get("label") or "",
-            "text":       r.get("body") or "",
-            "meeting_id": extra.get("meeting_id"),
-            "committee":  extra.get("committee"),
-            "speaker":    extra.get("speaker"),
-            "speech_idx": extra.get("speech_idx"),
-        })
-
-    metadata = {
-        "kind":        "search",
-        "source":      "bm25",
-        "count":       len(payload),
-        "total_match": len(rows),
-    }
-    if warnings_extra:
-        metadata["warnings"] = warnings_extra
+    payload = [{
+        "speech_id":  f"{r['meeting_id']}_{r['speech_idx']}",
+        "label":      r.get("speaker") or "",
+        "text":       r["text"],
+        "meeting_id": r["meeting_id"],
+        "committee":  r.get("committee"),
+        "date":       r.get("date"),
+        "speaker":    r.get("speaker"),
+        "mk_id":      r.get("mk_id"),
+        "speech_idx": r["speech_idx"],
+    } for r in rows[:top_k]]
 
     return ToolEnvelope(
         summary="",
         full=json.dumps(payload, ensure_ascii=False),
-        metadata=metadata,
-        provenance={
-            "query":       query,
-            "knesset_num": knesset_num,
-            "top_k":       top_k,
-            "sort":        sort,
-            "filters": {
-                "committee_ids": list(committee_ids),
-                "meeting_ids":   list(meeting_ids),
-                "speaker":       speaker or None,
-                "date_from":     date_from or None,
-                "date_to":       date_to or None,
-            },
-        },
+        metadata={"kind": "search", "source": "speeches", "count": len(payload), "total_match": len(rows)},
+        provenance={"query": query, "knesset_num": knesset_num, "top_k": top_k, "sort": sort,
+                    "filters": filters},
     )
-
-
-def _sql_safe(s: str) -> str:
-    """Strip characters that would break the LIKE-clause string."""
-    return s.replace("'", "").replace("%", "").replace("_", "")
 
 
 # ---------------------------------------------------------------------------
 # Find-* tools — BM25 → candidate records
 # ---------------------------------------------------------------------------
+
+
+def _name_index(target: str, knesset_num: int) -> FuzzyNameIndex | None:
+    """In-memory fuzzy index over one of the knesset.db name tables, or None when the db is missing."""
+    conn = _open_db()
+    if conn is None:
+        return None
+    try:
+        return FuzzyNameIndex(store.name_entries(conn, target, knesset_num))
+    finally:
+        conn.close()
 
 
 def _build_mk_full_profile(record: dict, knesset_num: int) -> dict:
@@ -749,17 +456,12 @@ def handle_find_mk(args: dict) -> ToolEnvelope:
     top_k       = max(1, int(args.get("top_k") or 5))
 
     if not query:
-        return _validation_error("missing_query", kind="search", source="bm25_mks",
+        return _validation_error("missing_query", kind="search", source="mks",
                                  knesset_num=knesset_num)
 
-    bm25 = _open_bm25("mks", knesset_num)
-    if bm25 is None:
-        return _bm25_missing_envelope("mks", knesset_num)
-
-    try:
-        fuzzy = FuzzyNameIndex.from_bm25(bm25)
-    finally:
-        bm25.close()
+    fuzzy = _name_index("mks", knesset_num)
+    if fuzzy is None:
+        return _db_missing_envelope("mks", knesset_num)
 
     candidates = name_search(query, fuzzy_index=fuzzy, knesset_num=knesset_num, top_k=top_k)
 
@@ -779,7 +481,7 @@ def handle_find_mk(args: dict) -> ToolEnvelope:
     if payload and not payload[0].get("profile"):
         warnings.append("low_confidence_match")
 
-    metadata: dict = {"kind": "search", "source": "bm25_mks", "count": len(payload)}
+    metadata: dict = {"kind": "search", "source": "mks", "count": len(payload)}
     if warnings:
         metadata["warnings"] = warnings
 
@@ -796,7 +498,7 @@ def handle_find_committee(args: dict) -> ToolEnvelope:
         args,
         target="committees",
         kind="search",
-        source="bm25_committees",
+        source="committees",
         id_key="committee_id",
         label_key="name",
         fetch_record=fetch_committee_record,
@@ -809,7 +511,7 @@ def handle_find_bill(args: dict) -> ToolEnvelope:
         args,
         target="bills",
         kind="search",
-        source="bm25_bills",
+        source="bills",
         id_key="bill_id",
         label_key="bill_name",
         fetch_record=lambda eid: _fetch_bill_record(eid),
@@ -822,7 +524,7 @@ def handle_find_vote(args: dict) -> ToolEnvelope:
         args,
         target="votes",
         kind="search",
-        source="bm25_votes",
+        source="votes",
         id_key="vote_id",
         label_key="title",
         fetch_record=lambda eid: _fetch_vote_record(eid),
@@ -881,14 +583,9 @@ def _generic_find(
             query=query, knesset_num=knesset_num,
         )
 
-    bm25 = _open_bm25(target, knesset_num)
-    if bm25 is None:
-        return _bm25_missing_envelope(target, knesset_num)
-
-    try:
-        fuzzy = FuzzyNameIndex.from_bm25(bm25)
-    finally:
-        bm25.close()
+    fuzzy = _name_index(target, knesset_num)
+    if fuzzy is None:
+        return _db_missing_envelope(target, knesset_num)
 
     candidates = name_search(
         query,
@@ -1182,108 +879,53 @@ def handle_query_voting_records(args: dict) -> ToolEnvelope:
 
 
 def handle_get_meeting_summary(args: dict) -> ToolEnvelope:
-    """Return the raw .txt summary of a meeting; optional 1-indexed section."""
-    meeting_id = (args.get("meeting_id") or "").strip()
-    section_num = args.get("section_num")
-    if section_num is not None:
-        try:
-            section_num = int(section_num)
-        except (TypeError, ValueError):
-            return _validation_error(
-                "invalid_section_num", kind="fetch", source="summaries",
-                meeting_id=meeting_id, section_num=section_num,
-            )
+    """Render a meeting's topics, opinions (grouped by speaker) and attendance from knesset.db.
 
+    ``section`` limits the output to topics | opinions | attendance.
+    """
+    from summarization.summary_io import render_summary_text
+
+    meeting_id = str(args.get("meeting_id") or "").strip()
+    section = (args.get("section") or "").strip().lower() or None
     if not meeting_id:
-        return _validation_error(
-            "missing_meeting_id", kind="fetch", source="summaries",
-        )
+        return _validation_error("missing_meeting_id", kind="fetch", source="summaries")
+    if section not in (None, "topics", "opinions", "attendance"):
+        return _validation_error("invalid_section", kind="fetch", source="summaries",
+                                 meeting_id=meeting_id, section=section)
 
-    summary_path = _find_summary_path(meeting_id)
-    if summary_path is None:
-        return ToolEnvelope(
-            summary="",
-            full="",
-            metadata={"kind": "fetch", "source": "summaries", "count": 0},
-            provenance={"meeting_id": meeting_id},
-            error="summary_not_found",
-        )
-
+    conn = _open_db()
+    if conn is None:
+        return _db_missing_envelope("summaries", 0)
     try:
-        text = summary_path.read_text(encoding="utf-8")
-    except Exception as exc:
-        return ToolEnvelope(
-            summary="",
-            full="",
-            metadata={"kind": "error", "source": "summaries", "count": 0,
-                      "exception": str(exc)},
-            provenance={"meeting_id": meeting_id, "path": str(summary_path)},
-            error="summary_read_failed",
-        )
-
-    payload: Any = text
-    if section_num is not None:
-        sections = _split_summary_sections(text)
-        if 1 <= section_num <= len(sections):
-            payload = sections[section_num - 1]
-        else:
+        meeting = store.get_meeting(conn, meeting_id)
+        if meeting is None or meeting.get("is_protocol") is None:
             return ToolEnvelope(
                 summary="",
                 full="",
-                metadata={"kind": "fetch", "source": "summaries", "count": 0,
-                          "total_sections": len(sections)},
-                provenance={"meeting_id": meeting_id, "section_num": section_num},
-                error="section_out_of_range",
+                metadata={"kind": "fetch", "source": "summaries", "count": 0},
+                provenance={"meeting_id": meeting_id},
+                error="summary_not_found",
             )
+        topics = [t["text"] for t in store.get_topics(conn, meeting_id)]
+        opinions = store.get_opinions(conn, meeting_id)
+        attendance = store.get_attendance(conn, meeting_id)
+    except Exception as exc:
+        return _db_error_envelope(exc, "summaries", meeting_id=meeting_id)
+    finally:
+        conn.close()
 
+    text = render_summary_text(topics, opinions, attendance, section=section)
+    if not meeting["is_protocol"]:
+        text = f"{config.NOT_PROTOCOL}\n\n{text}"
     return ToolEnvelope(
         summary="",
-        full=payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False),
-        metadata={"kind": "fetch", "source": "summaries", "count": 1},
-        provenance={
-            "meeting_id":  meeting_id,
-            "path":        str(summary_path),
-            "section_num": section_num,
-            "committee":   summary_path.parent.name,
-        },
+        full=text,
+        metadata={"kind": "fetch", "source": "summaries", "count": 1,
+                  "topics": len(topics), "opinions": len(opinions), "attendance": len(attendance),
+                  "is_protocol": bool(meeting["is_protocol"])},
+        provenance={"meeting_id": meeting_id, "section": section,
+                    "committee": meeting.get("committee"), "date": meeting.get("date")},
     )
-
-
-def _find_summary_path(meeting_id: str) -> Path | None:
-    """Locate the .txt summary file matching ``meeting_id`` across all
-    Knessets / committees. Filenames look like ``DD_MM_YYYY_<session_id>.txt``;
-    we glob for the trailing session id.
-    """
-    target = str(meeting_id)
-    root = config.DATA_DIR / "summaries"
-    if not root.exists():
-        return None
-    matches = list(root.rglob(f"*_{target}.txt"))
-    if matches:
-        return matches[0]
-    # Fall back to exact-stem match in case the filename layout shifts.
-    matches = list(root.rglob(f"{target}.txt"))
-    return matches[0] if matches else None
-
-
-def _split_summary_sections(text: str) -> list[str]:
-    """Split a Hebrew summary by ``##``-level headings; each section keeps
-    its leading heading line. The pre-amble (before the first heading) is
-    NOT counted as a section, matching the design's 1-indexed semantics.
-    """
-    lines = text.splitlines()
-    sections: list[list[str]] = []
-    current: list[str] | None = None
-    for ln in lines:
-        if ln.startswith("## ") or ln.startswith("# "):
-            if current is not None:
-                sections.append(current)
-            current = [ln]
-        elif current is not None:
-            current.append(ln)
-    if current is not None:
-        sections.append(current)
-    return ["\n".join(s).rstrip() for s in sections]
 
 
 # ---------------------------------------------------------------------------
@@ -1374,7 +1016,7 @@ def _quote_match(text: str) -> str:
     return " ".join(f'"{_safe_match(tok)}"' for tok in tokens if _safe_match(tok))
 
 
-def _expand_match(text: str, db_path) -> str:
+def _expand_match(text: str, fts_table: str) -> str:
     """Build an FTS5 MATCH expression with query-side ktiv male/haser expansion.
 
     Each whitespace token becomes an OR-slot of its corpus spelling variants
@@ -1386,7 +1028,7 @@ def _expand_match(text: str, db_path) -> str:
     for tok in text.split():
         if not tok.strip():
             continue
-        safe = [s for s in (_safe_match(v) for v in expand_token(tok, db_path)) if s]
+        safe = [s for s in (_safe_match(v) for v in expand_token(tok, store.db_path(), fts_table)) if s]
         # de-dup while preserving order (safe_match can collapse two variants)
         seen: list[str] = []
         for s in safe:
@@ -1416,7 +1058,7 @@ __all__ = [
     # search
     "handle_search_topics",
     "handle_search_protocols_keyword",
-    "search_speeches_bm25",
+    "search_speeches",
     # find
     "handle_find_mk",
     "handle_find_committee",
