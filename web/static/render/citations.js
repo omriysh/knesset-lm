@@ -103,8 +103,9 @@ function renderQuoteObj(obj) {
     const header = parts.length
       ? `<div class="ev-citation-meeting-header">${parts.join(' &middot; ')}</div>`
       : '';
-    const text = obj.text || obj.topic_text || obj.label || obj.summary || obj.full_text || '';
-    const textHtml = text ? `<div class="ev-citation-quote">${esc(String(text))}</div>` : '';
+    const text = obj.text || obj.topic || obj.opinion || obj.topic_text || obj.label || obj.summary || obj.full_text || '';
+    let textHtml = text ? `<div class="ev-citation-quote">${esc(String(text))}</div>` : '';
+    if (obj.opinion && obj.quote) textHtml += `<div class="ev-citation-quote">„${esc(String(obj.quote))}”</div>`;
     if (Array.isArray(obj.chunks) && obj.chunks.length > 0) {
       const chunksHtml = obj.chunks.map(ch => renderQuoteObj(ch)).join('<hr class="ev-quote-sep">');
       return header + textHtml + chunksHtml;
@@ -292,7 +293,7 @@ function renderEvidenceCard(item, sid) {
   }
   const LABELS = ['label', 'committee_name', 'committee', 'name', 'title', 'mk_name'];
   const METAS  = ['meeting_id', 'session_id', 'date', 'knesset_num', 'score', 'relevance_score', 'bullet_idx'];
-  const TEXTS  = ['text', 'text_he', 'body', 'content', 'summary'];
+  const TEXTS  = ['text', 'text_he', 'topic', 'opinion', 'body', 'content', 'summary'];
   const LISTS  = ['bullets', 'speeches'];
   const SKIP   = new Set(['bullet_id', 'id', '_truncated', 'items_removed', 'source_url', 'result_ref']);
   const seen   = new Set(Object.keys(item).filter(k => SKIP.has(k)));
