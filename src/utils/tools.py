@@ -41,6 +41,8 @@ from utils.knesset_db import (
     _get_bill_details_by_id,
     _get_bill_text_by_id,
     _sanitize_odata_search,
+    get_mk_positions,
+    mk_full_name,
     _search_bills_by_term,
     get_party_members,
 )
@@ -382,19 +384,15 @@ def _name_index(target: str, knesset_num: int) -> FuzzyNameIndex | None:
 
 
 def _build_mk_full_profile(record: dict, knesset_num: int) -> dict:
-    """Return a clean MK profile dict filtered to the given Knesset."""
-    def _kn_filter(items: list, key: str = "knesset") -> list:
-        return [x for x in (items or []) if not isinstance(x, dict) or x.get(key) in (None, knesset_num)]
-
-    return {
-        "mk_id":               str(record.get("mk_individual_id") or record.get("PersonID") or ""),
-        "full_name":           record.get("full_name") or record.get("mk_individual_name") or "",
-        "is_current":          record.get("IsCurrent", False),
-        "factions":            _kn_filter(record.get("factions")),
-        "committee_positions": _kn_filter(record.get("committee_positions")),
-        "govministries":       _kn_filter(record.get("govministries")),
-        "faction_chairpersons": _kn_filter(record.get("faction_chairpersons")),
-    }
+    """MK identity from the oknesset record plus positions in the given Knesset from OData."""
+    mk_id = str(record.get("mk_individual_id") or record.get("PersonID") or "")
+    profile = {"mk_id": mk_id, "full_name": mk_full_name(record), "is_current": record.get("IsCurrent", False)}
+    try:
+        profile.update(get_mk_positions(record.get("PersonID") or mk_id, knesset_num))
+    except Exception as exc:
+        print(f"[tools] OData positions fetch failed for mk {mk_id}: {exc}")
+        profile["positions_error"] = str(exc)
+    return profile
 
 
 def handle_find_mk(args: dict) -> ToolEnvelope:
@@ -668,7 +666,7 @@ def handle_query_votes(args: dict) -> ToolEnvelope:
                 "mk_not_found", kind="fetch", source="odata",
                 mk_id=mk_id, knesset_num=knesset_num,
             )
-        name = record.get("full_name") or record.get("mk_individual_name") or ""
+        name = mk_full_name(record)
         if query:
             return adapt_get_votes_on_topic_by_mk(
                 topic=query, name=name, knesset_num=knesset_num, top_n=top_k,

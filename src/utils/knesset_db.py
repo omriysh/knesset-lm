@@ -138,6 +138,63 @@ def _fetch_person_positions(knesset_num: int) -> tuple[dict, ...]:
     return tuple(rows)
 
 
+@lru_cache(maxsize=1)
+def _position_names() -> dict[int, str]:
+    """KNS_Position Id -> Hebrew description (חבר ועדה, יו"ר סיעה, שר …)."""
+    response = _retry_get(f"{OFFICIAL_KNESSET_NEW_API}/KNS_Position", params={"$top": ODATA_PAGE_SIZE}, timeout=TIMEOUT)
+    response.raise_for_status()
+    return {row["Id"]: (row.get("Description") or "").strip() for row in response.json().get("value", [])}
+
+
+_FACTION_CHAIR_POSITION_ID = 48
+_PLAIN_MEMBERSHIP_POSITION_IDS = {43, 61}  # חבר / חברת הכנסת
+
+
+def get_mk_positions(person_id, knesset_num: int) -> dict:
+    """
+    An MK's positions in one Knesset from OData KNS_PersonToPosition, grouped as
+    factions / committee_positions / govministries / faction_chairpersons /
+    knesset_roles (PM, speaker, coalition/opposition head …). oknesset ships
+    these lists as ``[null]``, so OData is the only source.
+    """
+    try:
+        position_names = _position_names()
+    except Exception as exc:
+        print(f"[knesset_db] KNS_Position fetch failed ({exc}); position names will be missing", flush=True)
+        position_names = {}
+    rows = sorted((row for row in _fetch_person_positions(knesset_num) if str(row.get("PersonID")) == str(person_id)),
+                  key=lambda row: row.get("StartDate") or "")
+    grouped: dict[str, list[dict]] = {"factions": [], "committee_positions": [], "govministries": [],
+                                      "faction_chairpersons": [], "knesset_roles": []}
+    for row in rows:
+        position = (row.get("DutyDesc") or "").strip() or position_names.get(row.get("PositionID"), "")
+        period = {"start_date": row.get("StartDate"), "finish_date": row.get("FinishDate"),
+                  "is_current": row.get("IsCurrent"), "knesset": knesset_num}
+        if row.get("CommitteeName"):
+            grouped["committee_positions"].append({"committee_id": row.get("CommitteeID"),
+                                                   "committee_name": row["CommitteeName"].strip(),
+                                                   "position": position, **period})
+        elif row.get("GovMinistryName"):
+            grouped["govministries"].append({"govministry_name": row["GovMinistryName"].strip(),
+                                             "position_name": position, **period})
+        elif row.get("PositionID") == _FACTION_CHAIR_POSITION_ID:
+            grouped["faction_chairpersons"].append({"faction_name": (row.get("FactionName") or "").strip(), **period})
+        elif row.get("FactionName"):
+            grouped["factions"].append({"faction_id": row.get("FactionID"),
+                                        "faction_name": row["FactionName"].strip(), **period})
+        elif row.get("PositionID") not in _PLAIN_MEMBERSHIP_POSITION_IDS:
+            grouped["knesset_roles"].append({"position": position, **period})
+    grouped["factions"] = _dedupe_factions(grouped["factions"])
+    return {group: list({tuple(sorted(entry.items())): entry for entry in entries}.values())
+            for group, entries in grouped.items()}
+
+
+def mk_full_name(record: dict) -> str:
+    first = (record.get("mk_individual_first_name") or "").strip()
+    last  = (record.get("mk_individual_name") or "").strip()
+    return record.get("full_name") or f"{first} {last}".strip()
+
+
 def _dedupe_factions(factions: list[dict]) -> list[dict]:
     seen: dict[tuple, dict] = {}
     for faction in factions:

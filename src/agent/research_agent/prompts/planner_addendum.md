@@ -28,7 +28,8 @@ reject it and the pre-critic will flag it as PHANTOM_ENTITY.
 
 **`find_mk` already returns the full profile.** Each candidate in its
 result carries a `profile` field with: `factions`, `committee_positions`,
-`govministries`, and `is_current` — all filtered to the requested
+`govministries`, `knesset_roles` (PM, Knesset speaker, coalition/opposition
+head…) and `is_current` — all filtered to the requested
 `knesset_num`. Do NOT plan a separate profile or committee-list fetch
 step after `find_mk` — the data is already there.
 

@@ -142,3 +142,40 @@ def test_odata_failure_is_printed_and_does_not_raise(monkeypatch, capsys):
 ])
 def test_mk_name_variants(first, last, expected):
     assert knesset_db.mk_name_variants(first, last) == expected
+
+
+MK_POSITION_ROWS = (
+    {"PersonID": 30106, "PositionID": 54, "FactionID": 1100, "FactionName": "העבודה",
+     "StartDate": "2022-11-15T00:00:00+02:00", "FinishDate": None, "IsCurrent": True},
+    {"PersonID": 30106, "PositionID": 61, "StartDate": "2022-11-15T00:00:00+02:00",
+     "FinishDate": None, "IsCurrent": True},
+    {"PersonID": 30106, "PositionID": 41, "CommitteeID": 4214, "CommitteeName": "הוועדה המיוחדת לענייני הצעירים",
+     "DutyDesc": 'יו"ר הוועדה', "StartDate": "2023-01-31T00:00:00+02:00", "FinishDate": None, "IsCurrent": True},
+    {"PersonID": 30106, "PositionID": 48, "FactionName": "העבודה",
+     "StartDate": "2023-01-01T00:00:00+02:00", "FinishDate": None, "IsCurrent": True},
+    {"PersonID": 30106, "PositionID": 39, "GovMinistryName": "משרד החינוך",
+     "StartDate": "2024-01-01T00:00:00+02:00", "FinishDate": None, "IsCurrent": True},
+    {"PersonID": 30106, "PositionID": 39, "GovMinistryName": "משרד החינוך",
+     "StartDate": "2024-01-01T00:00:00+02:00", "FinishDate": None, "IsCurrent": True},
+    {"PersonID": 30106, "PositionID": 122, "StartDate": "2025-01-01T00:00:00+02:00",
+     "FinishDate": None, "IsCurrent": True},
+    {"PersonID": 999, "PositionID": 54, "FactionName": "הליכוד",
+     "StartDate": "2022-11-15T00:00:00+02:00", "FinishDate": None, "IsCurrent": True},
+)
+
+
+def test_get_mk_positions_groups_odata_rows(monkeypatch):
+    monkeypatch.setattr(knesset_db, "_fetch_person_positions", lambda knesset_num: MK_POSITION_ROWS)
+    monkeypatch.setattr(knesset_db, "_position_names", lambda: {39: "שר", 122: "יושב–ראש הכנסת"})
+
+    positions = knesset_db.get_mk_positions(30106, 25)
+
+    assert [f["faction_name"] for f in positions["factions"]] == ["העבודה"]
+    assert positions["committee_positions"][0]["position"] == 'יו"ר הוועדה'
+    assert positions["faction_chairpersons"][0]["faction_name"] == "העבודה"
+    assert [m["position_name"] for m in positions["govministries"]] == ["שר"]
+    assert [r["position"] for r in positions["knesset_roles"]] == ["יושב–ראש הכנסת"]
+
+
+def test_mk_full_name_joins_first_and_last():
+    assert knesset_db.mk_full_name(OKNESSET_MEMBER) == "אביחי אברהם בוארון"
