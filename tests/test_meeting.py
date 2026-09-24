@@ -223,3 +223,168 @@ class TestExtractAttendanceRealDataSmoke:
         assert "חגי לובר" in names
         assert "רום בר-אב" in names
         assert "מירי פרנקל-שור" in names
+
+
+# ── "speeches"-shape roster regression ────────────────────────────────────────
+# Verbatim transcription of the pseudo-speech header of meeting 2215520
+# (ועדת החוץ והביטחון, 26/02/2024). This file is NOT a speech-by-speech scrape:
+# it is a converted full_text document whose נכחו: header became pseudo-speeches
+# and whose roster lost every separator ("טלי גוטליבשלום דנינו"). Before the fix
+# extract_attendance() returned only the speakers, losing the 5 committee
+# members who attended without taking the floor.
+
+_STRUCTURED_MEETING = {
+    "meeting_id": 2215520,
+    "knesset_num": 25,
+    "speeches": [
+        {"speaker": "", "text_he": "פרוטוקול של ישיבת ועדה"},
+        {"speaker": "סדר היום", "text_he": "הצעת חוק שירות ביטחון"},
+        {"speaker": "נכחו", "text_he":
+            'חברי הוועדה: יולי יואל אדלשטיין – היו"ררם בן ברק – מ"מ היו"ר'
+            "טלי גוטליבשלום דנינומשה טור פזמאיר כהןשרון ניריבגני סובה"
+            "צבי ידידיה סוכותלימור סון הר מלךעידן רולאלעזר שטרןאושר שקלים"},
+        {"speaker": "חברי הכנסת", "text_he":
+            "יאיר לפידמשה סולומוןאלון שוסטרנאור שירי"},
+        {"speaker": "מוזמנים", "text_he":
+            "פזית תדהר - ממונה משפטית לרגולציה וחירום, משרד הביטחון"
+            'תא"ל שי טייב - רח"ט תומכ"א, משרד הביטחון'},
+        {"speaker": "משתתפים באמצעים מקוונים", "text_he": "דני רון - יועץ, משרד הביטחון"},
+        {"speaker": "ייעוץ משפטי", "text_he": "מירי פרנקל-שור"},
+        {"speaker": "מנהל הוועדה", "text_he": "אסף פרידמן"},
+        {"speaker": "רישום פרלמנטרי", "text_he":
+            "אלון דמלהרשימת הנוכחים על תואריהם מבוססת על המידע שהוזן במערכת "
+            "המוזמנים הממוחשבת. ייתכנו אי-דיוקים והשמטות."},
+        {"speaker": 'היו"ר יולי יואל אדלשטיין', "text_he": "צוהריים טובים לכולם."},
+        {"speaker": "(מוקרן סרטון, להלן התמלול)", "text_he": "טקסט הסרטון."},
+        {"speaker": "טלי גוטליב (הליכוד)", "text_he": "תודה."},
+        {"speaker": "קריאה", "text_he": "לא נכון."},
+    ],
+}
+
+# The 132-name mks.db lexicon reduced to the names this fixture needs.
+_LEXICON = (
+    "אלון שוסטר", "אלעזר שטרן", "אושר שקלים", "טלי גוטליב", "יאיר לפיד",
+    "יבגני סובה", "יולי יואל אדלשטיין", "לימור סון הר מלך", "מאיר כהן",
+    "משה טור פז", "משה סולומון", "נאור שירי", "צבי ידידיה סוכות",
+    "רם בן ברק", "שלום דנינו", "שרון ניר",
+)
+
+_ROSTER_MKS = [
+    "יולי יואל אדלשטיין", "רם בן ברק", "טלי גוטליב", "שלום דנינו",
+    "משה טור פז", "מאיר כהן", "שרון ניר", "יבגני סובה", "צבי ידידיה סוכות",
+    "לימור סון הר מלך", "אלעזר שטרן", "אושר שקלים",
+    "יאיר לפיד", "משה סולומון", "אלון שוסטר", "נאור שירי",
+]
+
+
+@pytest.fixture
+def patched_lexicon(monkeypatch):
+    from utils import meeting as meeting_module
+    monkeypatch.setattr(meeting_module, "_mk_name_lexicon", lambda knesset_num=25: _LEXICON)
+
+
+class TestExtractAttendanceStructuredRoster:
+    """Regression: the נכחו: roster of a 'speeches'-shape protocol must be
+    harvested, not just the speakers (audit: structured recall 0.804)."""
+
+    def test_all_roster_mks_recovered(self, patched_lexicon):
+        names = extract_attendance(_STRUCTURED_MEETING)
+        missing = [mk for mk in _ROSTER_MKS if mk not in names]
+        assert not missing, f"roster names lost: {missing}"
+
+    def test_silent_attendees_recovered(self, patched_lexicon):
+        """These five never speak in the real protocol — speaker-only
+        extraction dropped them entirely."""
+        names = extract_attendance(_STRUCTURED_MEETING)
+        for mk in ("שלום דנינו", "צבי ידידיה סוכות", "לימור סון הר מלך",
+                   "אושר שקלים", "משה סולומון"):
+            assert mk in names
+
+    def test_staff_roster_lines_kept_whole(self, patched_lexicon):
+        names = extract_attendance(_STRUCTURED_MEETING)
+        assert "מירי פרנקל-שור" in names   # hyphenated surname not split
+        assert "אסף פרידמן" in names
+        assert "אלון דמלה" in names        # end-of-block boilerplate stripped
+
+    def test_speakers_still_included(self, patched_lexicon):
+        names = extract_attendance(_STRUCTURED_MEETING)
+        assert 'היו"ר יולי יואל אדלשטיין' in names
+        assert "טלי גוטליב (הליכוד)" in names
+
+    def test_header_and_stage_direction_artifacts_dropped(self, patched_lexicon):
+        names = extract_attendance(_STRUCTURED_MEETING)
+        for artifact in ("נכחו", "סדר היום", "מוזמנים", "ייעוץ משפטי",
+                         "מנהל הוועדה", "רישום פרלמנטרי", "חברי הכנסת",
+                         "משתתפים באמצעים מקוונים", "קריאה",
+                         "(מוקרן סרטון, להלן התמלול)"):
+            assert artifact not in names
+
+    def test_guest_block_not_mined(self, patched_lexicon):
+        """Guest bodies are 'name - role, org' runs glued end-to-end with no
+        separator, so they're deliberately skipped rather than guessed at."""
+        names = extract_attendance(_STRUCTURED_MEETING)
+        assert not any(n.startswith("פזית תדהר -") for n in names)
+
+    def test_no_duplicates_and_roster_precedes_speakers(self, patched_lexicon):
+        names = extract_attendance(_STRUCTURED_MEETING)
+        assert len(names) == len(set(names))
+        assert names.index("שלום דנינו") < names.index('היו"ר יולי יואל אדלשטיין')
+
+    def test_degrades_to_speakers_without_lexicon(self, monkeypatch):
+        from utils import meeting as meeting_module
+        monkeypatch.setattr(meeting_module, "_mk_name_lexicon", lambda knesset_num=25: ())
+        names = extract_attendance(_STRUCTURED_MEETING)
+        assert 'היו"ר יולי יואל אדלשטיין' in names
+        assert "קריאה" not in names
+
+
+class TestSplitGluedRosterLine:
+    def test_role_suffixes_and_glue_skipped(self):
+        from utils.meeting import _split_glued_roster_line
+        line = ('יולי יואל אדלשטיין – היו"ררם בן ברק – מ"מ היו"ר'
+                "טלי גוטליבשלום דנינו")
+        assert _split_glued_roster_line(line, _LEXICON) == [
+            "יולי יואל אדלשטיין", "רם בן ברק", "טלי גוטליב", "שלום דנינו",
+        ]
+
+    def test_space_and_tab_separated_variants(self):
+        from utils.meeting import _split_glued_roster_line
+        assert _split_glued_roster_line("רם בן ברק\tאלון שוסטר נאור שירי", _LEXICON) == [
+            "רם בן ברק", "אלון שוסטר", "נאור שירי",
+        ]
+
+    def test_no_match_returns_empty(self):
+        from utils.meeting import _split_glued_roster_line
+        assert _split_glued_roster_line("מירי פרנקל-שור", _LEXICON) == []
+
+
+class TestIsPersonName:
+    def test_rejects_headers_and_stage_directions(self):
+        from utils.meeting import _is_person_name
+        for artifact in ("משתתפים באמצעים מקוונים", "משתתפים באמצעים דיגיטליים",
+                         "מוזמנים באמצעים מקוונים", "השתתפו",
+                         "השתתפו באמצעים מקוונים", "נוכחים", "חברי כנסת",
+                         "(מוקרן סרטון, להלן התמלול)",
+                         "(מושמעת הקלטה, להלן התמלול)",
+                         "(תרגום חופשי מהשפה האנגלית)",
+                         "(להלן הצגת הסרטון)",
+                         "(אומר דברים בשפה האנגלית, להלן תרגומם)"):
+            assert not _is_person_name(artifact), artifact
+
+    def test_accepts_real_names(self):
+        from utils.meeting import _is_person_name
+        for name in ("מיכל מרים וולדיגר (הציונות הדתית)", "רום בר-אב",
+                     'היו"ר עודד פורר', "Dr. Gautam nand Allahbadia"):
+            assert _is_person_name(name), name
+
+
+class TestSpacedHyphenRoleSuffix:
+    def test_role_after_spaced_hyphen_stripped(self):
+        from utils.meeting import _parse_attendance_section
+        section = 'נכחו:\nחברי הוועדה:\nאליהו רביבו- היו"ר\nאריאל צרפתי - מתמחה'
+        assert _parse_attendance_section(section) == ["אליהו רביבו", "אריאל צרפתי"]
+
+    def test_hyphenated_surname_survives(self):
+        from utils.meeting import _parse_attendance_section
+        section = "נכחו:\nייעוץ משפטי:\nמירי פרנקל-שור\nרום בר-אב"
+        assert _parse_attendance_section(section) == ["מירי פרנקל-שור", "רום בר-אב"]

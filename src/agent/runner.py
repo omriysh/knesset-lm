@@ -22,7 +22,6 @@ Within each pass:
 
 All dependencies are injected at construction time:
   backend  — LLMBackend implementation
-  retrieve — callable(question, chroma_client, embedder, **kwargs) → (str, dict)
   tools    — {function_name: callable(args) → str}
 """
 
@@ -41,7 +40,6 @@ from agent.parsers import get_loop_control, parse_output
 from agent.research_agent.agent import ResearchAgent
 from agent.subgraph.base import SubgraphEvent
 from agent.subgraph.hooks import HookRouter, parse_hook_config
-from utils.meeting import register_meeting_paths
 
 
 # ── Subgraph implementation registry ──────────────────────────────────────────
@@ -108,10 +106,9 @@ def build_tool_registry(
             "get_mk_speeches_in_committee", args
         )
 
-    # Knesset DB tools (dispatch by name)
+    # Knesset tools (dispatch by name)
     if knesset_dispatch:
-        for name in ("get_mk_profile", "get_committee_members",
-                     "get_bill_details", "get_bill_text"):
+        for name in ("find_mk", "find_committee", "query_protocols", "query_bills"):
             known[name] = lambda args, n=name: knesset_dispatch(n, args)
 
     # Validate every tool node in the machine
@@ -147,17 +144,11 @@ class MachineRunner:
         self,
         machine:   StateMachine,
         backend:   LLMBackend,
-        retriever,              # callable matching protocol_rag.query_retrieve signature
         tool_registry: dict[str, Callable],
-        top_k: int = config.TOP_K_MEETINGS,
-        top_n: int = config.TOP_N_DIALOGS,
     ) -> None:
         self.machine       = machine
         self.backend       = backend
-        self.retriever     = retriever
         self.tool_registry = tool_registry
-        self.top_k         = top_k
-        self.top_n         = top_n
 
     # ── Status helpers ────────────────────────────────────────────────────────
 
@@ -173,8 +164,6 @@ class MachineRunner:
     def run_stream(
         self,
         question:       str,
-        top_k:          Optional[int] = None,
-        top_n:          Optional[int] = None,
         resume:         Optional[dict] = None,   # checkpoint dict
         user_response:  Optional[dict] = None,   # {"output_var": str, "value": any}
     ) -> Generator[tuple[str, object], None, None]:
@@ -194,8 +183,6 @@ class MachineRunner:
         the BFS exactly from where it paused.  Existing behavior when resume=None is
         fully preserved.
         """
-        eff_k = top_k if top_k is not None else self.top_k
-        eff_n = top_n if top_n is not None else self.top_n
         max_loops = self.machine.max_loops_from_edges(default=3)
 
         if resume is not None:
@@ -207,7 +194,7 @@ class MachineRunner:
             start_loop = resume["loop_idx"]
 
             # Run the resumed BFS pass (it takes over from the paused node)
-            yield from self._run_bfs_pass(ctx, start_loop, eff_k, eff_n, resume=resume)
+            yield from self._run_bfs_pass(ctx, start_loop, resume=resume)
 
             # Check whether the resumed pass itself hit another user_input node
             # (in that case _run_bfs_pass already yielded user_input_required and we
@@ -228,7 +215,7 @@ class MachineRunner:
         if resume is None:
             # Normal path — run first pass then additional loop passes
             first_idx = 0
-            yield from self._run_bfs_pass(ctx, first_idx, eff_k, eff_n)
+            yield from self._run_bfs_pass(ctx, first_idx)
             if ctx.get("_user_input_pending"):
                 return
 
@@ -238,7 +225,7 @@ class MachineRunner:
                     ctx.set("question", continue_question)
                     ctx.reset_for_loop()
                     yield ("status", f"שואל שאלת המשך (סבב {loop_idx + 1}/{max_loops})…")
-                    yield from self._run_bfs_pass(ctx, loop_idx, eff_k, eff_n)
+                    yield from self._run_bfs_pass(ctx, loop_idx)
                     if ctx.get("_user_input_pending"):
                         return
                 else:
@@ -251,7 +238,7 @@ class MachineRunner:
                     ctx.set("question", continue_question)
                     ctx.reset_for_loop()
                     yield ("status", f"שואל שאלת המשך (סבב {loop_idx + 1}/{max_loops})…")
-                    yield from self._run_bfs_pass(ctx, loop_idx, eff_k, eff_n)
+                    yield from self._run_bfs_pass(ctx, loop_idx)
                     if ctx.get("_user_input_pending"):
                         return
                 else:
@@ -269,8 +256,6 @@ class MachineRunner:
         self,
         ctx:      Context,
         loop_idx: int,
-        top_k:    int,
-        top_n:    int,
         resume:   Optional[dict] = None,
     ) -> Generator:
         if resume:
@@ -316,7 +301,6 @@ class MachineRunner:
             if node_type == "user_input":
                 yield from self._run_user_input_node(
                     node, node_id, loop_idx, completed, fired_to, ctx,
-                    top_k=top_k, top_n=top_n,
                 )
                 return  # BFS ends; caller resumes via run_stream(resume=...)
 
@@ -350,71 +334,12 @@ class MachineRunner:
             stage         = data.get("stage", "")
             label         = node.get("label", "")
 
-            # ── RAG retrieval ──────────────────────────────────────────────
-            retrieval_info = None
-            if data.get("rag") == "3level" and not ctx.get("rag_context"):
-                yield ("status", "מאחזר קטעי פרוטוקולים…")
-                rag_q = (
-                    ctx.get("question_for_rag")
-                    or ctx.get("question")
-                    or ctx.get("original_question", "")
-                )
-                t_rag = time.monotonic()
-                context_str, debug = self.retriever(
-                    question=rag_q, top_k=top_k, top_n=top_n
-                )
-                rag_ms = round((time.monotonic() - t_rag) * 1000)
-                existing_paths = ctx.get("meeting_paths") or {}
-                new_paths = {**existing_paths, **debug.get("meeting_paths", {})}
-                ctx.set("meeting_paths", new_paths)
-                register_meeting_paths(new_paths)
-                ctx.set("rag_context", context_str)
-
-                # Build per-meeting RAG chunk index for the heatmap (pass-1 only).
-                _rag_by_mtg: dict = ctx.get("rag_chunks_by_meeting") or {}
-                for _item in debug.get("selected_pass1", []):
-                    _meta = _item["meta"]
-                    _mid  = _meta.get("meeting_id", "")
-                    if not _mid:
-                        continue
-                    _rag_by_mtg.setdefault(_mid, []).append({
-                        "start": _meta.get("start_speech_idx", 0),
-                        "end":   _meta.get("end_speech_idx",   0),
-                        "sim":   round(float(_item["p1_sim"]), 4),
-                        "tvec":  _item.get("topic_scores_vec", []),
-                    })
-                ctx.set("rag_chunks_by_meeting", _rag_by_mtg)
-
-                retrieval_info = {
-                    "meetings":      debug.get("meetings", []),
-                    "context_chars": debug.get("context_chars", 0),
-                    "rag_ms":        rag_ms,
-                    "chunks": [
-                        {
-                            "date":      item["meta"].get("date", ""),
-                            "committee": item["meta"].get("committee", ""),
-                            "topic":     item["meta"].get("topic_text", "")[:80],
-                            "p1_sim":    round(float(item["p1_sim"]), 3),
-                            "chars":     item["meta"].get("char_count", 0),
-                        }
-                        for item in debug.get("selected_pass1", [])
-                    ],
-                }
-
             # ── Build user input ──────────────────────────────────────────
             template = data.get("input_template", "")
             if template:
                 user_content = ctx.render_template(template)
             else:
-                question    = ctx.get("question") or ctx.get("original_question", "")
-                rag_context = ctx.get("rag_context", "")
-                if rag_context and data.get("rag"):
-                    user_content = (
-                        "להלן קטעים רלוונטיים ממספר ישיבות ועדה:\n\n"
-                        f"{rag_context}\n\n---\n\nשאלה: {question}"
-                    )
-                else:
-                    user_content = question
+                user_content = ctx.get("question") or ctx.get("original_question", "")
 
             # ── Execute node ──────────────────────────────────────────────
             action = self._STATUS_BY_STAGE.get(stage, "מריץ")
@@ -427,8 +352,6 @@ class MachineRunner:
                 "loop":   loop_idx,
                 "prompt": {"system": system_prompt, "user": user_content},
             }
-            if retrieval_info:
-                node_start_ev["retrieval"] = retrieval_info
             yield ("node_start", node_start_ev)
 
             node_result: dict = {}
@@ -458,13 +381,12 @@ class MachineRunner:
                         (existing + "\n\n" + new_part).lstrip("\n"))
 
             # ── Emit node_result ──────────────────────────────────────────
-            rag_ms = retrieval_info.get("rag_ms", 0) if retrieval_info else 0
             nr: dict = {
                 "label":        label,
                 "stage":        stage,
                 "content":      content,
                 "loop":         loop_idx,
-                "elapsed_ms":   node_result.get("elapsed_ms", 0) + rag_ms,
+                "elapsed_ms":   node_result.get("elapsed_ms", 0),
                 "llm_ms":       node_result.get("llm_ms", 0),
                 "tool_ms":      node_result.get("tool_ms", 0),
                 "thinking":     node_result.get("thinking", ""),
@@ -472,8 +394,6 @@ class MachineRunner:
                 "tool_results": node_result.get("tool_results", []),
                 "prompt":       node_result.get("prompt", {}),
             }
-            if retrieval_info:
-                nr["retrieval"] = retrieval_info
             yield ("node_result", nr)
 
             completed.add(node_id)
@@ -506,8 +426,6 @@ class MachineRunner:
         completed: set[str],
         fired_to:  dict[str, set[str]],
         ctx:       Context,
-        top_k:     int = 5,
-        top_n:     int = 15,
     ) -> Generator:
         """
         Pause BFS at a user_input node and emit a checkpoint.
@@ -578,59 +496,7 @@ class MachineRunner:
                 or ctx.get("question")
                 or ctx.get("original_question", "")
             )
-            yield ("status", "מאחזר ישיבות רלוונטיות לעיון…")
-            _DEEP_DIVE_TOP_K = 20
-            context_str, debug = self.retriever(
-                question=query, top_k=_DEEP_DIVE_TOP_K, top_n=top_n
-            )
-            # Pre-populate ctx so if the session is ever resumed the LLM
-            # skips a second retrieval (RAG skip gate).
-            existing_paths = ctx.get("meeting_paths") or {}
-            new_paths = {**existing_paths, **debug.get("meeting_paths", {})}
-            ctx.set("meeting_paths", new_paths)
-            register_meeting_paths(new_paths)
-            ctx.set("rag_context", context_str)
-
-            # Build per-meeting RAG chunk index for the heatmap (pass-1 only).
-            _rag_by_mtg: dict = ctx.get("rag_chunks_by_meeting") or {}
-            for _item in debug.get("selected_pass1", []):
-                _meta = _item["meta"]
-                _mid  = _meta.get("meeting_id", "")
-                if not _mid:
-                    continue
-                _rag_by_mtg.setdefault(_mid, []).append({
-                    "start": _meta.get("start_speech_idx", 0),
-                    "end":   _meta.get("end_speech_idx",   0),
-                    "sim":   round(float(_item["p1_sim"]), 4),
-                    "tvec":  _item.get("topic_scores_vec", []),
-                })
-            ctx.set("rag_chunks_by_meeting", _rag_by_mtg)
-
-            meeting_ids    = debug.get("meetings", [])
-            meeting_scores = debug.get("meeting_scores", {})
-            l1_meta        = debug.get("l1_meeting_meta", {})
-            meta_by_mid: dict[str, dict] = {}
-            for item in debug.get("selected_pass1", []):
-                mid = item["meta"].get("meeting_id", "")
-                if mid and mid not in meta_by_mid:
-                    meta_by_mid[mid] = item["meta"]
-
-            meetings_out = []
-            for mid in meeting_ids:
-                # Prefer pass-1 meta (richer), fall back to L1 meta (always present)
-                meta  = meta_by_mid.get(mid) or l1_meta.get(mid) or {}
-                date  = meta.get("date", "")
-                comm  = meta.get("committee", "")
-                title = f"{comm} — {date}" if comm and date else mid
-                meetings_out.append({
-                    "meeting_id": mid,
-                    "date":       date,
-                    "committee":  comm,
-                    "title":      title,
-                    "score":      round(meeting_scores.get(mid, 0.0), 4),
-                })
-
-            ui_event["meetings"]         = meetings_out
+            ui_event["meetings"]         = []
             ui_event["query"]            = query
             ui_event["original_question"] = ctx.get("original_question", query)
         checkpoint: dict = {

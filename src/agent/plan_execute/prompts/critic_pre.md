@@ -10,7 +10,7 @@ Look for these failure modes specifically (do not flag others):
    `allowed_tools` can actually do.
 3. MISSING_DEP     — a step uses an entity ID that no earlier step in
    `deps` produces.
-4. OVERREACH       — too many `deep_dive_meeting` calls (more than
+4. OVERREACH       — too many `deep_dive` steps (more than
    {max_deep_dives}) or more than {max_steps_v1} steps in version 1.
 5. UNDERREACH      — only one search step for a question that clearly
    requires combining sources.

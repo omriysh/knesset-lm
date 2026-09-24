@@ -138,6 +138,13 @@
       "source": "llm_call_0b6c40bd",
       "target": "tool_bill_details",
       "type": "tool_link"
+    },
+    {
+      "id": "e_prot_query_protocols",
+      "source": "llm_call_0b6c40bd",
+      "target": "tool_query_protocols",
+      "type": "tool_link",
+      "label": ""
     }
   ],
   "global_rules": "כללים גורפים:\n- אתה רשאי להסיק מסקנות ולהשתמש בהיגיון.\n- ענה בעברית.\n- היה תמציתי ומדוייק.",
@@ -236,13 +243,13 @@
     },
     {
       "data": {
-        "input_template": "להלן קטעים רלוונטיים ממספר ישיבות ועדה:\n\n{{rag_context}}\n\n---\n\nשאלה: {{question_for_rag}}{{notes_block}}",
+        "input_template": "שאלה: {{question_for_rag}}{{notes_block}}",
         "max_tokens": 16384,
         "model": "",
-        "notes": "rag_pipeline + summary tools + get_mk_profile + get_bill_details",
-        "rag": "3level",
+        "notes": "query_protocols (FTS keyword search) + summary tools + find_mk + query_bills",
+        "rag": "",
         "stage": "rag",
-        "system_prompt": "אתה עוזר מומחה לניתוח פרוטוקולים של ועדות הכנסת.\nהקטעים שלהלן נבחרו אוטומטית ממאגר גדול של פרוטוקולים — הם הרלוונטיים ביותר לשאלה, אך מהווים חלק קטן מהתמלולים הקיימים.\n\nכללים:\n- אל תמציא מידע! השתמש במידע שנתון לך.\n- אם הקטעים אינם מכילים מידע רלוונטי לשאלה — כתוב בשורה אחת שלא נמצאו קטעים רלוונטיים, וסיים.\n- כאשר נדרש לפרט, ציין מי אמר מה ומתי (תאריך + שם הוועדה).\n- לצורך הרחבה על ישיבה ספציפית — השתמש בכלי סיכומי הישיבות.\n- לצורך העשרה בלבד: אם נדרש מידע על ח\"כ (מפלגה, תפקיד) או על הצעת חוק שנזכרה — השתמש ב-get_mk_profile / get_bill_details.",
+        "system_prompt": "אתה עוזר מומחה לניתוח פרוטוקולים של ועדות הכנסת.\nחפש בפרוטוקולים עם הכלי query_protocols (חיפוש מילות מפתח בנושאים, בעמדות ובנאומים).\n\nכללים:\n- אל תמציא מידע! השתמש רק במידע שהכלים מחזירים.\n- אם לא נמצא מידע רלוונטי לשאלה — כתוב בשורה אחת שלא נמצאו קטעים רלוונטיים, וסיים.\n- כאשר נדרש לפרט, ציין מי אמר מה ומתי (תאריך + שם הוועדה).\n- לצורך הרחבה על ישיבה ספציפית — השתמש בכלי סיכומי הישיבות.\n- לצורך העשרה בלבד: אם נדרש מידע על ח\"כ (מפלגה, תפקיד) או על הצעת חוק שנזכרה — השתמש ב-find_mk / query_bills.",
         "temperature": 0.7
       },
       "id": "llm_call_0b6c40bd",
@@ -428,7 +435,7 @@
         "input_template": "{{question_for_fact}}{{notes_block}}",
         "max_tokens": 16384,
         "model": "",
-        "notes": "utils/tools.py → get_mk_profile, get_committee_members, get_bill_details, get_bill_text",
+        "notes": "utils/tools.py → find_mk, find_committee, query_bills",
         "rag": "",
         "stage": "factual",
         "system_prompt": "אתה עוזר מומחה לעובדות הכנסת הישראלית.\nלרשותך גישה למאגר המידע הרשמי של הכנסת — השתמש בכלים לאחזור מידע לפני שאתה מנסח תשובה.\n\nתחומי האחריות שלך:\n- פרטים על ח\"כ: מפלגה, תפקידים, חברות בוועדות\n- הרכב ועדות הכנסת ותפקידי חבריהן\n- הצעות חוק: מצב חקיקתי, סוג (ממשלתי/פרטי), יוזמים\n\nכללים:\n- ענה אך ורק על בסיס תוצאות הכלים. אל תסמוך על ידע מוקדם לגבי פוליטיקאים או חקיקה — המידע עשוי להיות מיושן.\n- אם הכלי לא מצא תוצאה, ציין זאת בבירור.\n- אל תחסוך בשימוש בכלים. אם נתקלת בשם של חבר כנסת, בדוק את הפרטים עליו בעזרת שימוש בכלי.",
@@ -446,29 +453,32 @@
     },
     {
       "data": {
-        "description": "Look up an Israeli MK by name. Returns party/faction, current positions, and committee memberships.",
-        "function_name": "get_mk_profile",
+        "description": "Resolve an MK name to one or more candidate records with stable mk_id. Each result includes a full profile: party and faction history, committee positions, ministerial roles. Returns the best fuzzy name matches sorted by score. No separate profile or committee-list fetch is needed after this call.",
+        "function_name": "find_mk",
         "parameters": {
+          "type": "object",
           "properties": {
-            "knesset_num": {
-              "default": 25,
-              "description": "Knesset number. Defaults to 25.",
-              "type": "integer"
-            },
-            "name": {
-              "description": "Full or partial name of the MK in Hebrew or English.",
+            "query": {
               "type": "string"
+            },
+            "knesset_num": {
+              "type": "integer",
+              "default": 25
+            },
+            "top_k": {
+              "type": "integer",
+              "default": 5,
+              "minimum": 1
             }
           },
           "required": [
-            "name"
-          ],
-          "type": "object"
+            "query"
+          ]
         }
       },
       "id": "tool_mk_profile",
       "imaginary": false,
-      "label": "get_mk_profile",
+      "label": "find_mk",
       "position": {
         "x": 280,
         "y": 220
@@ -478,29 +488,32 @@
     },
     {
       "data": {
-        "description": "Look up the current active members of a Knesset committee by name.",
-        "function_name": "get_committee_members",
+        "description": "Resolve a committee name to candidate committee_id values. Each result includes the full committee record (its exact name, usable in query_protocols.committees) with its active member list (mk_id, name, role). No separate member-list fetch is needed after this call.",
+        "function_name": "find_committee",
         "parameters": {
+          "type": "object",
           "properties": {
-            "knesset_num": {
-              "default": 25,
-              "description": "Knesset number. Defaults to 25.",
-              "type": "integer"
-            },
-            "name": {
-              "description": "Full or partial committee name in Hebrew.",
+            "query": {
               "type": "string"
+            },
+            "knesset_num": {
+              "type": "integer",
+              "default": 25
+            },
+            "top_k": {
+              "type": "integer",
+              "default": 5,
+              "minimum": 1
             }
           },
           "required": [
-            "name"
-          ],
-          "type": "object"
+            "query"
+          ]
         }
       },
       "id": "tool_committee_members",
       "imaginary": false,
-      "label": "get_committee_members",
+      "label": "find_committee",
       "position": {
         "x": 360,
         "y": 400
@@ -510,24 +523,33 @@
     },
     {
       "data": {
-        "description": "Look up a Knesset bill by Hebrew name. Returns legislative status, type, initiators, and document links.",
-        "function_name": "get_bill_details",
+        "description": "Search bills by Hebrew title words (the whole query must appear in the bill name) within one Knesset, most recently updated first. Returns bill_id, name, status, type, initiators.",
+        "function_name": "query_bills",
         "parameters": {
+          "type": "object",
           "properties": {
-            "bill_name": {
-              "description": "Partial or full Hebrew name of the bill.",
+            "query": {
               "type": "string"
+            },
+            "knesset_num": {
+              "type": "integer",
+              "default": 25
+            },
+            "top_k": {
+              "type": "integer",
+              "default": 10,
+              "minimum": 1,
+              "maximum": 100
             }
           },
           "required": [
-            "bill_name"
-          ],
-          "type": "object"
+            "query"
+          ]
         }
       },
       "id": "tool_bill_details",
       "imaginary": false,
-      "label": "get_bill_details",
+      "label": "query_bills",
       "position": {
         "x": 440,
         "y": 220
@@ -600,32 +622,92 @@
     },
     {
       "data": {
-        "description": "Fetch and extract the full text of a bill from its official PDF.",
-        "function_name": "get_bill_text",
+        "description": "Keyword search and listing over committee meeting protocols. Three scopes, each searched independently with the same query and filters and returned as its own list (top_k rows per scope):\n  • topics   — discussion topics from the meeting's AI summary\n  • opinions — positions a speaker stated, each with a verbatim quote from the protocol (mk_id / party of the speaker)\n  • speeches — the protocol transcript itself, one row per speech\nQuery rules: a few plain Hebrew key words; all words must appear (AND); no OR/AND/NOT operators; one sub-topic per call. Spelling variants (ktiv male/haser) are matched automatically.\nAn empty query lists rows instead of ranking them (newest meeting first, in-meeting order), so filters alone are a listing. Recipes:\n  • a meeting's summary: meeting_ids=[id], search_in=[\"topics\",\"opinions\"]\n  • read a meeting's transcript: meeting_ids=[id], search_in=[\"speeches\"]; page on with offset\n  • what does MK X think about Y: find_mk (or find_party) first, then query=Y, mk_id (or party), search_in=[\"opinions\"] (add \"speeches\" for more)\n  • which meetings discussed Y: query=Y, search_in=[\"topics\"]\nFilters are AND-ed; list filters (committees, meeting_ids) OR within themselves. mk_id/party mean: topics → meetings the MK/party attended; opinions → opinion author; speeches → speaker. Dates are YYYY-MM-DD, inclusive. Texts are returned in full.",
+        "function_name": "query_protocols",
         "parameters": {
+          "type": "object",
           "properties": {
-            "bill_name": {
-              "description": "Partial or full Hebrew name of the bill.",
-              "type": "string"
+            "query": {
+              "type": "string",
+              "description": "Hebrew key words; empty = list mode"
+            },
+            "search_in": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "topics",
+                  "opinions",
+                  "speeches"
+                ]
+              },
+              "default": [
+                "topics",
+                "opinions",
+                "speeches"
+              ]
+            },
+            "mk_id": {
+              "type": "string",
+              "description": "From find_mk"
+            },
+            "party": {
+              "type": "string",
+              "description": "Party name as returned by find_party"
+            },
+            "committees": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Committee names as returned by find_committee"
+            },
+            "meeting_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "date_from": {
+              "type": "string",
+              "format": "date"
+            },
+            "date_to": {
+              "type": "string",
+              "format": "date"
+            },
+            "sort": {
+              "type": "string",
+              "enum": [
+                "relevance",
+                "date"
+              ],
+              "description": "Default: relevance with a query, date (newest first) without"
+            },
+            "top_k": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 200
+            },
+            "offset": {
+              "type": "integer",
+              "default": 0,
+              "minimum": 0
             },
             "knesset_num": {
-              "default": 25,
-              "description": "Knesset number. Defaults to 25.",
-              "type": "integer"
+              "type": "integer",
+              "default": 25
             }
-          },
-          "required": [
-            "bill_name"
-          ],
-          "type": "object"
+          }
         }
       },
-      "id": "tool_bill_text",
+      "id": "tool_query_protocols",
       "imaginary": false,
-      "label": "get_bill_text",
+      "label": "query_protocols",
       "position": {
-        "x": 360,
-        "y": 580
+        "x": 520,
+        "y": 220
       },
       "terminal": false,
       "type": "tool"

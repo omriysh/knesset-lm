@@ -34,39 +34,22 @@ function switchTab(name) {
   if (mobBtn) mobBtn.classList.add('active');
 }
 
-/* ── Browse search ───────────────────────────────────────────────── */
+/* ── Browse search (keyword; empty = newest meetings) ────────────── */
 async function browseSearch() {
-  const input   = document.getElementById('reading-search-input');
-  const kwInput = document.getElementById('reading-keyword-input');
-  const btn     = document.getElementById('reading-search-btn');
+  const input = document.getElementById('reading-search-input');
+  const btn   = document.getElementById('reading-search-btn');
   if (!input || !btn) return;
 
   const query   = input.value.trim();
-  const keyword = kwInput?.value.trim() || '';
-
-  if (!query && !keyword) {
-    input.focus();
-    return;
-  }
-
-  // Validate (mirrors the server-side check)
-  if (query && typeof _validateQuestion === 'function') {
-    const err = _validateQuestion(query);
-    if (err) {
-      _showBrowseError(err);
-      return;
-    }
-  }
+  const filters = typeof rfGetFilters === 'function' ? rfGetFilters() : {};
+  const searchRequest = { query, filters };
 
   _setBrowseLoading(true);
-
-  const filters = typeof rfGetFilters === 'function' ? rfGetFilters() : {};
-
   try {
-    const res = await fetch('/api/browse/rag', {
+    const res = await fetch('/api/browse/search', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ query: query || keyword, keyword, filters }),
+      body:    JSON.stringify(searchRequest),
     });
     const data = await res.json();
 
@@ -78,33 +61,32 @@ async function browseSearch() {
     if (!data.meetings || !data.meetings.length) {
       _showBrowsePlaceholder(
         'לא נמצאו ישיבות',
-        'נסה מילות חיפוש אחרות או שינוי ניסוח השאילתה.',
+        'נסה מילות מפתח אחרות או שינוי הסינון.',
         'search_off',
       );
       return;
     }
 
-    // Clear placeholder / previous browser panel
     const area = document.getElementById('reading-browser-area');
     area.innerHTML = '';
 
-    // Open browser panel inside reading area
     openProtocolBrowser(
       data.session_id,
       data.meetings[0].meeting_id,
       data.meetings,
       {
-        originalQuestion: query,
+        originalQuestion: query || 'ישיבות אחרונות',
         container:        area,
         standalone:       true,
         postCompletion:   true,
+        searchRequest,
       }
     );
 
-    // Collapse filter bar now that results are loaded
-    _collapseRfb(query || keyword);
+    _collapseRfb(query || 'ישיבות אחרונות');
 
   } catch (err) {
+    console.error('[tabs] browse search failed:', err);
     _showBrowseError('שגיאת רשת: ' + err.message);
   } finally {
     _setBrowseLoading(false);

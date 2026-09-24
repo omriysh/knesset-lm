@@ -1,11 +1,8 @@
 """
 speech.py
 
-Direct speaker-filtered access to local protocol files.
-
-Unlike the RAG pipeline (which uses embeddings + ChromaDB), this module scans
-protocol JSON files on disk and returns full speech text for a named MK.
-No index required — just the raw transcriptions.
+Direct speaker-filtered access to local protocol files: scans protocol JSON
+files on disk and returns full speech text for a named MK. No index required.
 """
 
 from __future__ import annotations

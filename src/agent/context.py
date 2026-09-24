@@ -18,8 +18,6 @@ class Context:
     Core variables set by the runner:
       original_question   user's original question (never mutated)
       question            current question (updated to follow-up between loops)
-      rag_context         retrieved protocol passages (set before RAG node runs)
-      meeting_paths       {meeting_id: path} (accumulated; not cleared on reset)
       sub_agent_outputs   concatenated sub-agent outputs for the reviewer
 
     Variables extracted by the output_format parser depend on the machine JSON.

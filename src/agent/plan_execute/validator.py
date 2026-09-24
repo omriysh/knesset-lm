@@ -228,12 +228,7 @@ def validate_plan(
             f"{_KIND_OVERREACH_STEPS}: plan v1 has {len(steps)} steps > cap {max_steps_v1}"
         )
 
-    deep_dive_count = sum(
-        1
-        for s in steps
-        if s.task_kind == "deep_dive"
-        or "deep_dive_meeting" in (s.allowed_tools or ())
-    )
+    deep_dive_count = sum(1 for s in steps if s.task_kind == "deep_dive")
     if deep_dive_count > max_deep_dives:
         issues.append(
             f"{_KIND_OVERREACH_DEEP_DIVES}: {deep_dive_count} deep-dive steps > cap {max_deep_dives}"

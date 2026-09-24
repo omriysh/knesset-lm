@@ -13,9 +13,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import pytest
 
-from retrieval.bm25_index import BM25Index
 from retrieval.ktiv import clear_cache, expand_token, skeleton
-from utils.tools import _expand_match, search_speeches_bm25
+import config
+from retrieval import knesset_db_store as store
+from utils.tools import _expand_match, search_speeches
 
 
 # ── skeleton (no db) ──────────────────────────────────────────────────────────
@@ -37,23 +38,21 @@ class TestSkeleton:
 
 # ── expand_token (fixture db) ─────────────────────────────────────────────────
 
-def _build_vocab_db(path, term_counts: dict) -> BM25Index:
-    """Build a speeches-shaped index where each term appears in `count` rows
-    (so its fts5vocab doc-frequency equals `count`)."""
-    idx = BM25Index(path)
-    idx.create_table()
+def _build_vocab_db(path, term_counts: dict) -> Path:
+    """Build a knesset.db where each term appears in `count` speeches (so its
+    fts5vocab doc-frequency equals `count`)."""
+    conn = store.connect(path)
     rows, rid = [], 0
     for term, count in term_counts.items():
         for _ in range(count):
-            rows.append({
-                "id": f"r{rid}", "label": "", "label_lemmatized": "",
-                "body": "", "body_lemmatized": f"דיון בנושא {term} בוועדה",
-                "extra": {"meeting_id": f"m{rid}", "committee": "ועדה",
-                          "speech_idx": 0, "speaker": "דובר"},
-            })
+            rows.append({"meeting_id": f"m{rid}", "knesset_num": 25, "idx": 0, "speaker": "דובר",
+                         "mk_id": None, "text": f"דיון בנושא {term} בוועדה"})
             rid += 1
-    idx.insert_many(rows)
-    return idx
+    store.insert_meetings(conn, [{"meeting_id": r["meeting_id"], "knesset_num": 25} for r in rows])
+    store.insert_speeches(conn, rows)
+    store.rebuild_fts(conn, "speeches")
+    conn.close()
+    return path
 
 
 @pytest.fixture(autouse=True)
@@ -63,80 +62,71 @@ def _clear_ktiv_cache():
     clear_cache()
 
 
+@pytest.fixture
+def db(tmp_path, monkeypatch):
+    path = tmp_path / "knesset.db"
+    monkeypatch.setattr(config, "KNESSET_DB", path)
+    return path
+
+
 class TestExpandToken:
-    def test_haser_expands_to_male(self, tmp_path):
-        db = tmp_path / "speeches.db"
-        idx = _build_vocab_db(db, {"ביטחון": 5, "בטחון": 3})
-        idx.close()
-        variants = expand_token("בטחון", db)
+    def test_haser_expands_to_male(self, db):
+        _build_vocab_db(db, {"ביטחון": 5, "בטחון": 3})
+        variants = expand_token("בטחון", db, "speeches_fts")
         assert variants[0] == "בטחון"          # original always first
         assert "ביטחון" in variants
 
-    def test_male_expands_to_haser(self, tmp_path):
-        db = tmp_path / "speeches.db"
-        idx = _build_vocab_db(db, {"ביטחון": 5, "בטחון": 3})
-        idx.close()
-        assert "בטחון" in expand_token("ביטחון", db)
+    def test_male_expands_to_haser(self, db):
+        _build_vocab_db(db, {"ביטחון": 5, "בטחון": 3})
+        assert "בטחון" in expand_token("ביטחון", db, "speeches_fts")
 
-    def test_rare_collision_variant_is_dropped(self, tmp_path):
+    def test_rare_collision_variant_is_dropped(self, db):
         # המודנה shares a skeleton with המדינה but is a hapax typo — must not
         # be OR-ed into the query.
-        db = tmp_path / "speeches.db"
-        idx = _build_vocab_db(db, {"המדינה": 6, "המודנה": 1})
-        idx.close()
-        assert expand_token("המדינה", db) == ["המדינה"]
+        _build_vocab_db(db, {"המדינה": 6, "המודנה": 1})
+        assert expand_token("המדינה", db, "speeches_fts") == ["המדינה"]
 
-    def test_short_token_not_expanded(self, tmp_path):
-        db = tmp_path / "speeches.db"
-        idx = _build_vocab_db(db, {"ביטחון": 5})
-        idx.close()
-        assert expand_token("של", db) == ["של"]
+    def test_short_token_not_expanded(self, db):
+        _build_vocab_db(db, {"ביטחון": 5})
+        assert expand_token("של", db, "speeches_fts") == ["של"]
 
-    def test_non_hebrew_token_not_expanded(self, tmp_path):
-        db = tmp_path / "speeches.db"
-        idx = _build_vocab_db(db, {"ביטחון": 5})
-        idx.close()
-        assert expand_token("budget2024", db) == ["budget2024"]
+    def test_non_hebrew_token_not_expanded(self, db):
+        _build_vocab_db(db, {"ביטחון": 5})
+        assert expand_token("budget2024", db, "speeches_fts") == ["budget2024"]
 
-    def test_original_kept_when_absent_from_corpus(self, tmp_path):
+    def test_original_kept_when_absent_from_corpus(self, db):
         # Corpus has only the male form; a haser query must still return the
         # original plus the male variant.
-        db = tmp_path / "speeches.db"
-        idx = _build_vocab_db(db, {"ביטחון": 5})
-        idx.close()
-        variants = expand_token("בטחון", db)
+        _build_vocab_db(db, {"ביטחון": 5})
+        variants = expand_token("בטחון", db, "speeches_fts")
         assert variants[0] == "בטחון" and "ביטחון" in variants
 
 
 # ── _expand_match (MATCH expression shape) ────────────────────────────────────
 
 class TestExpandMatch:
-    def test_builds_or_slot_for_expanded_token(self, tmp_path):
-        db = tmp_path / "speeches.db"
-        idx = _build_vocab_db(db, {"ביטחון": 5, "בטחון": 3})
-        idx.close()
-        expr = _expand_match("בטחון המדינה", db)
+    def test_builds_or_slot_for_expanded_token(self, db):
+        _build_vocab_db(db, {"ביטחון": 5, "בטחון": 3})
+        expr = _expand_match("בטחון המדינה", "speeches_fts")
         assert '"בטחון"' in expr and '"ביטחון"' in expr
         assert " OR " in expr
 
-    def test_single_variant_token_has_no_or(self, tmp_path):
-        db = tmp_path / "speeches.db"
-        idx = _build_vocab_db(db, {"תקציב": 4})
-        idx.close()
-        assert _expand_match("תקציב", db) == '"תקציב"'
+    def test_single_variant_token_has_no_or(self, db):
+        _build_vocab_db(db, {"תקציב": 4})
+        assert _expand_match("תקציב", "speeches_fts") == '"תקציב"'
 
 
-# ── end-to-end via search_speeches_bm25 ───────────────────────────────────────
+# ── end-to-end via search_speeches ────────────────────────────────────────────
 
 class TestSearchWithKtivExpansion:
-    def test_haser_query_finds_male_spelled_speeches(self, tmp_path):
-        db = tmp_path / "speeches.db"
-        idx = _build_vocab_db(db, {"ביטחון": 5, "בטחון": 3})
+    def test_haser_query_finds_male_spelled_speeches(self, db):
+        _build_vocab_db(db, {"ביטחון": 5, "בטחון": 3})
+        conn = store.connect(db)
         try:
             # Query in ktiv haser must find the 5 male-spelled rows too.
-            rows = search_speeches_bm25(idx, "בטחון", top_k=200)
+            rows = search_speeches(conn, "בטחון", top_k=200)
         finally:
-            idx.close()
-        bodies = [r["body_lemmatized"] for r in rows]
-        assert any("ביטחון" in b for b in bodies)
+            conn.close()
+        texts = [r["text"] for r in rows]
+        assert any("ביטחון" in t for t in texts)
         assert len(rows) == 8   # 5 male + 3 haser

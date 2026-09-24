@@ -1,25 +1,23 @@
 """Tool implementations + dispatch helpers — agent-agnostic.
 
-This module is the function-bag layer of the tool surface (per design §5.2).
-It owns:
+This module is the function-bag layer of the tool surface. It owns:
 
   * the :class:`ToolSpec` dataclass that ``research_agent/tools.py`` uses to
     enumerate the registry,
   * a generic :func:`dispatch` that looks a tool up in any registry and
     invokes its handler with raw kwargs,
-  * one ``handle_*`` function per tool in the v1 inventory (§5.3).
+  * one ``handle_*`` function per tool.
 
 This module deliberately holds *no* registry — registry construction lives
-in the agent-specific module that knows which subset of tools to expose
-(per §5.1 #5: the planner drives the surface, not the SM). Imports flow
-upward only: ``utils/`` may not import from ``agent/`` (project CLAUDE.md
-import convention), so the registry has to live one layer up.
+in the agent-specific module that knows which subset of tools to expose.
+Imports flow upward only: ``utils/`` may not import from ``agent/`` (project
+CLAUDE.md import convention), so the registry has to live one layer up.
 
 ToolEnvelope contract: every handler returns a
 :class:`agent.subgraph.evidence.ToolEnvelope` — never raises, never returns
 ``None``. Argument-validation failures and infrastructure errors (missing
-BM25 db, network exception, etc.) are reported via the envelope's ``error``
-field per §4.3.
+knesset.db, network exception, etc.) are reported via the envelope's ``error``
+field.
 """
 
 from __future__ import annotations
@@ -28,26 +26,27 @@ import json
 import sys
 import traceback
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 import config
 from agent.subgraph.evidence import ToolEnvelope
-from retrieval.bm25_index import BM25Index
+from retrieval import knesset_db_store as store
 from retrieval.ktiv import expand_token
 from retrieval.lemmatize import lemmatize
 from utils.speech import name_query_matches, name_tokens
 from utils.knesset_db import (
+    ODATA_PAGE_SIZE,
+    _bill_record_to_dict,
+    _fetch_members,
     _get_bill_details_by_id,
     _get_bill_text_by_id,
-    _resolve_bill_by_name,
-    get_bill_details,
+    _sanitize_odata_search,
+    get_mk_positions,
+    mk_full_name,
+    _search_bills_by_term,
     get_party_members,
-    get_session_transcript,
 )
 from utils.tool_helpers.adapters import (
-    adapt_get_committee_members,
-    adapt_get_committee_sessions,
     adapt_get_mk_votes,
     adapt_get_recent_votes,
     adapt_get_votes_on_topic,
@@ -67,13 +66,8 @@ from utils.tool_helpers.name_search import name_search
 class ToolSpec:
     """Registry entry for a single tool.
 
-    Field set follows design §5.2 with one minor addition: ``description``
-    is exposed as a top-level field (it is part of the JSON schema in
-    practice, but planner-prompt rendering treats it as a header so it is
-    handy to keep it indexable).
-
-    Per project CLAUDE.md, the dataclass uses ``to_dict`` / ``from_dict``
-    explicitly — Pydantic is forbidden.
+    ``description`` lives inside ``schema`` (it is part of the JSON schema);
+    the dataclass uses ``to_dict`` explicitly — Pydantic is forbidden.
     """
 
     name: str
@@ -184,418 +178,221 @@ def _safe_args(args: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Shared infra: BM25 index resolution
+# Shared infra: knesset.db
 # ---------------------------------------------------------------------------
 
 
-def _bm25_path(target: str, knesset_num: int) -> Path:
-    """Path layout matches ``scripts/build_bm25_indexes.py``."""
-    return config.BM25_DIR / str(knesset_num) / f"{target}.db"
-
-
-def _open_bm25(target: str, knesset_num: int) -> BM25Index | None:
-    """Return an opened :class:`BM25Index` or ``None`` if the db file is missing.
-
-    The ``.db`` file is built offline by ``scripts/build_bm25_indexes.py``;
-    if a deployment hasn't run that script yet, the find_* tools must fail
-    with a clean ``bm25_db_missing`` error rather than crashing.
-    """
-    path = _bm25_path(target, knesset_num)
-    if not path.exists():
+def _open_db():
+    """Open knesset.db (built offline by scripts/build_knesset_db.py) or None when missing."""
+    if not store.exists():
         return None
-    return BM25Index(path)
+    return store.connect()
 
 
-def _bm25_missing_envelope(target: str, knesset_num: int) -> ToolEnvelope:
+def _db_missing_envelope(target: str, knesset_num: int) -> ToolEnvelope:
     return ToolEnvelope(
         summary="",
         full="",
-        metadata={"kind": "error", "source": "bm25", "count": 0, "target": target},
+        metadata={"kind": "error", "source": "knesset_db", "count": 0, "target": target},
         provenance={"target": target, "knesset_num": knesset_num,
-                    "expected_path": str(_bm25_path(target, knesset_num))},
-        error="bm25_db_missing",
+                    "expected_path": str(store.db_path())},
+        error="knesset_db_missing",
     )
 
 
+def _db_error_envelope(exc: Exception, source: str, **prov) -> ToolEnvelope:
+    print(f"[tools] {source} query failed: {exc}")
+    return ToolEnvelope(
+        summary="",
+        full="",
+        metadata={"kind": "error", "source": source, "count": 0, "exception": str(exc)},
+        provenance=prov,
+        error="db_search_failed",
+    )
+
+
+def _as_list(value) -> list:
+    """Tool args may carry a scalar where the schema asks for an array."""
+    if value is None or value == "":
+        return []
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return [value]
+
+
+def _fts_match(query: str, fts_table: str) -> str:
+    """FTS5 MATCH expression for a free-text query: lemmatized, ktiv-expanded, tokens AND-ed."""
+    normalized = lemmatize(query)
+    return _expand_match(normalized, fts_table) or _quote_match(normalized) or query
+
+
 # ---------------------------------------------------------------------------
-# search_topics — bullets-only L1 hybrid search
+# query_protocols — topics / opinions / speeches over knesset.db
 # ---------------------------------------------------------------------------
 
 
-def handle_search_topics(args: dict) -> ToolEnvelope:
-    """Hybrid BM25 (FTS5) + dense (Chroma) search over summary bullets.
+def handle_query_protocols(args: dict) -> ToolEnvelope:
+    """Keyword search (or listing, with an empty query) over the protocol scopes.
 
-    Returns the top-``top_k`` bullets after RRF fusion. Each result carries
-    enough metadata for the executor to know which meeting and section the
-    bullet came from. Embedding-side failures degrade to BM25-only with a
-    ``embedding_unavailable`` warning instead of erroring out — keeps the
-    tool useful when llama-server / GPU isn't up.
+    Each requested scope is queried independently with the same query and
+    filters; ``full`` is a JSON object with one row list per scope.
     """
     query = (args.get("query") or "").strip()
+    search_in = [str(s) for s in _as_list(args.get("search_in"))] or list(store.PROTOCOL_SCOPES)
+    mk_id = str(args.get("mk_id") or "").strip() or None
+    party = (args.get("party") or "").strip() or None
+    committees = [str(c).replace("_", " ") for c in _as_list(args.get("committees"))]
+    meeting_ids = [str(m).strip() for m in _as_list(args.get("meeting_ids")) if str(m).strip()]
+    date_from = (args.get("date_from") or "").strip() or None
+    date_to = (args.get("date_to") or "").strip() or None
+    sort = (args.get("sort") or ("relevance" if query else "date")).strip().lower()
+    top_k = int(args.get("top_k") or config.QUERY_PROTOCOLS_DEFAULT_TOP_K)
+    top_k = max(1, min(top_k, config.QUERY_PROTOCOLS_MAX_TOP_K))
+    offset = max(0, int(args.get("offset") or 0))
     knesset_num = int(args.get("knesset_num") or 25)
-    top_k = int(args.get("top_k") or config.SEARCH_TOPICS_DEFAULT_TOP_K)
-    top_k = max(1, min(top_k, config.SEARCH_TOPICS_MAX_TOP_K))
 
-    if not query:
-        return _validation_error("missing_query", kind="search", source="hybrid",
-                                 query=query, knesset_num=knesset_num)
-
-    bm25 = _open_bm25("bullets", knesset_num)
-    if bm25 is None:
-        return _bm25_missing_envelope("bullets", knesset_num)
-
-    warnings: list[str] = []
-    bm25_ranking: list[str] = []
-    try:
-        rows = bm25.search(
-            _quote_match(lemmatize(query)) or query,
-            top_k=config.HYBRID_FIRST_STAGE_TOP_K,
-        )
-        bm25_rows: dict[str, dict] = {}
-        for r in rows:
-            rid = str(r.get("id") or "")
-            if rid:
-                bm25_rows[rid] = r
-                bm25_ranking.append(rid)
-    except Exception as exc:
-        bm25.close()
-        return ToolEnvelope(
-            summary="",
-            full="",
-            metadata={"kind": "error", "source": "bm25", "count": 0,
-                      "exception": str(exc)},
-            provenance={"query": query, "knesset_num": knesset_num},
-            error="bm25_search_failed",
-        )
-
-    # Optional dense rerank via Chroma. We *try* it but don't make the tool
-    # depend on it — a fresh checkout without an indexed Chroma collection
-    # should still get BM25-only results.
-    embed_ranking: list[str] = []
-    try:
-        embed_ranking = _embed_bullet_ranking(
-            query=query,
-            top_k=config.HYBRID_FIRST_STAGE_TOP_K,
-        )
-    except Exception:
-        warnings.append("embedding_unavailable")
-
-    # RRF fuse — only when both sides produced something.
-    if embed_ranking:
-        from retrieval.hybrid import rrf_fuse  # local import: optional dep
-        fused = rrf_fuse([bm25_ranking, embed_ranking], top_k=top_k)
-    else:
-        fused = bm25_ranking[:top_k]
-
-    # Fetch any Chroma-only IDs (not in BM25 search results) before closing.
-    missing = [rid for rid in fused if rid not in bm25_rows]
-    if missing:
-        bm25_rows.update(bm25.fetch_by_ids(missing))
-
-    bm25.close()
-
-    if not fused:
-        return ToolEnvelope(
-            summary="",
-            full=json.dumps([], ensure_ascii=False),
-            metadata={"kind": "search", "source": "hybrid", "count": 0,
-                      "total_match": len(bm25_ranking),
-                      **({"warnings": warnings} if warnings else {})},
-            provenance={"query": query, "knesset_num": knesset_num, "top_k": top_k},
-        )
-
-    # Build full result list from BM25 rows (richer metadata than embed
-    # rankings, which only have ids).
-    payload: list[dict] = []
-    for rid in fused:
-        row = bm25_rows.get(rid)
-        extra = row.get("extra") if (row and isinstance(row.get("extra"), dict)) else {}
-        payload.append({
-            "bullet_id":  rid,
-            "label":      (row or {}).get("label") or "",
-            "text":       (row or {}).get("body") or "",
-            "meeting_id": extra.get("meeting_id"),
-            "committee":  extra.get("committee"),
-            "bullet_idx": extra.get("bullet_idx"),
-        })
-
-    metadata = {
-        "kind":        "search",
-        "source":      "hybrid",
-        "count":       len(payload),
-        "total_match": len(bm25_ranking),
+    provenance = {
+        "query": query, "search_in": search_in, "mk_id": mk_id, "party": party,
+        "committees": committees, "meeting_ids": meeting_ids, "date_from": date_from,
+        "date_to": date_to, "sort": sort, "top_k": top_k, "offset": offset, "knesset_num": knesset_num,
     }
-    if warnings:
-        metadata["warnings"] = warnings
+    unknown_scopes = [s for s in search_in if s not in store.PROTOCOL_SCOPES]
+    if unknown_scopes:
+        return _validation_error("invalid_search_in", kind="search", source="knesset_db",
+                                 unknown_scopes=unknown_scopes, **provenance)
+    if sort not in ("relevance", "date"):
+        return _validation_error("invalid_sort", kind="search", source="knesset_db", **provenance)
+
+    if not store.exists():
+        return _db_missing_envelope("protocols", knesset_num)
+    results: dict[str, list[dict]] = {}
+    conn = None
+    try:
+        conn = store.connect()
+        for scope in search_in:
+            results[scope] = store.query_protocol_rows(
+                conn, scope, knesset_num,
+                match=_fts_match(query, f"{scope}_fts") if query else None,
+                mk_id=mk_id, party=party, committees=committees or None,
+                meeting_ids=meeting_ids or None, date_from=date_from, date_to=date_to,
+                sort=sort, top_k=top_k, offset=offset,
+            )
+    except Exception as exc:
+        return _db_error_envelope(exc, "knesset_db", **provenance)
+    finally:
+        if conn is not None:
+            conn.close()
 
     return ToolEnvelope(
         summary="",
-        full=json.dumps(payload, ensure_ascii=False),
-        metadata=metadata,
-        provenance={"query": query, "knesset_num": knesset_num, "top_k": top_k},
+        full=json.dumps(results, ensure_ascii=False),
+        metadata={"kind": "search", "source": "knesset_db",
+                  "count": sum(len(rows) for rows in results.values())},
+        provenance=provenance,
     )
 
 
-def _embed_bullet_ranking(*, query: str, top_k: int) -> list[str]:
-    """Return Chroma's id ranking for the bullets collection.
-
-    Imports are local: this is the only path that pulls in chromadb /
-    transformers, and we don't want to pay that import cost when the
-    embedding side is unavailable.
-    """
-    import chromadb
-    from contextlib import nullcontext
-
-    client = chromadb.PersistentClient(path=str(config.CHROMA_DIR))
-    coll = client.get_collection(config.BULLETS_COLLECTION)
-    from indexing.embedder import ProtocolEmbedder, get_global_embedder
-    embedder, embed_lock = get_global_embedder()
-    if embedder is None:
-        embedder = ProtocolEmbedder()
-        embed_lock = None
-    with embed_lock if embed_lock is not None else nullcontext():
-        q_emb = embedder.embed([query], ProtocolEmbedder.INSTR_QUERY)
-    res = coll.query(
-        query_embeddings=q_emb.tolist(),
-        n_results=top_k,
-        include=["metadatas"],
-    )
-    return [str(i) for i in (res.get("ids") or [[]])[0]]
-
-
-# ---------------------------------------------------------------------------
-# search_protocols_keyword — BM25 over speech text
-# ---------------------------------------------------------------------------
-
-
-def _build_speeches_where(
-    *,
-    committee_ids: list | None = None,
-    meeting_ids: list | None = None,
-    speaker: str | None = None,
-) -> str | None:
-    """Build the FTS5 WHERE fragment for the ``speeches`` index.
-
-    Each filter *group* (committee_ids, meeting_ids) is OR-ed internally —
-    "any of these committees" / "any of these meetings" — and the groups
-    are AND-ed together with the speaker filter. (An earlier version AND-ed
-    every individual id together, which meant passing more than one
-    committee_id or meeting_id could never match — a single row's ``extra``
-    only ever carries one committee/meeting. Fixed here since the new
-    reading-tab candidate-set scoping needs to pass many meeting_ids at
-    once.)
-    """
-    where_parts: list[str] = []
-
-    if committee_ids:
-        group = " OR ".join(
-            f"extra LIKE '%\"committee\": \"{_sql_safe(str(cid))}\"%'" for cid in committee_ids
-        )
-        where_parts.append(f"({group})")
-    if meeting_ids:
-        group = " OR ".join(
-            f"extra LIKE '%\"meeting_id\": \"{_sql_safe(str(mid))}\"%'" for mid in meeting_ids
-        )
-        where_parts.append(f"({group})")
-    if speaker:
-        # Coarse pre-filter: keep any speech whose speaker value contains at
-        # least one query name-token (OR-ed). This is a *superset* of the real
-        # token-subset match — a title ("שרת ... אורית סטרוק") or a middle name
-        # ("אורית מלכה סטרוק") no longer breaks a contiguous-substring LIKE.
-        # search_speeches_bm25 refines these rows down with name_query_matches.
-        toks = name_tokens(speaker)
-        if toks:
-            group = " OR ".join(
-                f"extra LIKE '%\"speaker\": \"%{_sql_safe(t)}%\"%'" for t in toks
-            )
-            where_parts.append(f"({group})")
-
-    return " AND ".join(where_parts) if where_parts else None
-
-
-def search_speeches_bm25(
-    bm25: BM25Index,
+def search_speeches(
+    conn,
     query: str,
     *,
-    committee_ids: list | None = None,
+    knesset_num: int = 25,
+    committees: list | None = None,
     meeting_ids: list | None = None,
     speaker: str | None = None,
-    top_k: int = config.SEARCH_PROTOCOLS_DEFAULT_TOP_K,
+    top_k: int = config.QUERY_PROTOCOLS_DEFAULT_TOP_K,
     sort: str = "relevance",
 ) -> list[dict]:
-    """Run a BM25 FTS5 search against an already-open ``speeches`` index.
+    """FTS search over speeches for the web protocol browser.
 
-    Extracted out of handle_search_protocols_keyword so both the agent tool
-    handler (which wraps the result in a ToolEnvelope) and
-    web.app.browse_rag (reading-tab keyword search, not an agent context —
-    no envelope) share identical WHERE-building + search-call logic instead
-    of diverging.
-
-    Returns raw BM25Index.search() rows: dicts with keys id, label,
-    label_lemmatized, body, body_lemmatized, extra, score. ``score`` is
-    sqlite's bm25() value — lower / more negative = more relevant (already
-    ORDER BY score ASC inside BM25Index.search()).
-
-    Caller owns opening/closing the BM25Index (mirrors _open_bm25 /
-    _bm25_missing_envelope at the call site) and any exception handling.
+    The SQL speaker filter is a coarse OR over name tokens; rows are then
+    refined with name_query_matches so a speech sharing one token with the
+    requested name (a different MK called "אורית") is dropped. Rows carry
+    id, meeting_id, speech_idx, speaker, mk_id, text, committee, date, score
+    (sqlite bm25: lower = more relevant). sort="date" reorders the top_k
+    best matches newest first.
     """
-    where = _build_speeches_where(
-        committee_ids=committee_ids, meeting_ids=meeting_ids, speaker=speaker,
+    rows = store.search_speeches(
+        conn, _fts_match(query, "speeches_fts"), knesset_num,
+        top_k=top_k,
+        meeting_ids=[str(m) for m in meeting_ids] if meeting_ids else None,
+        committees=[str(c).replace("_", " ") for c in committees] if committees else None,
+        speaker_tokens=name_tokens(speaker) if speaker else None,
     )
-    normalized = lemmatize(query)
-    match_expr = _expand_match(normalized, bm25.path) or _quote_match(normalized) or query
-    rows = bm25.search(
-        match_expr,
-        top_k=max(top_k, config.KEYWORD_RERANK_TOP_K) if sort == "relevance" else top_k,
-        where=where,
-    )
-    # Precise speaker refine: the SQL WHERE only coarsely OR-filters on any
-    # single name-token; enforce true token-subset name matching here so a row
-    # sharing just one token (e.g. a different MK named "אורית") is dropped.
     if speaker:
-        rows = [
-            r for r in rows
-            if name_query_matches(
-                speaker, (r.get("extra") or {}).get("speaker", "")
-                if isinstance(r.get("extra"), dict) else "",
-            )
-        ]
+        rows = [r for r in rows if name_query_matches(speaker, r.get("speaker") or "")]
+    if sort == "date":
+        rows.sort(key=lambda r: (r.get("date") or ""), reverse=True)
     return rows
 
 
-def handle_search_protocols_keyword(args: dict) -> ToolEnvelope:
-    """BM25 over indexed speeches with optional axis filters.
+# ---------------------------------------------------------------------------
+# get_meeting_attendance
+# ---------------------------------------------------------------------------
 
-    Filters (committee, meeting, speaker, date range) are applied via the
-    FTS5 WHERE clause against the row's ``extra`` JSON column; this is
-    cheap because FTS5 evaluates the MATCH first and only filters the
-    candidate set.
-    """
-    query = (args.get("query") or "").strip()
-    knesset_num = int(args.get("knesset_num") or 25)
-    top_k = int(args.get("top_k") or config.SEARCH_PROTOCOLS_DEFAULT_TOP_K)
-    top_k = max(1, min(top_k, config.SEARCH_PROTOCOLS_MAX_TOP_K))
-    sort = (args.get("sort") or "relevance").lower()
 
-    if not query:
-        return _validation_error("missing_query", kind="search", source="bm25",
-                                 query=query, knesset_num=knesset_num)
-
-    bm25 = _open_bm25("speeches", knesset_num)
-    if bm25 is None:
-        return _bm25_missing_envelope("speeches", knesset_num)
-
-    committee_ids = args.get("committee_ids") or []
-    meeting_ids = args.get("meeting_ids") or []
-    speaker = (args.get("speaker") or "").strip()
-    date_from = (args.get("date_from") or "").strip()
-    date_to = (args.get("date_to") or "").strip()
-
+def handle_get_meeting_attendance(args: dict) -> ToolEnvelope:
+    """Attendance list of one meeting: MKs first (with roster party), then guests."""
+    meeting_id = str(args.get("meeting_id") or "").strip()
+    if not meeting_id:
+        return _validation_error("missing_meeting_id", kind="fetch", source="knesset_db")
+    if not store.exists():
+        return _db_missing_envelope("attendance", 0)
+    conn = None
     try:
-        rows = search_speeches_bm25(
-            bm25, query,
-            committee_ids=committee_ids,
-            meeting_ids=meeting_ids,
-            speaker=speaker,
-            top_k=top_k,
-            sort=sort,
-        )
+        conn = store.connect()
+        meeting = store.get_meeting(conn, meeting_id)
+        attendance = store.get_attendance(conn, meeting_id) if meeting is not None else []
     except Exception as exc:
-        bm25.close()
-        return ToolEnvelope(
-            summary="",
-            full="",
-            metadata={"kind": "error", "source": "bm25", "count": 0,
-                      "exception": str(exc)},
-            provenance={"query": query, "knesset_num": knesset_num,
-                        "filters": {"committee_ids": committee_ids,
-                                    "meeting_ids": meeting_ids,
-                                    "speaker": speaker,
-                                    "date_from": date_from,
-                                    "date_to": date_to}},
-            error="bm25_search_failed",
-        )
+        return _db_error_envelope(exc, "knesset_db", meeting_id=meeting_id)
     finally:
-        bm25.close()
+        if conn is not None:
+            conn.close()
+    if meeting is None:
+        return _validation_error("meeting_not_found", kind="fetch", source="knesset_db",
+                                 meeting_id=meeting_id)
 
-    # Date filters: applied post-fetch since the FTS5 row's ``extra`` carries
-    # ``meeting_id`` (a numeric session id), not a literal date. The caller
-    # who needs date scoping has typically narrowed to a committee already.
-    if date_from or date_to:
-        # We don't have date metadata on the speech row itself; this is a
-        # known v1 limitation. Surface it as a warning instead of silently
-        # dropping the filter.
-        rows = rows  # noqa: PLW0127 — intentional no-op; warning below
-        warnings_extra = ["date_filter_unsupported_v1"]
-    else:
-        warnings_extra = []
-
-    payload: list[dict] = []
-    for r in rows[:top_k]:
-        extra = r.get("extra") if isinstance(r.get("extra"), dict) else {}
-        payload.append({
-            "speech_id":  str(r.get("id") or ""),
-            "label":      r.get("label") or "",
-            "text":       r.get("body") or "",
-            "meeting_id": extra.get("meeting_id"),
-            "committee":  extra.get("committee"),
-            "speaker":    extra.get("speaker"),
-            "speech_idx": extra.get("speech_idx"),
-        })
-
-    metadata = {
-        "kind":        "search",
-        "source":      "bm25",
-        "count":       len(payload),
-        "total_match": len(rows),
+    payload = {
+        "meeting_id": meeting_id,
+        "committee":  meeting.get("committee"),
+        "date":       meeting.get("date"),
+        "attendance": attendance,
     }
-    if warnings_extra:
-        metadata["warnings"] = warnings_extra
-
     return ToolEnvelope(
         summary="",
         full=json.dumps(payload, ensure_ascii=False),
-        metadata=metadata,
-        provenance={
-            "query":       query,
-            "knesset_num": knesset_num,
-            "top_k":       top_k,
-            "sort":        sort,
-            "filters": {
-                "committee_ids": list(committee_ids),
-                "meeting_ids":   list(meeting_ids),
-                "speaker":       speaker or None,
-                "date_from":     date_from or None,
-                "date_to":       date_to or None,
-            },
-        },
+        metadata={"kind": "fetch", "source": "knesset_db", "count": len(attendance)},
+        provenance={"meeting_id": meeting_id, "committee": meeting.get("committee"),
+                    "date": meeting.get("date")},
     )
 
 
-def _sql_safe(s: str) -> str:
-    """Strip characters that would break the LIKE-clause string."""
-    return s.replace("'", "").replace("%", "").replace("_", "")
+# ---------------------------------------------------------------------------
+# Find-* tools — fuzzy name index → candidate records
+# ---------------------------------------------------------------------------
 
 
-# ---------------------------------------------------------------------------
-# Find-* tools — BM25 → candidate records
-# ---------------------------------------------------------------------------
+def _name_index(target: str, knesset_num: int) -> FuzzyNameIndex | None:
+    """In-memory fuzzy index over one of the knesset.db name tables, or None when the db is missing."""
+    conn = _open_db()
+    if conn is None:
+        return None
+    try:
+        return FuzzyNameIndex(store.name_entries(conn, target, knesset_num))
+    finally:
+        conn.close()
 
 
 def _build_mk_full_profile(record: dict, knesset_num: int) -> dict:
-    """Return a clean MK profile dict filtered to the given Knesset."""
-    def _kn_filter(items: list, key: str = "knesset") -> list:
-        return [x for x in (items or []) if not isinstance(x, dict) or x.get(key) in (None, knesset_num)]
-
-    return {
-        "mk_id":               str(record.get("mk_individual_id") or record.get("PersonID") or ""),
-        "full_name":           record.get("full_name") or record.get("mk_individual_name") or "",
-        "is_current":          record.get("IsCurrent", False),
-        "factions":            _kn_filter(record.get("factions")),
-        "committee_positions": _kn_filter(record.get("committee_positions")),
-        "govministries":       _kn_filter(record.get("govministries")),
-        "faction_chairpersons": _kn_filter(record.get("faction_chairpersons")),
-    }
+    """MK identity from the oknesset record plus positions in the given Knesset from OData."""
+    mk_id = str(record.get("mk_individual_id") or record.get("PersonID") or "")
+    profile = {"mk_id": mk_id, "full_name": mk_full_name(record), "is_current": record.get("IsCurrent", False)}
+    try:
+        profile.update(get_mk_positions(record.get("PersonID") or mk_id, knesset_num))
+    except Exception as exc:
+        print(f"[tools] OData positions fetch failed for mk {mk_id}: {exc}")
+        profile["positions_error"] = str(exc)
+    return profile
 
 
 def handle_find_mk(args: dict) -> ToolEnvelope:
@@ -604,17 +401,12 @@ def handle_find_mk(args: dict) -> ToolEnvelope:
     top_k       = max(1, int(args.get("top_k") or 5))
 
     if not query:
-        return _validation_error("missing_query", kind="search", source="bm25_mks",
+        return _validation_error("missing_query", kind="search", source="mks",
                                  knesset_num=knesset_num)
 
-    bm25 = _open_bm25("mks", knesset_num)
-    if bm25 is None:
-        return _bm25_missing_envelope("mks", knesset_num)
-
-    try:
-        fuzzy = FuzzyNameIndex.from_bm25(bm25)
-    finally:
-        bm25.close()
+    fuzzy = _name_index("mks", knesset_num)
+    if fuzzy is None:
+        return _db_missing_envelope("mks", knesset_num)
 
     candidates = name_search(query, fuzzy_index=fuzzy, knesset_num=knesset_num, top_k=top_k)
 
@@ -634,7 +426,7 @@ def handle_find_mk(args: dict) -> ToolEnvelope:
     if payload and not payload[0].get("profile"):
         warnings.append("low_confidence_match")
 
-    metadata: dict = {"kind": "search", "source": "bm25_mks", "count": len(payload)}
+    metadata: dict = {"kind": "search", "source": "mks", "count": len(payload)}
     if warnings:
         metadata["warnings"] = warnings
 
@@ -651,37 +443,11 @@ def handle_find_committee(args: dict) -> ToolEnvelope:
         args,
         target="committees",
         kind="search",
-        source="bm25_committees",
+        source="committees",
         id_key="committee_id",
         label_key="name",
         fetch_record=fetch_committee_record,
         default_top_k=5,
-    )
-
-
-def handle_find_bill(args: dict) -> ToolEnvelope:
-    return _generic_find(
-        args,
-        target="bills",
-        kind="search",
-        source="bm25_bills",
-        id_key="bill_id",
-        label_key="bill_name",
-        fetch_record=lambda eid: _fetch_bill_record(eid),
-        default_top_k=5,
-    )
-
-
-def handle_find_vote(args: dict) -> ToolEnvelope:
-    return _generic_find(
-        args,
-        target="votes",
-        kind="search",
-        source="bm25_votes",
-        id_key="vote_id",
-        label_key="title",
-        fetch_record=lambda eid: _fetch_vote_record(eid),
-        default_top_k=10,
     )
 
 
@@ -736,14 +502,9 @@ def _generic_find(
             query=query, knesset_num=knesset_num,
         )
 
-    bm25 = _open_bm25(target, knesset_num)
-    if bm25 is None:
-        return _bm25_missing_envelope(target, knesset_num)
-
-    try:
-        fuzzy = FuzzyNameIndex.from_bm25(bm25)
-    finally:
-        bm25.close()
+    fuzzy = _name_index(target, knesset_num)
+    if fuzzy is None:
+        return _db_missing_envelope(target, knesset_num)
 
     candidates = name_search(
         query,
@@ -784,13 +545,13 @@ def _generic_find(
 
 
 def _fetch_mk_record(mk_id: str) -> dict | None:
-    """Look up an MK by id by walking the cached members lists."""
-    from utils.knesset_db import _fetch_members
+    """Look up an MK by id by walking the cached oknesset members lists."""
     target = str(mk_id)
     for is_current in (True, False):
         try:
             members = _fetch_members(is_current)
-        except Exception:
+        except Exception as exc:
+            print(f"[tools] _fetch_mk_record: members list (is_current={is_current}) failed: {exc}")
             continue
         for mk in members:
             if str(mk.get("mk_individual_id") or "") == target or \
@@ -799,217 +560,104 @@ def _fetch_mk_record(mk_id: str) -> dict | None:
     return None
 
 
-def _fetch_bill_record(bill_id: str) -> dict | None:
-    try:
-        bid = int(bill_id)
-    except (TypeError, ValueError):
-        return None
-    return _get_bill_details_by_id(bid)
-
-
-def _fetch_vote_record(vote_id: str) -> dict | None:
-    """Best-effort vote-by-id fetch via OData KNS_PlenumVote."""
-    try:
-        import requests
-        r = requests.get(
-            f"{config.OFFICIAL_KNESSET_NEW_API}/KNS_PlenumVote({int(vote_id)})",
-            timeout=config.API_TIMEOUT,
-        )
-        if r.status_code == 404:
-            return None
-        r.raise_for_status()
-        return r.json()
-    except Exception:
-        return None
-
-
 # ---------------------------------------------------------------------------
-# Profile / fetch passthroughs (delegate to adapters)
+# Bills (live OData)
 # ---------------------------------------------------------------------------
 
 
-def handle_get_mk_profile(args: dict) -> ToolEnvelope:
-    mk_id = (args.get("mk_id") or "").strip()
+def handle_query_bills(args: dict) -> ToolEnvelope:
+    """Bill title search (OData ``contains(Name, ...)``) within one Knesset, newest update first."""
+    query = (args.get("query") or "").strip()
     knesset_num = int(args.get("knesset_num") or 25)
+    top_k = max(1, min(int(args.get("top_k") or 10), ODATA_PAGE_SIZE))
+    provenance = {"query": query, "knesset_num": knesset_num, "top_k": top_k}
 
-    if not mk_id:
-        return _validation_error(
-            "missing_mk_id", kind="fetch", source="oknesset",
-            knesset_num=knesset_num,
-        )
-    record = _fetch_mk_record(mk_id)
-    if record is None:
-        return _validation_error(
-            "mk_not_found", kind="fetch", source="oknesset",
-            mk_id=mk_id, knesset_num=knesset_num,
-        )
-    return ToolEnvelope(
-        summary="",
-        full=json.dumps(record, ensure_ascii=False, default=str),
-        metadata={"kind": "fetch", "source": "oknesset", "count": 1},
-        provenance={"mk_id": mk_id, "knesset_num": knesset_num},
-    )
+    if not query:
+        return _validation_error("missing_query", kind="search", source="odata", **provenance)
+    try:
+        bills = _search_bills_by_term(_sanitize_odata_search(query), knesset_num, top=top_k)
+    except Exception as exc:
+        return _odata_error_envelope(exc, "search", **provenance)
 
-
-def handle_get_mk_committees(args: dict) -> ToolEnvelope:
-    mk_id = (args.get("mk_id") or "").strip()
-    knesset_num = int(args.get("knesset_num") or 25)
-
-    if not mk_id:
-        return _validation_error(
-            "missing_mk_id", kind="fetch", source="oknesset",
-            knesset_num=knesset_num,
-        )
-    record = _fetch_mk_record(mk_id)
-    if record is None:
-        return _validation_error(
-            "mk_not_found", kind="fetch", source="oknesset",
-            mk_id=mk_id, knesset_num=knesset_num,
-        )
-    positions = record.get("committee_positions") or []
-    filtered = [
-        p for p in positions
-        if not isinstance(p, dict) or p.get("knesset") in (None, knesset_num)
-    ]
-    payload = {
-        "mk_id":               mk_id,
-        "full_name":           record.get("full_name") or record.get("mk_individual_name") or "",
-        "knesset_num":         knesset_num,
-        "committee_positions": filtered,
-    }
+    payload = [_bill_record_to_dict(b) for b in bills]
     return ToolEnvelope(
         summary="",
         full=json.dumps(payload, ensure_ascii=False, default=str),
-        metadata={"kind": "fetch", "source": "oknesset", "count": 1},
-        provenance={"mk_id": mk_id, "knesset_num": knesset_num},
+        metadata={"kind": "search", "source": "odata", "count": len(payload)},
+        provenance=provenance,
     )
 
 
-def handle_get_committee_members(args: dict) -> ToolEnvelope:
-    committee_id = (args.get("committee_id") or "").strip()
+def handle_get_bill(args: dict) -> ToolEnvelope:
+    """Bill metadata (status, initiators, documents); ``include_text`` adds the extracted bill text."""
+    bill_id = str(args.get("bill_id") or "").strip()
     knesset_num = int(args.get("knesset_num") or 25)
-
-    if not committee_id:
-        return _validation_error(
-            "missing_committee_id", kind="fetch", source="oknesset",
-            knesset_num=knesset_num,
-        )
-    record = fetch_committee_record(committee_id)
-    if record is None:
-        return _validation_error(
-            "committee_not_found", kind="fetch", source="oknesset",
-            committee_id=committee_id, knesset_num=knesset_num,
-        )
-    return adapt_get_committee_members(
-        name=record.get("name") or "",
-        knesset_num=knesset_num,
-    )
-
-
-def handle_get_committee_sessions(args: dict) -> ToolEnvelope:
-    committee_id = (args.get("committee_id") or "").strip()
-    knesset_num = int(args.get("knesset_num") or 25)
-    date_from = args.get("date_from")
-    date_to = args.get("date_to")
-
-    if not committee_id:
-        return _validation_error(
-            "missing_committee_id", kind="fetch", source="odata",
-            knesset_num=knesset_num,
-        )
-
-    return adapt_get_committee_sessions(
-        committee_id=committee_id,
-        knesset_num=knesset_num,
-        date_from=date_from,
-        date_to=date_to,
-    )
-
-
-def handle_get_bill_details(args: dict) -> ToolEnvelope:
-    bill_id = (args.get("bill_id") or "").strip()
-    knesset_num = int(args.get("knesset_num") or 25)
-
-    if not bill_id:
-        return _validation_error(
-            "missing_bill_id", kind="fetch", source="odata",
-            knesset_num=knesset_num,
-        )
-    record = _fetch_bill_record(bill_id)
-    if record is None:
-        return _validation_error(
-            "bill_not_found", kind="fetch", source="odata",
-            bill_id=bill_id, knesset_num=knesset_num,
-        )
-    return ToolEnvelope(
-        summary="",
-        full=json.dumps(record, ensure_ascii=False, default=str),
-        metadata={"kind": "fetch", "source": "odata", "count": 1},
-        provenance={"bill_id": bill_id, "knesset_num": knesset_num},
-    )
-
-
-def handle_get_bill_text(args: dict) -> ToolEnvelope:
-    bill_id = (args.get("bill_id") or "").strip()
-    knesset_num = int(args.get("knesset_num") or 25)
+    include_text = bool(args.get("include_text"))
     max_chars = int(args.get("max_chars") or config.BILL_TEXT_DEFAULT_MAX_CHARS)
-    max_chars = max(
-        config.BILL_TEXT_MIN_MAX_CHARS,
-        min(max_chars, config.BILL_TEXT_MAX_MAX_CHARS),
-    )
+    max_chars = max(config.BILL_TEXT_MIN_MAX_CHARS, min(max_chars, config.BILL_TEXT_MAX_MAX_CHARS))
+    provenance = {"bill_id": bill_id, "knesset_num": knesset_num,
+                  "include_text": include_text, "max_chars": max_chars}
 
     if not bill_id:
-        return _validation_error(
-            "missing_bill_id", kind="fetch", source="odata",
-            knesset_num=knesset_num,
-        )
+        return _validation_error("missing_bill_id", kind="fetch", source="odata", **provenance)
+    if not bill_id.isdigit():
+        return _validation_error("invalid_bill_id", kind="fetch", source="odata", **provenance)
+
+    text_record = None
     try:
-        record = _get_bill_text_by_id(int(bill_id), max_chars=max_chars)
+        record = _get_bill_details_by_id(int(bill_id))
+        if record is not None and include_text:
+            text_record = _get_bill_text_by_id(int(bill_id), max_chars=max_chars)
     except Exception as exc:
-        return ToolEnvelope(
-            summary="",
-            full="",
-            metadata={"kind": "error", "source": "odata", "count": 0,
-                      "exception": str(exc)},
-            provenance={"bill_id": bill_id, "knesset_num": knesset_num},
-            error="bill_text_fetch_failed",
-        )
+        return _odata_error_envelope(exc, "fetch", **provenance)
     if record is None:
-        return _validation_error(
-            "bill_text_not_found", kind="fetch", source="odata",
-            bill_id=bill_id, knesset_num=knesset_num,
-        )
-    warnings = ["result_truncated_to_%d_chars" % max_chars] if record.get("truncated") else []
+        return _validation_error("bill_not_found", kind="fetch", source="odata", **provenance)
+
+    text_truncated = bool(text_record and text_record.get("truncated"))
+    if include_text:
+        record["text"] = text_record["text"] if text_record else None
+        record["text_truncated"] = text_truncated
+    metadata: dict = {"kind": "fetch", "source": "odata", "count": 1}
+    if include_text and text_record is None:
+        metadata["warnings"] = ["bill_text_not_found"]
+    elif text_truncated:
+        metadata["warnings"] = [f"result_truncated_to_{max_chars}_chars"]
     return ToolEnvelope(
         summary="",
         full=json.dumps(record, ensure_ascii=False, default=str),
-        metadata={
-            "kind":   "fetch",
-            "source": "odata",
-            "count":  1,
-            **({"warnings": warnings} if warnings else {}),
-        },
-        provenance={"bill_id": bill_id, "knesset_num": knesset_num},
-        truncated=bool(record.get("truncated")),
+        metadata=metadata,
+        provenance=provenance,
+        truncated=text_truncated,
+    )
+
+
+def _odata_error_envelope(exc: Exception, kind: str, **prov) -> ToolEnvelope:
+    print(f"[tools] OData request failed: {exc}")
+    return ToolEnvelope(
+        summary="",
+        full="",
+        metadata={"kind": "error", "source": "odata", "count": 0, "exception": str(exc)},
+        provenance=prov,
+        error="odata_request_failed",
     )
 
 
 # ---------------------------------------------------------------------------
-# Voting tools (merged)
+# Votes (live OData)
 # ---------------------------------------------------------------------------
 
 
-def handle_query_voting_records(args: dict) -> ToolEnvelope:
-    """Unified voting query — behaviour determined by which params are supplied:
-      topic + mk_id → how that MK voted on matching votes
+def handle_query_votes(args: dict) -> ToolEnvelope:
+    """Plenum votes — behaviour determined by which params are supplied:
+      query + mk_id → how that MK voted on matching votes
       mk_id only    → recent votes cast by the MK
-      topic only    → votes matching the topic keyword
+      query only    → votes matching the keyword
       neither       → most recent votes overall
     """
-    topic = (args.get("topic") or "").strip()
-    mk_id = (args.get("mk_id") or "").strip()
+    query = (args.get("query") or "").strip()
+    mk_id = str(args.get("mk_id") or "").strip()
     knesset_num = int(args.get("knesset_num") or 25)
-    top_n = int(args.get("top_n") or 20)
+    top_k = max(1, int(args.get("top_k") or 20))
 
     if mk_id:
         record = _fetch_mk_record(mk_id)
@@ -1018,184 +666,17 @@ def handle_query_voting_records(args: dict) -> ToolEnvelope:
                 "mk_not_found", kind="fetch", source="odata",
                 mk_id=mk_id, knesset_num=knesset_num,
             )
-        name = record.get("full_name") or record.get("mk_individual_name") or ""
-        if topic:
+        name = mk_full_name(record)
+        if query:
             return adapt_get_votes_on_topic_by_mk(
-                topic=topic, name=name, knesset_num=knesset_num, top_n=top_n,
+                topic=query, name=name, knesset_num=knesset_num, top_n=top_k,
             )
-        return adapt_get_mk_votes(name=name, knesset_num=knesset_num, top_n=top_n)
+        return adapt_get_mk_votes(name=name, knesset_num=knesset_num, top_n=top_k)
 
-    if topic:
-        return adapt_get_votes_on_topic(topic=topic, top_n=top_n)
+    if query:
+        return adapt_get_votes_on_topic(topic=query, top_n=top_k)
 
-    return adapt_get_recent_votes(top_n=top_n, knesset_num=knesset_num)
-
-
-# ---------------------------------------------------------------------------
-# get_meeting_summary
-# ---------------------------------------------------------------------------
-
-
-def handle_get_meeting_summary(args: dict) -> ToolEnvelope:
-    """Return the raw .txt summary of a meeting; optional 1-indexed section."""
-    meeting_id = (args.get("meeting_id") or "").strip()
-    section_num = args.get("section_num")
-    if section_num is not None:
-        try:
-            section_num = int(section_num)
-        except (TypeError, ValueError):
-            return _validation_error(
-                "invalid_section_num", kind="fetch", source="summaries",
-                meeting_id=meeting_id, section_num=section_num,
-            )
-
-    if not meeting_id:
-        return _validation_error(
-            "missing_meeting_id", kind="fetch", source="summaries",
-        )
-
-    summary_path = _find_summary_path(meeting_id)
-    if summary_path is None:
-        return ToolEnvelope(
-            summary="",
-            full="",
-            metadata={"kind": "fetch", "source": "summaries", "count": 0},
-            provenance={"meeting_id": meeting_id},
-            error="summary_not_found",
-        )
-
-    try:
-        text = summary_path.read_text(encoding="utf-8")
-    except Exception as exc:
-        return ToolEnvelope(
-            summary="",
-            full="",
-            metadata={"kind": "error", "source": "summaries", "count": 0,
-                      "exception": str(exc)},
-            provenance={"meeting_id": meeting_id, "path": str(summary_path)},
-            error="summary_read_failed",
-        )
-
-    payload: Any = text
-    if section_num is not None:
-        sections = _split_summary_sections(text)
-        if 1 <= section_num <= len(sections):
-            payload = sections[section_num - 1]
-        else:
-            return ToolEnvelope(
-                summary="",
-                full="",
-                metadata={"kind": "fetch", "source": "summaries", "count": 0,
-                          "total_sections": len(sections)},
-                provenance={"meeting_id": meeting_id, "section_num": section_num},
-                error="section_out_of_range",
-            )
-
-    return ToolEnvelope(
-        summary="",
-        full=payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False),
-        metadata={"kind": "fetch", "source": "summaries", "count": 1},
-        provenance={
-            "meeting_id":  meeting_id,
-            "path":        str(summary_path),
-            "section_num": section_num,
-            "committee":   summary_path.parent.name,
-        },
-    )
-
-
-def _find_summary_path(meeting_id: str) -> Path | None:
-    """Locate the .txt summary file matching ``meeting_id`` across all
-    Knessets / committees. Filenames look like ``DD_MM_YYYY_<session_id>.txt``;
-    we glob for the trailing session id.
-    """
-    target = str(meeting_id)
-    root = config.DATA_DIR / "summaries"
-    if not root.exists():
-        return None
-    matches = list(root.rglob(f"*_{target}.txt"))
-    if matches:
-        return matches[0]
-    # Fall back to exact-stem match in case the filename layout shifts.
-    matches = list(root.rglob(f"{target}.txt"))
-    return matches[0] if matches else None
-
-
-def _split_summary_sections(text: str) -> list[str]:
-    """Split a Hebrew summary by ``##``-level headings; each section keeps
-    its leading heading line. The pre-amble (before the first heading) is
-    NOT counted as a section, matching the design's 1-indexed semantics.
-    """
-    lines = text.splitlines()
-    sections: list[list[str]] = []
-    current: list[str] | None = None
-    for ln in lines:
-        if ln.startswith("## ") or ln.startswith("# "):
-            if current is not None:
-                sections.append(current)
-            current = [ln]
-        elif current is not None:
-            current.append(ln)
-    if current is not None:
-        sections.append(current)
-    return ["\n".join(s).rstrip() for s in sections]
-
-
-# ---------------------------------------------------------------------------
-# deep_dive_meeting (planner-only handler)
-# ---------------------------------------------------------------------------
-
-
-def handle_deep_dive_meeting(args: dict) -> ToolEnvelope:
-    """Delegate to :func:`retrieval.deep_dive.deep_dive_meeting`.
-
-    Imports of the heavy retrieval module are deferred so simply *loading*
-    the registry (e.g. for schema introspection) doesn't spin up
-    chromadb/transformers.
-    """
-    meeting_id = (args.get("meeting_id") or "").strip()
-    focus_query = (args.get("focus_query") or "").strip()
-    mode = (args.get("mode") or "rerank").lower()
-
-    if not meeting_id:
-        return _validation_error(
-            "missing_meeting_id", kind="analysis", source="deep_dive",
-        )
-    if not focus_query:
-        return _validation_error(
-            "missing_focus_query", kind="analysis", source="deep_dive",
-            meeting_id=meeting_id,
-        )
-    if mode not in ("rerank", "full"):
-        return _validation_error(
-            "invalid_mode", kind="analysis", source="deep_dive",
-            meeting_id=meeting_id, mode=mode,
-        )
-
-    try:
-        from retrieval.deep_dive import deep_dive_meeting as _dd
-        envelope = _dd(meeting_id=meeting_id, query=focus_query, mode=mode)
-    except Exception as exc:
-        return ToolEnvelope(
-            summary="",
-            full="",
-            metadata={"kind": "error", "source": "deep_dive", "count": 0,
-                      "exception": str(exc),
-                      "traceback": traceback.format_exc()},
-            provenance={"meeting_id": meeting_id, "mode": mode},
-            error="deep_dive_failed",
-        )
-
-    if not isinstance(envelope, ToolEnvelope):
-        return ToolEnvelope(
-            summary="",
-            full=json.dumps(envelope, ensure_ascii=False, default=str)
-                 if envelope is not None else "",
-            metadata={"kind": "analysis", "source": "deep_dive", "count": 0},
-            provenance={"meeting_id": meeting_id, "mode": mode},
-            error="deep_dive_returned_non_envelope",
-        )
-    return envelope
+    return adapt_get_recent_votes(top_n=top_k, knesset_num=knesset_num)
 
 
 # ---------------------------------------------------------------------------
@@ -1229,19 +710,19 @@ def _quote_match(text: str) -> str:
     return " ".join(f'"{_safe_match(tok)}"' for tok in tokens if _safe_match(tok))
 
 
-def _expand_match(text: str, db_path) -> str:
+def _expand_match(text: str, fts_table: str) -> str:
     """Build an FTS5 MATCH expression with query-side ktiv male/haser expansion.
 
     Each whitespace token becomes an OR-slot of its corpus spelling variants
-    (``("בטחון" OR "ביטחון")``) so a query in one ktiv spelling matches speeches
-    written in the other. Slots are AND-ed (space) exactly as ``_quote_match``.
-    Falls back to the bare token when it has no extra variants.
+    (``("בטחון" OR "ביטחון")``) so a query in one ktiv spelling matches text
+    written in the other. Slots are AND-ed. Falls back to the bare token when
+    it has no extra variants.
     """
     slots: list[str] = []
     for tok in text.split():
         if not tok.strip():
             continue
-        safe = [s for s in (_safe_match(v) for v in expand_token(tok, db_path)) if s]
+        safe = [s for s in (_safe_match(v) for v in expand_token(tok, store.db_path(), fts_table)) if s]
         # de-dup while preserving order (safe_match can collapse two variants)
         seen: list[str] = []
         for s in safe:
@@ -1259,35 +740,17 @@ def _expand_match(text: str, db_path) -> str:
     return " AND ".join(slots)
 
 
-# Suppress unused-import warnings — these are part of the public dispatch
-# path even if some IDEs don't resolve indirect uses.
-_ = (get_bill_details, get_session_transcript, _resolve_bill_by_name)
-
-
 __all__ = [
     "ToolSpec",
     "ToolRegistry",
     "dispatch",
-    # search
-    "handle_search_topics",
-    "handle_search_protocols_keyword",
-    "search_speeches_bm25",
-    # find
+    "search_speeches",
+    "handle_query_protocols",
+    "handle_get_meeting_attendance",
     "handle_find_mk",
     "handle_find_committee",
-    "handle_find_bill",
-    "handle_find_vote",
     "handle_find_party",
-    # fetch
-    "handle_get_mk_profile",
-    "handle_get_mk_committees",
-    "handle_get_committee_members",
-    "handle_get_committee_sessions",
-    "handle_get_bill_details",
-    "handle_get_bill_text",
-    "handle_get_meeting_summary",
-    # votes
-    "handle_query_voting_records",
-    # deep
-    "handle_deep_dive_meeting",
+    "handle_query_bills",
+    "handle_get_bill",
+    "handle_query_votes",
 ]

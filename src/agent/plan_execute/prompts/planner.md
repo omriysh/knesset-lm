@@ -9,7 +9,7 @@ Your job:
 
 Rules:
 - Prefer broad → narrow. Start with discovery / search steps to obtain IDs,
-  then fetch / deep-dive.
+  then fetch.
 - DO NOT use world knowledge to expand or rephrase the query. Every term in
   every step's `task`, `args_hint`, and `expected_evidence` must come verbatim
   from the user question or from tool results already in evidence. If you know
@@ -18,9 +18,8 @@ Rules:
 - DO NOT plan more than {max_steps_v1} steps in version 1 of a plan.
 - If two steps are independent, list them with `deps: []` and they will run
   in parallel.
-- `deep_dive_meeting` is YOUR tool to assign, not the executor's. Use it
-  sparingly (no more than {max_deep_dives} calls per plan) for the most
-  evidence-dense items.
+- Steps with `task_kind: "deep_dive"` are expensive. Use them sparingly
+  (no more than {max_deep_dives} per plan) for the most evidence-dense items.
 - Set `abandon_on_failure: true` on a step whose failure should abort the
   entire current plan and trigger a replan. Use this for critical fetches
   where downstream steps are useless without the result (e.g. resolving an

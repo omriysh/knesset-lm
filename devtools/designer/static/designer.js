@@ -480,15 +480,6 @@ function openNodePanel(nodeId) {
       </div>
     </div>`;
     html += `<div class="field">
-      <label>RAG / Query System</label>
-      <select id="pf-rag">
-        <option value="">None</option>
-        <option value="3level" ${d.rag === '3level' ? 'selected' : ''}>3-Level RAG</option>
-        <option value="custom" ${d.rag === 'custom' ? 'selected' : ''}>Custom</option>
-      </select>
-      <div class="hint">Optional retrieval system attached to this LLM call</div>
-    </div>`;
-    html += `<div class="field">
       <label>Output Format (JSON)</label>
       <textarea id="pf-output-format" rows="8" style="font-family:monospace;font-size:.75rem;direction:ltr;text-align:left;min-height:140px"
         placeholder='{\n  "type": "labeled_fields",\n  "fields": [\n    {"label": "...", "var": "...", "required": true}\n  ]\n}'>${esc(d.output_format ? JSON.stringify(d.output_format, null, 2) : '')}</textarea>
@@ -497,7 +488,7 @@ function openNodePanel(nodeId) {
     html += `<div class="field">
       <label>Input Template</label>
       <textarea id="pf-template" rows="5" style="font-family:monospace;font-size:.78rem;direction:ltr;text-align:left"
-        placeholder="Use {{var}} for context variables, e.g. {{question_for_rag}}, {{rag_context}}, {{sub_agent_outputs}}">${esc(d.input_template || '')}</textarea>
+        placeholder="Use {{var}} for context variables, e.g. {{question_for_rag}}, {{sub_agent_outputs}}">${esc(d.input_template || '')}</textarea>
       <div class="hint">Leave empty to use ctx["question"] as-is.</div>
     </div>`;
     html += `<div class="field">
@@ -653,7 +644,6 @@ function applyNodePanel(nodeId) {
     mNode.data.model          = document.getElementById('pf-model')?.value || '';
     mNode.data.temperature    = parseFloat(document.getElementById('pf-temp')?.value) || 0.7;
     mNode.data.max_tokens     = parseInt(document.getElementById('pf-maxtok')?.value) || 16384;
-    mNode.data.rag            = document.getElementById('pf-rag')?.value || '';
     mNode.data.input_template = document.getElementById('pf-template')?.value || '';
     mNode.data.stage          = document.getElementById('pf-stage')?.value || '';
     mNode.data.notes          = document.getElementById('pf-notes')?.value || '';

@@ -29,11 +29,9 @@ export function renderUserInputPanel(data) {
   } else if (ui === 'text_input') {
     renderTextInput(data, outputVar);
   } else if (ui === 'deep_dive') {
-    const meetings = data.meetings || [];
-    window.openProtocolBrowser(
+    window.openProtocolBrowserWithSearch(
       state.sessionId,
-      meetings[0]?.meeting_id || null,
-      meetings,
+      { query: '' },
       {
         originalQuestion: data.original_question || data.query || state.lastQuestion || '',
         postCompletion:   false,

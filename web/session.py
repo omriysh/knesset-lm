@@ -30,7 +30,7 @@ class ResearchSession:
     machine_checkpoint: dict | None = None  # checkpoint dict from runner
     final_answer: str | None = None
     error: str | None = None
-    workspace_data: dict | None = None  # {meeting_paths, selected_chunks}
+    workspace_data: dict | None = None  # {selected_chunks}
     event_log: list | None = None       # selective SSE event log for reconnect replay
 
 

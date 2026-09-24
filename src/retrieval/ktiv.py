@@ -19,7 +19,7 @@ variants — no candidate explosion, no invented tokens.
 Usage
 -----
     from retrieval.ktiv import expand_token
-    expand_token("בטחון", speeches_db_path)   # -> ["בטחון", "ביטחון", ...]
+    expand_token("בטחון", config.KNESSET_DB, "speeches_fts")   # -> ["בטחון", "ביטחון", ...]
 """
 
 from __future__ import annotations
@@ -54,18 +54,18 @@ def skeleton(token: str) -> str:
     return token[0] + "".join(ch for ch in token[1:] if ch not in _MATER)
 
 
-def _load_vocab(db_path: Path) -> list[tuple[str, int]]:
-    """Return ``(term, doc_freq)`` for every indexed term via fts5vocab."""
+def _load_vocab(db_path: Path, fts_table: str) -> list[tuple[str, int]]:
+    """Return ``(term, doc_freq)`` for every term indexed in fts_table via fts5vocab."""
     try:
         con = sqlite3.connect(str(db_path))
     except Exception as exc:
         print(f"[ktiv] cannot open {db_path}: {exc}")
         return []
     try:
-        # 3-arg form: the vocab table lives in `temp` but its source `entries`
-        # table is in `main`, so the source schema must be named explicitly.
+        # 3-arg form: the vocab table lives in `temp` but its source table is
+        # in `main`, so the source schema must be named explicitly.
         con.execute(
-            "CREATE VIRTUAL TABLE temp.ktiv_vocab USING fts5vocab('main', 'entries', 'row')"
+            f"CREATE VIRTUAL TABLE temp.ktiv_vocab USING fts5vocab('main', '{fts_table}', 'row')"
         )
         return list(con.execute("SELECT term, doc FROM temp.ktiv_vocab"))
     except Exception as exc:
@@ -75,14 +75,14 @@ def _load_vocab(db_path: Path) -> list[tuple[str, int]]:
         con.close()
 
 
-def _buckets(db_path: Path) -> dict[str, list[tuple[str, int]]]:
+def _buckets(db_path: Path, fts_table: str) -> dict[str, list[tuple[str, int]]]:
     """Skeleton -> ``[(token, doc_freq), ...]`` for an index, built once + cached."""
-    key = str(db_path)
+    key = f"{db_path}:{fts_table}"
     cached = _bucket_cache.get(key)
     if cached is not None:
         return cached
     buckets: dict[str, list[tuple[str, int]]] = {}
-    for term, doc in _load_vocab(db_path):
+    for term, doc in _load_vocab(db_path, fts_table):
         if len(term) < _MIN_TOKEN_LEN or not _HEB_RE.search(term):
             continue
         buckets.setdefault(skeleton(term), []).append((term, doc))
@@ -90,7 +90,7 @@ def _buckets(db_path: Path) -> dict[str, list[tuple[str, int]]]:
     return buckets
 
 
-def expand_token(token: str, db_path: Path) -> list[str]:
+def expand_token(token: str, db_path: Path, fts_table: str) -> list[str]:
     """Return corpus spelling-variants of *token* (the original always first).
 
     Only Hebrew tokens of length >= _MIN_TOKEN_LEN are expanded; everything
@@ -103,7 +103,7 @@ def expand_token(token: str, db_path: Path) -> list[str]:
     """
     if len(token) < _MIN_TOKEN_LEN or not _HEB_RE.search(token):
         return [token]
-    bucket = _buckets(db_path).get(skeleton(token))
+    bucket = _buckets(db_path, fts_table).get(skeleton(token))
     if not bucket:
         return [token]
     bucket_max = max(doc for _, doc in bucket)

@@ -1,0 +1,2130 @@
+{
+ "meta": {
+  "bill_with_pdf": 2209870,
+  "bill_query": "חינוך",
+  "missing_bill_id": 999999999,
+  "vote_topic": "תקציב",
+  "vote_mk": {
+   "mk_id": "90",
+   "name": "בנימין נתניהו",
+   "last_name": "נתניהו",
+   "first_name": "בנימין"
+  },
+  "recorded_at": "2026-09-24T10:44:26.112164"
+ },
+ "exchanges": [
+  {
+   "url": "https://knesset.gov.il/OdataV4/ParliamentInfo/KNS_Bill",
+   "params": {
+    "$filter": "contains(Name,'חינוך') and KnessetNum eq 25",
+    "$expand": "KNS_Status,KNS_BillInitiator($expand=KNS_Person)",
+    "$top": 10,
+    "$orderby": "LastUpdatedDate desc"
+   },
+   "status": 200,
+   "content_type": "application/json; odata.metadata=minimal; odata.streaming=true; charset=utf-8",
+   "json": {
+    "@odata.context": "https://knesset.gov.il/OdataV4/ParliamentInfo/$metadata#KNS_Bill(KNS_Status(),KNS_BillInitiator(KNS_Person()))",
+    "value": [
+     {
+      "Id": 2209870,
+      "KnessetNum": 25,
+      "Name": "הצעת חוק שוברים להשלמת לימודי בסיס בחינוך הבלתי פורמלי, התשפ\"ד-2023",
+      "TypeID": 2,
+      "TypeDesc": "הצעת חוק",
+      "SubTypeID": 54,
+      "SubTypeDesc": "פרטית",
+      "PrivateNumber": 3997,
+      "CommitteeID": -1,
+      "StatusID": 177,
+      "Number": null,
+      "PostponementReasonID": 3012,
+      "PostponementReasonDesc": "חה\"כ המציע התפטר",
+      "PublicationDate": null,
+      "PublicationSeriesID": null,
+      "PublicationSeriesDesc": null,
+      "PublicationSeriesFirstCallID": null,
+      "PublicationSeriesFirstCallDesc": null,
+      "MagazineNumber": null,
+      "PageNumber": null,
+      "IsContinuationBill": null,
+      "SummaryLaw": null,
+      "LastUpdatedDate": "2026-08-16T14:27:46.763+03:00",
+      "KNS_Status": {
+       "Id": 177,
+       "Desc": "נעצרה",
+       "TypeID": 2,
+       "TypeDesc": "הצעת חוק",
+       "OrderTransition": null,
+       "IsActive": null,
+       "LastUpdatedDate": "2013-10-06T14:08:19.8+03:00"
+      },
+      "KNS_BillInitiator": [
+       {
+        "Id": 216173,
+        "BillID": 2209870,
+        "PersonID": 30839,
+        "IsInitiator": true,
+        "Ordinal": 1,
+        "LastUpdatedDate": "2023-08-06T09:28:49.077+03:00",
+        "KNS_Person": {
+         "Id": 30839,
+         "LastName": "אילוז",
+         "FirstName": "דן",
+         "GenderID": 251,
+         "GenderDesc": "זכר",
+         "Email": null,
+         "IsCurrent": false,
+         "LastUpdatedDate": "2023-01-05T13:44:30.33+02:00"
+        }
+       }
+      ]
+     },
+     {
+      "Id": 2196714,
+      "KnessetNum": 25,
+      "Name": "הצעת חוק העסקת עובדי חינוך בגני ילדים באמצעות חוזה אישי (תיקוני חקיקה), התשפ\"ג-2022",
+      "TypeID": 2,
+      "TypeDesc": "הצעת חוק",
+      "SubTypeID": 54,
+      "SubTypeDesc": "פרטית",
+      "PrivateNumber": 771,
+      "CommitteeID": -1,
+      "StatusID": 177,
+      "Number": null,
+      "PostponementReasonID": 3012,
+      "PostponementReasonDesc": "חה\"כ המציע התפטר",
+      "PublicationDate": null,
+      "PublicationSeriesID": null,
+      "PublicationSeriesDesc": null,
+      "PublicationSeriesFirstCallID": null,
+      "PublicationSeriesFirstCallDesc": null,
+      "MagazineNumber": null,
+      "PageNumber": null,
+      "IsContinuationBill": null,
+      "SummaryLaw": null,
+      "LastUpdatedDate": "2026-08-16T14:27:22.09+03:00",
+      "KNS_Status": {
+       "Id": 177,
+       "Desc": "נעצרה",
+       "TypeID": 2,
+       "TypeDesc": "הצעת חוק",
+       "OrderTransition": null,
+       "IsActive": null,
+       "LastUpdatedDate": "2013-10-06T14:08:19.8+03:00"
+      },
+      "KNS_BillInitiator": [
+       {
+        "Id": 203432,
+        "BillID": 2196714,
+        "PersonID": 30839,
+        "IsInitiator": true,
+        "Ordinal": 1,
+        "LastUpdatedDate": "2024-11-13T14:35:35.803+02:00",
+        "KNS_Person": {
+         "Id": 30839,
+         "LastName": "אילוז",
+         "FirstName": "דן",
+         "GenderID": 251,
+         "GenderDesc": "זכר",
+         "Email": null,
+         "IsCurrent": false,
+         "LastUpdatedDate": "2023-01-05T13:44:30.33+02:00"
+        }
+       }
+      ]
+     },
+     {
+      "Id": 2225048,
+      "KnessetNum": 25,
+      "Name": "הצעת חוק חינוך ממלכתי (תיקון - חינוך פיננסי), התשפ\"ה-2024",
+      "TypeID": 2,
+      "TypeDesc": "הצעת חוק",
+      "SubTypeID": 54,
+      "SubTypeDesc": "פרטית",
+      "PrivateNumber": 5177,
+      "CommitteeID": -1,
+      "StatusID": 177,
+      "Number": null,
+      "PostponementReasonID": 3012,
+      "PostponementReasonDesc": "חה\"כ המציע התפטר",
+      "PublicationDate": null,
+      "PublicationSeriesID": null,
+      "PublicationSeriesDesc": null,
+      "PublicationSeriesFirstCallID": null,
+      "PublicationSeriesFirstCallDesc": null,
+      "MagazineNumber": null,
+      "PageNumber": null,
+      "IsContinuationBill": null,
+      "SummaryLaw": null,
+      "LastUpdatedDate": "2026-07-28T10:50:51.323+03:00",
+      "KNS_Status": {
+       "Id": 177,
+       "Desc": "נעצרה",
+       "TypeID": 2,
+       "TypeDesc": "הצעת חוק",
+       "OrderTransition": null,
+       "IsActive": null,
+       "LastUpdatedDate": "2013-10-06T14:08:19.8+03:00"
+      },
+      "KNS_BillInitiator": [
+       {
+        "Id": 223271,
+        "BillID": 2225048,
+        "PersonID": 30780,
+        "IsInitiator": true,
+        "Ordinal": 1,
+        "LastUpdatedDate": "2024-12-05T13:24:59.167+02:00",
+        "KNS_Person": {
+         "Id": 30780,
+         "LastName": "כץ",
+         "FirstName": "רון",
+         "GenderID": 251,
+         "GenderDesc": "זכר",
+         "Email": null,
+         "IsCurrent": false,
+         "LastUpdatedDate": "2022-11-10T11:19:09.793+02:00"
+        }
+       }
+      ]
+     },
+     {
+      "Id": 2201419,
+      "KnessetNum": 25,
+      "Name": "הצעת חוק לימוד חובה (תיקון - חינוך חינם לגיל הרך), התשפ\"ג-2023",
+      "TypeID": 2,
+      "TypeDesc": "הצעת חוק",
+      "SubTypeID": 54,
+      "SubTypeDesc": "פרטית",
+      "PrivateNumber": 2485,
+      "CommitteeID": -1,
+      "StatusID": 177,
+      "Number": null,
+      "PostponementReasonID": 3012,
+      "PostponementReasonDesc": "חה\"כ המציע התפטר",
+      "PublicationDate": null,
+      "PublicationSeriesID": null,
+      "PublicationSeriesDesc": null,
+      "PublicationSeriesFirstCallID": null,
+      "PublicationSeriesFirstCallDesc": null,
+      "MagazineNumber": null,
+      "PageNumber": null,
+      "IsContinuationBill": null,
+      "SummaryLaw": null,
+      "LastUpdatedDate": "2026-07-28T10:50:34.867+03:00",
+      "KNS_Status": {
+       "Id": 177,
+       "Desc": "נעצרה",
+       "TypeID": 2,
+       "TypeDesc": "הצעת חוק",
+       "OrderTransition": null,
+       "IsActive": null,
+       "LastUpdatedDate": "2013-10-06T14:08:19.8+03:00"
+      },
+      "KNS_BillInitiator": [
+       {
+        "Id": 211143,
+        "BillID": 2201419,
+        "PersonID": 30780,
+        "IsInitiator": true,
+        "Ordinal": 1,
+        "LastUpdatedDate": "2023-02-08T19:22:21.823+02:00",
+        "KNS_Person": {
+         "Id": 30780,
+         "LastName": "כץ",
+         "FirstName": "רון",
+         "GenderID": 251,
+         "GenderDesc": "זכר",
+         "Email": null,
+         "IsCurrent": false,
+         "LastUpdatedDate": "2022-11-10T11:19:09.793+02:00"
+        }
+       }
+      ]
+     },
+     {
+      "Id": 2200308,
+      "KnessetNum": 25,
+      "Name": "הצעת חוק הפיקוח על מעונות יום לפעוטות (תיקון - העברת האחריות למשרד החינוך), התשפ\"ג-2023",
+      "TypeID": 2,
+      "TypeDesc": "הצעת חוק",
+      "SubTypeID": 54,
+      "SubTypeDesc": "פרטית",
+      "PrivateNumber": 2724,
+      "CommitteeID": -1,
+      "StatusID": 177,
+      "Number": null,
+      "PostponementReasonID": 3012,
+      "PostponementReasonDesc": "חה\"כ המציע התפטר",
+      "PublicationDate": null,
+      "PublicationSeriesID": null,
+      "PublicationSeriesDesc": null,
+      "PublicationSeriesFirstCallID": null,
+      "PublicationSeriesFirstCallDesc": null,
+      "MagazineNumber": null,
+      "PageNumber": null,
+      "IsContinuationBill": null,
+      "SummaryLaw": null,
+      "LastUpdatedDate": "2026-07-28T10:50:34.477+03:00",
+      "KNS_Status": {
+       "Id": 177,
+       "Desc": "נעצרה",
+       "TypeID": 2,
+       "TypeDesc": "הצעת חוק",
+       "OrderTransition": null,
+       "IsActive": null,
+       "LastUpdatedDate": "2013-10-06T14:08:19.8+03:00"
+      },
+      "KNS_BillInitiator": [
+       {
+        "Id": 212015,
+        "BillID": 2200308,
+        "PersonID": 30780,
+        "IsInitiator": true,
+        "Ordinal": 1,
+        "LastUpdatedDate": "2023-02-28T13:25:02.337+02:00",
+        "KNS_Person": {
+         "Id": 30780,
+         "LastName": "כץ",
+         "FirstName": "רון",
+         "GenderID": 251,
+         "GenderDesc": "זכר",
+         "Email": null,
+         "IsCurrent": false,
+         "LastUpdatedDate": "2022-11-10T11:19:09.793+02:00"
+        }
+       }
+      ]
+     },
+     {
+      "Id": 2196105,
+      "KnessetNum": 25,
+      "Name": "הצעת חוק סייעות במוסדות חינוך, התשפ\"ג-2022",
+      "TypeID": 2,
+      "TypeDesc": "הצעת חוק",
+      "SubTypeID": 54,
+      "SubTypeDesc": "פרטית",
+      "PrivateNumber": 68,
+      "CommitteeID": -1,
+      "StatusID": 177,
+      "Number": null,
+      "PostponementReasonID": 3012,
+      "PostponementReasonDesc": "חה\"כ המציע התפטר",
+      "PublicationDate": null,
+      "PublicationSeriesID": null,
+      "PublicationSeriesDesc": null,
+      "PublicationSeriesFirstCallID": null,
+      "PublicationSeriesFirstCallDesc": null,
+      "MagazineNumber": null,
+      "PageNumber": null,
+      "IsContinuationBill": null,
+      "SummaryLaw": null,
+      "LastUpdatedDate": "2026-07-28T10:50:33.4+03:00",
+      "KNS_Status": {
+       "Id": 177,
+       "Desc": "נעצרה",
+       "TypeID": 2,
+       "TypeDesc": "הצעת חוק",
+       "OrderTransition": null,
+       "IsActive": null,
+       "LastUpdatedDate": "2013-10-06T14:08:19.8+03:00"
+      },
+      "KNS_BillInitiator": [
+       {
+        "Id": 202413,
+        "BillID": 2196105,
+        "PersonID": 30780,
+        "IsInitiator": true,
+        "Ordinal": 1,
+        "LastUpdatedDate": "2022-11-15T17:22:19.81+02:00",
+        "KNS_Person": {
+         "Id": 30780,
+         "LastName": "כץ",
+         "FirstName": "רון",
+         "GenderID": 251,
+         "GenderDesc": "זכר",
+         "Email": null,
+         "IsCurrent": false,
+         "LastUpdatedDate": "2022-11-10T11:19:09.793+02:00"
+        }
+       }
+      ]
+     },
+     {
+      "Id": 2196095,
+      "KnessetNum": 25,
+      "Name": "הצעת חוק החזקת תכשיר אפינפרין במוסדות חינוך ובמקומות ציבוריים (תיקון - החזקת תכשיר אפינפרין בבית אוכל), התשפ\"ג-2022",
+      "TypeID": 2,
+      "TypeDesc": "הצעת חוק",
+      "SubTypeID": 54,
+      "SubTypeDesc": "פרטית",
+      "PrivateNumber": 62,
+      "CommitteeID": -1,
+      "StatusID": 177,
+      "Number": null,
+      "PostponementReasonID": 3012,
+      "PostponementReasonDesc": "חה\"כ המציע התפטר",
+      "PublicationDate": null,
+      "PublicationSeriesID": null,
+      "PublicationSeriesDesc": null,
+      "PublicationSeriesFirstCallID": null,
+      "PublicationSeriesFirstCallDesc": null,
+      "MagazineNumber": null,
+      "PageNumber": null,
+      "IsContinuationBill": null,
+      "SummaryLaw": null,
+      "LastUpdatedDate": "2026-07-28T10:50:32.663+03:00",
+      "KNS_Status": {
+       "Id": 177,
+       "Desc": "נעצרה",
+       "TypeID": 2,
+       "TypeDesc": "הצעת חוק",
+       "OrderTransition": null,
+       "IsActive": null,
+       "LastUpdatedDate": "2013-10-06T14:08:19.8+03:00"
+      },
+      "KNS_BillInitiator": [
+       {
+        "Id": 202401,
+        "BillID": 2196095,
+        "PersonID": 30780,
+        "IsInitiator": true,
+        "Ordinal": 1,
+        "LastUpdatedDate": "2022-11-15T17:19:57.347+02:00",
+        "KNS_Person": {
+         "Id": 30780,
+         "LastName": "כץ",
+         "FirstName": "רון",
+         "GenderID": 251,
+         "GenderDesc": "זכר",
+         "Email": null,
+         "IsCurrent": false,
+         "LastUpdatedDate": "2022-11-10T11:19:09.793+02:00"
+        }
+       }
+      ]
+     },
+     {
+      "Id": 2241473,
+      "KnessetNum": 25,
+      "Name": "הצעת חוק לימוד חובה (תיקון - מנהל מוסד חינוך), התשפ\"ו-2026",
+      "TypeID": 2,
+      "TypeDesc": "הצעת חוק",
+      "SubTypeID": 54,
+      "SubTypeDesc": "פרטית",
+      "PrivateNumber": 6621,
+      "CommitteeID": -1,
+      "StatusID": 177,
+      "Number": null,
+      "PostponementReasonID": 3013,
+      "PostponementReasonDesc": "חה\"כ המציע מונה לתפקיד בממשלה",
+      "PublicationDate": null,
+      "PublicationSeriesID": null,
+      "PublicationSeriesDesc": null,
+      "PublicationSeriesFirstCallID": null,
+      "PublicationSeriesFirstCallDesc": null,
+      "MagazineNumber": null,
+      "PageNumber": null,
+      "IsContinuationBill": null,
+      "SummaryLaw": null,
+      "LastUpdatedDate": "2026-07-26T11:09:35.847+03:00",
+      "KNS_Status": {
+       "Id": 177,
+       "Desc": "נעצרה",
+       "TypeID": 2,
+       "TypeDesc": "הצעת חוק",
+       "OrderTransition": null,
+       "IsActive": null,
+       "LastUpdatedDate": "2013-10-06T14:08:19.8+03:00"
+      },
+      "KNS_BillInitiator": [
+       {
+        "Id": 229345,
+        "BillID": 2241473,
+        "PersonID": 30799,
+        "IsInitiator": true,
+        "Ordinal": 1,
+        "LastUpdatedDate": "2026-03-09T14:35:42.207+02:00",
+        "KNS_Person": {
+         "Id": 30799,
+         "LastName": "בוסקילה",
+         "FirstName": "מישל",
+         "GenderID": 251,
+         "GenderDesc": "זכר",
+         "Email": "mbuskila@knesset.gov.il",
+         "IsCurrent": true,
+         "LastUpdatedDate": "2022-11-06T18:55:42.65+02:00"
+        }
+       }
+      ]
+     },
+     {
+      "Id": 2199527,
+      "KnessetNum": 25,
+      "Name": "הצעת חוק לימוד חובה (תיקון - חינוך חינם לפעוטות ולילדים), התשפ\"ג-2023",
+      "TypeID": 2,
+      "TypeDesc": "הצעת חוק",
+      "SubTypeID": 54,
+      "SubTypeDesc": "פרטית",
+      "PrivateNumber": 2189,
+      "CommitteeID": -1,
+      "StatusID": 177,
+      "Number": null,
+      "PostponementReasonID": 3013,
+      "PostponementReasonDesc": "חה\"כ המציע מונה לתפקיד בממשלה",
+      "PublicationDate": null,
+      "PublicationSeriesID": null,
+      "PublicationSeriesDesc": null,
+      "PublicationSeriesFirstCallID": null,
+      "PublicationSeriesFirstCallDesc": null,
+      "MagazineNumber": null,
+      "PageNumber": null,
+      "IsContinuationBill": null,
+      "SummaryLaw": null,
+      "LastUpdatedDate": "2026-07-26T11:09:19.653+03:00",
+      "KNS_Status": {
+       "Id": 177,
+       "Desc": "נעצרה",
+       "TypeID": 2,
+       "TypeDesc": "הצעת חוק",
+       "OrderTransition": null,
+       "IsActive": null,
+       "LastUpdatedDate": "2013-10-06T14:08:19.8+03:00"
+      },
+      "KNS_BillInitiator": [
+       {
+        "Id": 209256,
+        "BillID": 2199527,
+        "PersonID": 30799,
+        "IsInitiator": true,
+        "Ordinal": 1,
+        "LastUpdatedDate": "2024-11-13T17:50:59.103+02:00",
+        "KNS_Person": {
+         "Id": 30799,
+         "LastName": "בוסקילה",
+         "FirstName": "מישל",
+         "GenderID": 251,
+         "GenderDesc": "זכר",
+         "Email": "mbuskila@knesset.gov.il",
+         "IsCurrent": true,
+         "LastUpdatedDate": "2022-11-06T18:55:42.65+02:00"
+        }
+       }
+      ]
+     },
+     {
+      "Id": 2196864,
+      "KnessetNum": 25,
+      "Name": "הצעת חוק חינוך ממלכתי (תיקון - איסור תמיכה בטרור), התשפ\"ג-2023",
+      "TypeID": 2,
+      "TypeDesc": "הצעת חוק",
+      "SubTypeID": 54,
+      "SubTypeDesc": "פרטית",
+      "PrivateNumber": 1179,
+      "CommitteeID": -1,
+      "StatusID": 177,
+      "Number": null,
+      "PostponementReasonID": 3013,
+      "PostponementReasonDesc": "חה\"כ המציע מונה לתפקיד בממשלה",
+      "PublicationDate": null,
+      "PublicationSeriesID": null,
+      "PublicationSeriesDesc": null,
+      "PublicationSeriesFirstCallID": null,
+      "PublicationSeriesFirstCallDesc": null,
+      "MagazineNumber": null,
+      "PageNumber": null,
+      "IsContinuationBill": null,
+      "SummaryLaw": null,
+      "LastUpdatedDate": "2026-07-26T11:09:01.997+03:00",
+      "KNS_Status": {
+       "Id": 177,
+       "Desc": "נעצרה",
+       "TypeID": 2,
+       "TypeDesc": "הצעת חוק",
+       "OrderTransition": null,
+       "IsActive": null,
+       "LastUpdatedDate": "2013-10-06T14:08:19.8+03:00"
+      },
+      "KNS_BillInitiator": [
+       {
+        "Id": 203601,
+        "BillID": 2196864,
+        "PersonID": 30799,
+        "IsInitiator": true,
+        "Ordinal": 1,
+        "LastUpdatedDate": "2024-11-13T14:36:56.34+02:00",
+        "KNS_Person": {
+         "Id": 30799,
+         "LastName": "בוסקילה",
+         "FirstName": "מישל",
+         "GenderID": 251,
+         "GenderDesc": "זכר",
+         "Email": "mbuskila@knesset.gov.il",
+         "IsCurrent": true,
+         "LastUpdatedDate": "2022-11-06T18:55:42.65+02:00"
+        }
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "url": "https://knesset.gov.il/OdataV4/ParliamentInfo/KNS_DocumentBill",
+   "params": {
+    "$filter": "BillID eq 2209870",
+    "$top": 20
+   },
+   "status": 200,
+   "content_type": "application/json; odata.metadata=minimal; odata.streaming=true; charset=utf-8",
+   "json": {
+    "@odata.context": "https://knesset.gov.il/OdataV4/ParliamentInfo/$metadata#KNS_DocumentBill",
+    "value": [
+     {
+      "Id": 3414599,
+      "BillID": 2209870,
+      "GroupTypeID": 1,
+      "GroupTypeDesc": "הצעת חוק לדיון מוקדם",
+      "ApplicationID": 1,
+      "ApplicationDesc": "DOC",
+      "FilePath": "https://fs.knesset.gov.il/25\\law\\25_lst_3414599.docx",
+      "LastUpdatedDate": "2023-10-16T16:00:31.54+03:00"
+     },
+     {
+      "Id": 4295186,
+      "BillID": 2209870,
+      "GroupTypeID": 1,
+      "GroupTypeDesc": "הצעת חוק לדיון מוקדם",
+      "ApplicationID": 4,
+      "ApplicationDesc": "PDF",
+      "FilePath": "https://fs.knesset.gov.il/25\\law\\25_lst_3414599.pdf",
+      "LastUpdatedDate": "2023-10-16T16:00:31.54+03:00"
+     }
+    ]
+   }
+  },
+  {
+   "url": "https://knesset.gov.il/OdataV4/ParliamentInfo/KNS_Bill(2209870)?$expand=KNS_Status",
+   "params": {},
+   "status": 200,
+   "content_type": "application/json; odata.metadata=minimal; odata.streaming=true; charset=utf-8",
+   "json": {
+    "@odata.context": "https://knesset.gov.il/OdataV4/ParliamentInfo/$metadata#KNS_Bill(KNS_Status())/$entity",
+    "Id": 2209870,
+    "KnessetNum": 25,
+    "Name": "הצעת חוק שוברים להשלמת לימודי בסיס בחינוך הבלתי פורמלי, התשפ\"ד-2023",
+    "TypeID": 2,
+    "TypeDesc": "הצעת חוק",
+    "SubTypeID": 54,
+    "SubTypeDesc": "פרטית",
+    "PrivateNumber": 3997,
+    "CommitteeID": -1,
+    "StatusID": 177,
+    "Number": null,
+    "PostponementReasonID": 3012,
+    "PostponementReasonDesc": "חה\"כ המציע התפטר",
+    "PublicationDate": null,
+    "PublicationSeriesID": null,
+    "PublicationSeriesDesc": null,
+    "PublicationSeriesFirstCallID": null,
+    "PublicationSeriesFirstCallDesc": null,
+    "MagazineNumber": null,
+    "PageNumber": null,
+    "IsContinuationBill": null,
+    "SummaryLaw": null,
+    "LastUpdatedDate": "2026-08-16T14:27:46.763+03:00",
+    "KNS_Status": null
+   }
+  },
+  {
+   "url": "https://knesset.gov.il/OdataV4/ParliamentInfo/KNS_BillInitiator",
+   "params": {
+    "$filter": "BillID eq 2209870",
+    "$expand": "KNS_Person",
+    "$top": 20
+   },
+   "status": 200,
+   "content_type": "application/json; odata.metadata=minimal; odata.streaming=true; charset=utf-8",
+   "json": {
+    "@odata.context": "https://knesset.gov.il/OdataV4/ParliamentInfo/$metadata#KNS_BillInitiator(KNS_Person())",
+    "value": [
+     {
+      "Id": 216173,
+      "BillID": 2209870,
+      "PersonID": 30839,
+      "IsInitiator": true,
+      "Ordinal": 1,
+      "LastUpdatedDate": "2023-08-06T09:28:49.077+03:00",
+      "KNS_Person": {
+       "Id": 30839,
+       "LastName": "אילוז",
+       "FirstName": "דן",
+       "GenderID": 251,
+       "GenderDesc": "זכר",
+       "Email": null,
+       "IsCurrent": false,
+       "LastUpdatedDate": "2023-01-05T13:44:30.33+02:00"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "url": "https://fs.knesset.gov.il/25/law/25_lst_3414599.pdf",
+   "params": {},
+   "status": 200,
+   "content_type": "application/pdf",
+   "json": null,
+   "content_len": 35357
+  },
+  {
+   "url": "https://knesset.gov.il/OdataV4/ParliamentInfo/KNS_Bill(999999999)?$expand=KNS_Status",
+   "params": {},
+   "status": 404,
+   "content_type": null,
+   "json": null,
+   "content_len": 0
+  },
+  {
+   "url": "https://backend.oknesset.org/members",
+   "params": {
+    "is_current": "true"
+   },
+   "status": 200,
+   "content_type": "application/json",
+   "json": [
+    {
+     "mk_individual_id": 90,
+     "mk_individual_first_name": "בנימין",
+     "mk_individual_name": "נתניהו",
+     "PersonID": 965,
+     "GenderID": 251,
+     "GenderDesc": "זכר",
+     "IsCurrent": true,
+     "mk_individual_email": "bnetanyahu@knesset.gov.il",
+     "altnames": [
+      "בינימין נתניהו",
+      "בנימין נתניהו"
+     ],
+     "committee_positions": [
+      null
+     ],
+     "factions": [
+      null
+     ],
+     "faction_chairpersons": [
+      null
+     ],
+     "govministries": [
+      null
+     ]
+    },
+    {
+     "mk_individual_id": 1,
+     "mk_individual_first_name": "יולי יואל",
+     "mk_individual_name": "אדלשטיין",
+     "PersonID": 532,
+     "GenderID": 251,
+     "GenderDesc": "זכר",
+     "IsCurrent": true,
+     "mk_individual_email": "yedelstein@knesset.gov.il",
+     "altnames": [
+      "יואל יולי אדלשטיין",
+      "יואל אדלשטין",
+      "יולי - יואל אדלשטיין",
+      "יואל אדלשטיין",
+      "יולי אדלשטין",
+      "יולי יואל אדלשטיין"
+     ],
+     "committee_positions": [
+      null
+     ],
+     "factions": [
+      null
+     ],
+     "faction_chairpersons": [
+      null
+     ],
+     "govministries": [
+      null
+     ]
+    },
+    {
+     "mk_individual_id": 35,
+     "mk_individual_first_name": "משה",
+     "mk_individual_name": "גפני",
+     "PersonID": 526,
+     "GenderID": 251,
+     "GenderDesc": "זכר",
+     "IsCurrent": true,
+     "mk_individual_email": "mgafni@knesset.gov.il",
+     "altnames": [
+      "רפאל משה גפני",
+      "משה גפני"
+     ],
+     "committee_positions": [
+      null
+     ],
+     "factions": [
+      null
+     ],
+     "faction_chairpersons": [
+      null
+     ],
+     "govministries": [
+      null
+     ]
+    },
+    {
+     "mk_individual_id": 41,
+     "mk_individual_first_name": "אריה מכלוף",
+     "mk_individual_name": "דרעי",
+     "PersonID": 2291,
+     "GenderID": 251,
+     "GenderDesc": "זכר",
+     "IsCurrent": true,
+     "mk_individual_email": "aderey@knesset.gov.il",
+     "altnames": [
+      "אריה מכלוף דרעי"
+     ],
+     "committee_positions": [
+      null
+     ],
+     "factions": [
+      null
+     ],
+     "faction_chairpersons": [
+      null
+     ],
+     "govministries": [
+      null
+     ]
+    },
+    {
+     "mk_individual_id": 69,
+     "mk_individual_first_name": "ישראל",
+     "mk_individual_name": "כץ",
+     "PersonID": 468,
+     "GenderID": 251,
+     "GenderDesc": "זכר",
+     "IsCurrent": true,
+     "mk_individual_email": "yiskatz@knesset.gov.il",
+     "altnames": [
+      "ישראל כץ"
+     ],
+     "committee_positions": [
+      null
+     ],
+     "factions": [
+      null
+     ],
+     "faction_chairpersons": [
+      null
+     ],
+     "govministries": [
+      null
+     ]
+    }
+   ]
+  },
+  {
+   "url": "https://backend.oknesset.org/members",
+   "params": {
+    "is_current": "false"
+   },
+   "status": 200,
+   "content_type": "application/json",
+   "json": [
+    {
+     "mk_individual_id": 2,
+     "mk_individual_first_name": "רפאל",
+     "mk_individual_name": "אדרי",
+     "PersonID": 2128,
+     "GenderID": 251,
+     "GenderDesc": "זכר",
+     "IsCurrent": false,
+     "mk_individual_email": null,
+     "altnames": [
+      "רפאל אדרי"
+     ],
+     "committee_positions": [
+      null
+     ],
+     "factions": [
+      null
+     ],
+     "faction_chairpersons": [
+      null
+     ],
+     "govministries": [
+      null
+     ]
+    },
+    {
+     "mk_individual_id": 3,
+     "mk_individual_first_name": "אהוד",
+     "mk_individual_name": "אולמרט",
+     "PersonID": 1064,
+     "GenderID": 251,
+     "GenderDesc": "זכר",
+     "IsCurrent": false,
+     "mk_individual_email": null,
+     "altnames": [
+      "אהוד אולמרט"
+     ],
+     "committee_positions": [
+      null
+     ],
+     "factions": [
+      null
+     ],
+     "faction_chairpersons": [
+      null
+     ],
+     "govministries": [
+      null
+     ]
+    },
+    {
+     "mk_individual_id": 4,
+     "mk_individual_first_name": "אורי",
+     "mk_individual_name": "אור",
+     "PersonID": 2132,
+     "GenderID": 251,
+     "GenderDesc": "זכר",
+     "IsCurrent": false,
+     "mk_individual_email": null,
+     "altnames": [
+      "אורי אור"
+     ],
+     "committee_positions": [
+      null
+     ],
+     "factions": [
+      null
+     ],
+     "faction_chairpersons": [
+      null
+     ],
+     "govministries": [
+      null
+     ]
+    },
+    {
+     "mk_individual_id": 5,
+     "mk_individual_first_name": "חיים",
+     "mk_individual_name": "אורון",
+     "PersonID": 1065,
+     "GenderID": 251,
+     "GenderDesc": "זכר",
+     "IsCurrent": false,
+     "mk_individual_email": null,
+     "altnames": [
+      "חיים אורון"
+     ],
+     "committee_positions": [
+      null
+     ],
+     "factions": [
+      null
+     ],
+     "faction_chairpersons": [
+      null
+     ],
+     "govministries": [
+      null
+     ]
+    }
+   ]
+  },
+  {
+   "url": "https://knesset.gov.il/OdataV4/ParliamentInfo/KNS_PlenumVoteResult",
+   "params": {
+    "$filter": "LastName eq 'נתניהו' and FirstName eq 'בנימין'",
+    "$top": 5,
+    "$orderby": "Id desc"
+   },
+   "status": 200,
+   "content_type": "application/json; odata.metadata=minimal; odata.streaming=true; charset=utf-8",
+   "json": {
+    "@odata.context": "https://knesset.gov.il/OdataV4/ParliamentInfo/$metadata#KNS_PlenumVoteResult",
+    "value": [
+     {
+      "Id": 2081884,
+      "MkId": 965,
+      "VoteID": 46672,
+      "VoteDate": "2026-07-16T18:07:00+03:00",
+      "ResultCode": 8,
+      "ResultDesc": "נגד",
+      "LastUpdatedDate": "2026-08-16T11:39:26.483+03:00",
+      "LastName": "נתניהו",
+      "FirstName": "בנימין",
+      "SessionID": 2244869,
+      "ItemID": 1042100
+     },
+     {
+      "Id": 2081776,
+      "MkId": 965,
+      "VoteID": 46671,
+      "VoteDate": "2026-07-16T17:55:00+03:00",
+      "ResultCode": 8,
+      "ResultDesc": "נגד",
+      "LastUpdatedDate": "2026-07-21T11:02:48.297+03:00",
+      "LastName": "נתניהו",
+      "FirstName": "בנימין",
+      "SessionID": 2244869,
+      "ItemID": 1042100
+     },
+     {
+      "Id": 2081497,
+      "MkId": 965,
+      "VoteID": 46662,
+      "VoteDate": "2026-07-17T03:53:08.603+03:00",
+      "ResultCode": 7,
+      "ResultDesc": "בעד",
+      "LastUpdatedDate": "2026-07-21T00:04:41.413+03:00",
+      "LastName": "נתניהו",
+      "FirstName": "בנימין",
+      "SessionID": 2244869,
+      "ItemID": 2202055
+     },
+     {
+      "Id": 2081431,
+      "MkId": 965,
+      "VoteID": 46661,
+      "VoteDate": "2026-07-17T03:53:41.01+03:00",
+      "ResultCode": 7,
+      "ResultDesc": "בעד",
+      "LastUpdatedDate": "2026-07-21T00:05:35.973+03:00",
+      "LastName": "נתניהו",
+      "FirstName": "בנימין",
+      "SessionID": 2244869,
+      "ItemID": 2202055
+     },
+     {
+      "Id": 2073637,
+      "MkId": 965,
+      "VoteID": 46550,
+      "VoteDate": "2026-07-16T18:35:36.533+03:00",
+      "ResultCode": 7,
+      "ResultDesc": "בעד",
+      "LastUpdatedDate": "2026-07-29T14:13:39.13+03:00",
+      "LastName": "נתניהו",
+      "FirstName": "בנימין",
+      "SessionID": 2244869,
+      "ItemID": 1042100
+     }
+    ]
+   }
+  },
+  {
+   "url": "https://knesset.gov.il/OdataV4/ParliamentInfo/KNS_PlenumVote",
+   "params": {
+    "$filter": "Id eq 46661 or Id eq 46662 or Id eq 46671 or Id eq 46672 or Id eq 46550"
+   },
+   "status": 200,
+   "content_type": "application/json; odata.metadata=minimal; odata.streaming=true; charset=utf-8",
+   "json": {
+    "@odata.context": "https://knesset.gov.il/OdataV4/ParliamentInfo/$metadata#KNS_PlenumVote",
+    "value": [
+     {
+      "Id": 46550,
+      "VoteDateTime": "2026-07-16T18:35:00+03:00",
+      "SessionID": 2244869,
+      "ItemID": 1042100,
+      "Ordinal": 299,
+      "VoteMethodID": 1,
+      "VoteMethodDesc": "אלקטרונית",
+      "VoteStatusCode": 7,
+      "VoteStatusDesc": "מפורסם",
+      "VoteTitle": "הצעת חוק התקשורת (שידורים), התשפ\"ו-2026",
+      "VoteSubject": "סעיף 14",
+      "IsNoConfidenceInGov": null,
+      "LastUpdatedDate": "2026-07-29T14:13:39.13+03:00",
+      "ForOptionID": 6,
+      "ForOptionDesc": "לקבל בקריאה שנייה",
+      "AgainstOptionID": 24,
+      "AgainstOptionDesc": "לדחות את ההצעה"
+     },
+     {
+      "Id": 46661,
+      "VoteDateTime": "2026-07-17T03:53:00+03:00",
+      "SessionID": 2244869,
+      "ItemID": 2202055,
+      "Ordinal": 421,
+      "VoteMethodID": 1,
+      "VoteMethodDesc": "אלקטרונית",
+      "VoteStatusCode": 7,
+      "VoteStatusDesc": "מפורסם",
+      "VoteTitle": "הצעת חוק ההתיישנות (תיקון מס' 10), התשפ\"ו–2026 (פ/2569/25)",
+      "VoteSubject": null,
+      "IsNoConfidenceInGov": null,
+      "LastUpdatedDate": "2026-07-21T00:05:35.973+03:00",
+      "ForOptionID": 8,
+      "ForOptionDesc": "לקבל את הצעת החוק בקריאה שלישית",
+      "AgainstOptionID": 24,
+      "AgainstOptionDesc": "לדחות את ההצעה"
+     },
+     {
+      "Id": 46662,
+      "VoteDateTime": "2026-07-17T03:53:00+03:00",
+      "SessionID": 2244869,
+      "ItemID": 2202055,
+      "Ordinal": 420,
+      "VoteMethodID": 1,
+      "VoteMethodDesc": "אלקטרונית",
+      "VoteStatusCode": 7,
+      "VoteStatusDesc": "מפורסם",
+      "VoteTitle": "הצעת חוק ההתיישנות (תיקון מס' 10), התשפ\"ו–2026 (פ/2569/25)",
+      "VoteSubject": "סעיפים 1–2",
+      "IsNoConfidenceInGov": null,
+      "LastUpdatedDate": "2026-07-21T00:04:41.413+03:00",
+      "ForOptionID": 6,
+      "ForOptionDesc": "לקבל בקריאה שנייה",
+      "AgainstOptionID": 24,
+      "AgainstOptionDesc": "לדחות את ההצעה"
+     },
+     {
+      "Id": 46671,
+      "VoteDateTime": "2026-07-16T17:55:00+03:00",
+      "SessionID": 2244869,
+      "ItemID": 1042100,
+      "Ordinal": 374,
+      "VoteMethodID": 2,
+      "VoteMethodDesc": "שמית",
+      "VoteStatusCode": 7,
+      "VoteStatusDesc": "מפורסם",
+      "VoteTitle": "הצעת חוק התקשורת (שידורים), התשפ\"ו-2026",
+      "VoteSubject": "הסתייגות 7",
+      "IsNoConfidenceInGov": null,
+      "LastUpdatedDate": "2026-07-21T11:02:48.297+03:00",
+      "ForOptionID": 7,
+      "ForOptionDesc": "לקבל את ההסתייגות",
+      "AgainstOptionID": 24,
+      "AgainstOptionDesc": "לדחות את ההצעה"
+     },
+     {
+      "Id": 46672,
+      "VoteDateTime": "2026-07-16T18:07:00+03:00",
+      "SessionID": 2244869,
+      "ItemID": 1042100,
+      "Ordinal": 374,
+      "VoteMethodID": 2,
+      "VoteMethodDesc": "שמית",
+      "VoteStatusCode": 7,
+      "VoteStatusDesc": "מפורסם",
+      "VoteTitle": "הצעת חוק התקשורת (שידורים), התשפ\"ו-2026",
+      "VoteSubject": "הסתייגות 22",
+      "IsNoConfidenceInGov": null,
+      "LastUpdatedDate": "2026-08-16T11:39:26.483+03:00",
+      "ForOptionID": 7,
+      "ForOptionDesc": "לקבל את ההסתייגות",
+      "AgainstOptionID": 24,
+      "AgainstOptionDesc": "לדחות את ההצעה"
+     }
+    ]
+   }
+  },
+  {
+   "url": "https://knesset.gov.il/OdataV4/ParliamentInfo/KNS_PlenumVote",
+   "params": {
+    "$filter": "contains(VoteTitle,'תקציב') or contains(VoteSubject,'תקציב')",
+    "$top": 5,
+    "$orderby": "Id desc"
+   },
+   "status": 200,
+   "content_type": "application/json; odata.metadata=minimal; odata.streaming=true; charset=utf-8",
+   "json": {
+    "@odata.context": "https://knesset.gov.il/OdataV4/ParliamentInfo/$metadata#KNS_PlenumVote",
+    "value": [
+     {
+      "Id": 46361,
+      "VoteDateTime": "2026-06-10T00:00:00+03:00",
+      "SessionID": 2243621,
+      "ItemID": 2243772,
+      "Ordinal": 1,
+      "VoteMethodID": 2,
+      "VoteMethodDesc": "שמית",
+      "VoteStatusCode": 7,
+      "VoteStatusDesc": "מפורסם",
+      "VoteTitle": "הצעה דחופה לסדר היום בנושא: \"פגיעה בביטחון אזרחים וישובים לאורך הגבולות בעקבות הודעת פיקוד העורף על קיצוץ דרמטי בתקציבי מרכיבי הביטחון\"",
+      "VoteSubject": "",
+      "IsNoConfidenceInGov": null,
+      "LastUpdatedDate": "2026-07-15T13:14:03.337+03:00",
+      "ForOptionID": 17,
+      "ForOptionDesc": "להעביר את הנושא לדיון בוועדה",
+      "AgainstOptionID": 24,
+      "AgainstOptionDesc": "לדחות את ההצעה"
+     },
+     {
+      "Id": 46151,
+      "VoteDateTime": "2026-06-24T12:31:00+03:00",
+      "SessionID": 2244054,
+      "ItemID": 2242177,
+      "Ordinal": 1,
+      "VoteMethodID": 1,
+      "VoteMethodDesc": "אלקטרונית",
+      "VoteStatusCode": 7,
+      "VoteStatusDesc": "מפורסם",
+      "VoteTitle": "הצעת חוק המכינות הקדם-צבאיות (תיקון - תקציב ייעודי להנגשה ולשילוב חניכים עם מוגבלות), התשפ״ו-2026",
+      "VoteSubject": null,
+      "IsNoConfidenceInGov": null,
+      "LastUpdatedDate": "2026-06-25T10:52:57.197+03:00",
+      "ForOptionID": 12,
+      "ForOptionDesc": "להעביר את הצעת החוק לוועדה להכנה לקריאה ראשונה",
+      "AgainstOptionID": 24,
+      "AgainstOptionDesc": "לדחות את ההצעה"
+     },
+     {
+      "Id": 46140,
+      "VoteDateTime": "2026-06-17T16:10:00+03:00",
+      "SessionID": 2243805,
+      "ItemID": 2240506,
+      "Ordinal": 6,
+      "VoteMethodID": 1,
+      "VoteMethodDesc": "אלקטרונית",
+      "VoteStatusCode": 7,
+      "VoteStatusDesc": "מפורסם",
+      "VoteTitle": "החלטת ועדת הכלכלה בדבר פיצול פרק י\"ג (ייעול וקידום התחרות במשק הדלק) מתוך הצעת חוק התוכנית הכלכלית (תיקוני חקיקה ליישום המדיניות הכלכלית לשנת התקציב 2026), התשפ\"ו-2026 [פוצלה לפי סעיף 84(ב) לתקנון]",
+      "VoteSubject": null,
+      "IsNoConfidenceInGov": null,
+      "LastUpdatedDate": "2026-06-18T11:19:42.797+03:00",
+      "ForOptionID": 15,
+      "ForOptionDesc": "לקבל את ההחלטה בדבר",
+      "AgainstOptionID": 24,
+      "AgainstOptionDesc": "לדחות את ההצעה"
+     },
+     {
+      "Id": 46025,
+      "VoteDateTime": "2026-06-03T22:14:00+03:00",
+      "SessionID": 2243511,
+      "ItemID": 2243776,
+      "Ordinal": 7,
+      "VoteMethodID": 1,
+      "VoteMethodDesc": "אלקטרונית",
+      "VoteStatusCode": 7,
+      "VoteStatusDesc": "מפורסם",
+      "VoteTitle": "הצעה דחופה לסדר היום בנושא: \"הטלת מגבלות תקציביות על המרכז הרפואי לגליל בנהריה בשעת מלחמה\"",
+      "VoteSubject": null,
+      "IsNoConfidenceInGov": null,
+      "LastUpdatedDate": "2026-06-09T10:31:02.283+03:00",
+      "ForOptionID": 17,
+      "ForOptionDesc": "להעביר את הנושא לדיון בוועדה",
+      "AgainstOptionID": 24,
+      "AgainstOptionDesc": "לדחות את ההצעה"
+     },
+     {
+      "Id": 45856,
+      "VoteDateTime": "2026-03-30T00:55:00+03:00",
+      "SessionID": 2242104,
+      "ItemID": 1046679,
+      "Ordinal": 181,
+      "VoteMethodID": 2,
+      "VoteMethodDesc": "שמית",
+      "VoteStatusCode": 7,
+      "VoteStatusDesc": "מפורסם",
+      "VoteTitle": "הצעת חוק התקציב לשנת הכספים 2026, התשפ\"ו-2026",
+      "VoteSubject": "הסתייגות מס' 2 לפני סעיף 1",
+      "IsNoConfidenceInGov": null,
+      "LastUpdatedDate": "2026-03-31T10:27:50.883+03:00",
+      "ForOptionID": 7,
+      "ForOptionDesc": "לקבל את ההסתייגות",
+      "AgainstOptionID": 24,
+      "AgainstOptionDesc": "לדחות את ההצעה"
+     }
+    ]
+   }
+  },
+  {
+   "url": "https://knesset.gov.il/OdataV4/ParliamentInfo/KNS_PlenumVoteResult",
+   "params": {
+    "$filter": "LastName eq 'נתניהו' and FirstName eq 'בנימין' and (VoteID eq 46361 or VoteID eq 46151 or VoteID eq 46140 or VoteID eq 46025 or VoteID eq 45856)"
+   },
+   "status": 200,
+   "content_type": "application/json; odata.metadata=minimal; odata.streaming=true; charset=utf-8",
+   "json": {
+    "@odata.context": "https://knesset.gov.il/OdataV4/ParliamentInfo/$metadata#KNS_PlenumVoteResult",
+    "value": []
+   }
+  },
+  {
+   "url": "https://knesset.gov.il/OdataV4/ParliamentInfo/KNS_PlenumVote",
+   "params": {
+    "$orderby": "Id desc",
+    "$top": 5
+   },
+   "status": 200,
+   "content_type": "application/json; odata.metadata=minimal; odata.streaming=true; charset=utf-8",
+   "json": {
+    "@odata.context": "https://knesset.gov.il/OdataV4/ParliamentInfo/$metadata#KNS_PlenumVote",
+    "value": [
+     {
+      "Id": 46701,
+      "VoteDateTime": "2026-07-06T17:30:00+03:00",
+      "SessionID": 2244615,
+      "ItemID": 2244843,
+      "Ordinal": 1,
+      "VoteMethodID": 2,
+      "VoteMethodDesc": "שמית",
+      "VoteStatusCode": 7,
+      "VoteStatusDesc": "מפורסם",
+      "VoteTitle": "הצעה להביע אי אמון בממשלה מטעם סיעת יש עתיד בנושא: \"ממשלת המשתמטים והמושחתים\"",
+      "VoteSubject": "",
+      "IsNoConfidenceInGov": null,
+      "LastUpdatedDate": "2026-07-30T09:18:44.903+03:00",
+      "ForOptionID": 16,
+      "ForOptionDesc": "להביע אי-אמון בממשלה",
+      "AgainstOptionID": 24,
+      "AgainstOptionDesc": "לדחות את ההצעה"
+     },
+     {
+      "Id": 46701,
+      "VoteDateTime": "2026-07-06T17:30:00+03:00",
+      "SessionID": 2244615,
+      "ItemID": 2244843,
+      "Ordinal": 1,
+      "VoteMethodID": 2,
+      "VoteMethodDesc": "שמית",
+      "VoteStatusCode": 7,
+      "VoteStatusDesc": "מפורסם",
+      "VoteTitle": "הצעה להביע אי אמון בממשלה מטעם סיעת יש עתיד בנושא: \"ממשלת המשתמטים והמושחתים\"",
+      "VoteSubject": "",
+      "IsNoConfidenceInGov": null,
+      "LastUpdatedDate": "2026-07-30T09:18:44.903+03:00",
+      "ForOptionID": 16,
+      "ForOptionDesc": "להביע אי-אמון בממשלה",
+      "AgainstOptionID": 24,
+      "AgainstOptionDesc": "לדחות את ההצעה"
+     },
+     {
+      "Id": 46700,
+      "VoteDateTime": "2026-07-28T14:43:00+03:00",
+      "SessionID": 2245272,
+      "ItemID": 2229019,
+      "Ordinal": 21,
+      "VoteMethodID": 1,
+      "VoteMethodDesc": "אלקטרונית",
+      "VoteStatusCode": 7,
+      "VoteStatusDesc": "מפורסם",
+      "VoteTitle": "הצעת חוק נוכחות עורך דין בחקירת קטינים ואנשים עם מוגבלות (תיקוני חקיקה והוראת שעה), התשפ\"ו-2026",
+      "VoteSubject": "סעיפים 1–13",
+      "IsNoConfidenceInGov": null,
+      "LastUpdatedDate": "2026-07-29T12:42:51.84+03:00",
+      "ForOptionID": 6,
+      "ForOptionDesc": "לקבל בקריאה שנייה",
+      "AgainstOptionID": 24,
+      "AgainstOptionDesc": "לדחות את ההצעה"
+     },
+     {
+      "Id": 46699,
+      "VoteDateTime": "2026-07-28T14:43:00+03:00",
+      "SessionID": 2245272,
+      "ItemID": 2229019,
+      "Ordinal": 22,
+      "VoteMethodID": 1,
+      "VoteMethodDesc": "אלקטרונית",
+      "VoteStatusCode": 7,
+      "VoteStatusDesc": "מפורסם",
+      "VoteTitle": "הצעת חוק נוכחות עורך דין בחקירת קטינים ואנשים עם מוגבלות (תיקוני חקיקה והוראת שעה), התשפ\"ו-2026",
+      "VoteSubject": null,
+      "IsNoConfidenceInGov": null,
+      "LastUpdatedDate": "2026-07-29T12:43:30.7+03:00",
+      "ForOptionID": 8,
+      "ForOptionDesc": "לקבל את הצעת החוק בקריאה שלישית",
+      "AgainstOptionID": 24,
+      "AgainstOptionDesc": "לדחות את ההצעה"
+     },
+     {
+      "Id": 46698,
+      "VoteDateTime": "2026-07-28T14:27:00+03:00",
+      "SessionID": 2245272,
+      "ItemID": 2219672,
+      "Ordinal": 19,
+      "VoteMethodID": 1,
+      "VoteMethodDesc": "אלקטרונית",
+      "VoteStatusCode": 7,
+      "VoteStatusDesc": "מפורסם",
+      "VoteTitle": "הצעת חוק לעידוד פעילות בשוק ההון (תיקוני חקיקה), התשפ\"ד-2024",
+      "VoteSubject": "סעיפים 1–4",
+      "IsNoConfidenceInGov": null,
+      "LastUpdatedDate": "2026-07-29T12:41:35.393+03:00",
+      "ForOptionID": 6,
+      "ForOptionDesc": "לקבל בקריאה שנייה",
+      "AgainstOptionID": 24,
+      "AgainstOptionDesc": "לדחות את ההצעה"
+     }
+    ]
+   }
+  }
+ ],
+ "results": {
+  "search_bills": [
+   {
+    "Id": 2209870,
+    "KnessetNum": 25,
+    "Name": "הצעת חוק שוברים להשלמת לימודי בסיס בחינוך הבלתי פורמלי, התשפ\"ד-2023",
+    "TypeID": 2,
+    "TypeDesc": "הצעת חוק",
+    "SubTypeID": 54,
+    "SubTypeDesc": "פרטית",
+    "PrivateNumber": 3997,
+    "CommitteeID": -1,
+    "StatusID": 177,
+    "Number": null,
+    "PostponementReasonID": 3012,
+    "PostponementReasonDesc": "חה\"כ המציע התפטר",
+    "PublicationDate": null,
+    "PublicationSeriesID": null,
+    "PublicationSeriesDesc": null,
+    "PublicationSeriesFirstCallID": null,
+    "PublicationSeriesFirstCallDesc": null,
+    "MagazineNumber": null,
+    "PageNumber": null,
+    "IsContinuationBill": null,
+    "SummaryLaw": null,
+    "LastUpdatedDate": "2026-08-16T14:27:46.763+03:00",
+    "KNS_Status": {
+     "Id": 177,
+     "Desc": "נעצרה",
+     "TypeID": 2,
+     "TypeDesc": "הצעת חוק",
+     "OrderTransition": null,
+     "IsActive": null,
+     "LastUpdatedDate": "2013-10-06T14:08:19.8+03:00"
+    },
+    "KNS_BillInitiator": [
+     {
+      "Id": 216173,
+      "BillID": 2209870,
+      "PersonID": 30839,
+      "IsInitiator": true,
+      "Ordinal": 1,
+      "LastUpdatedDate": "2023-08-06T09:28:49.077+03:00",
+      "KNS_Person": {
+       "Id": 30839,
+       "LastName": "אילוז",
+       "FirstName": "דן",
+       "GenderID": 251,
+       "GenderDesc": "זכר",
+       "Email": null,
+       "IsCurrent": false,
+       "LastUpdatedDate": "2023-01-05T13:44:30.33+02:00"
+      }
+     }
+    ]
+   },
+   {
+    "Id": 2196714,
+    "KnessetNum": 25,
+    "Name": "הצעת חוק העסקת עובדי חינוך בגני ילדים באמצעות חוזה אישי (תיקוני חקיקה), התשפ\"ג-2022",
+    "TypeID": 2,
+    "TypeDesc": "הצעת חוק",
+    "SubTypeID": 54,
+    "SubTypeDesc": "פרטית",
+    "PrivateNumber": 771,
+    "CommitteeID": -1,
+    "StatusID": 177,
+    "Number": null,
+    "PostponementReasonID": 3012,
+    "PostponementReasonDesc": "חה\"כ המציע התפטר",
+    "PublicationDate": null,
+    "PublicationSeriesID": null,
+    "PublicationSeriesDesc": null,
+    "PublicationSeriesFirstCallID": null,
+    "PublicationSeriesFirstCallDesc": null,
+    "MagazineNumber": null,
+    "PageNumber": null,
+    "IsContinuationBill": null,
+    "SummaryLaw": null,
+    "LastUpdatedDate": "2026-08-16T14:27:22.09+03:00",
+    "KNS_Status": {
+     "Id": 177,
+     "Desc": "נעצרה",
+     "TypeID": 2,
+     "TypeDesc": "הצעת חוק",
+     "OrderTransition": null,
+     "IsActive": null,
+     "LastUpdatedDate": "2013-10-06T14:08:19.8+03:00"
+    },
+    "KNS_BillInitiator": [
+     {
+      "Id": 203432,
+      "BillID": 2196714,
+      "PersonID": 30839,
+      "IsInitiator": true,
+      "Ordinal": 1,
+      "LastUpdatedDate": "2024-11-13T14:35:35.803+02:00",
+      "KNS_Person": {
+       "Id": 30839,
+       "LastName": "אילוז",
+       "FirstName": "דן",
+       "GenderID": 251,
+       "GenderDesc": "זכר",
+       "Email": null,
+       "IsCurrent": false,
+       "LastUpdatedDate": "2023-01-05T13:44:30.33+02:00"
+      }
+     }
+    ]
+   },
+   {
+    "Id": 2225048,
+    "KnessetNum": 25,
+    "Name": "הצעת חוק חינוך ממלכתי (תיקון - חינוך פיננסי), התשפ\"ה-2024",
+    "TypeID": 2,
+    "TypeDesc": "הצעת חוק",
+    "SubTypeID": 54,
+    "SubTypeDesc": "פרטית",
+    "PrivateNumber": 5177,
+    "CommitteeID": -1,
+    "StatusID": 177,
+    "Number": null,
+    "PostponementReasonID": 3012,
+    "PostponementReasonDesc": "חה\"כ המציע התפטר",
+    "PublicationDate": null,
+    "PublicationSeriesID": null,
+    "PublicationSeriesDesc": null,
+    "PublicationSeriesFirstCallID": null,
+    "PublicationSeriesFirstCallDesc": null,
+    "MagazineNumber": null,
+    "PageNumber": null,
+    "IsContinuationBill": null,
+    "SummaryLaw": null,
+    "LastUpdatedDate": "2026-07-28T10:50:51.323+03:00",
+    "KNS_Status": {
+     "Id": 177,
+     "Desc": "נעצרה",
+     "TypeID": 2,
+     "TypeDesc": "הצעת חוק",
+     "OrderTransition": null,
+     "IsActive": null,
+     "LastUpdatedDate": "2013-10-06T14:08:19.8+03:00"
+    },
+    "KNS_BillInitiator": [
+     {
+      "Id": 223271,
+      "BillID": 2225048,
+      "PersonID": 30780,
+      "IsInitiator": true,
+      "Ordinal": 1,
+      "LastUpdatedDate": "2024-12-05T13:24:59.167+02:00",
+      "KNS_Person": {
+       "Id": 30780,
+       "LastName": "כץ",
+       "FirstName": "רון",
+       "GenderID": 251,
+       "GenderDesc": "זכר",
+       "Email": null,
+       "IsCurrent": false,
+       "LastUpdatedDate": "2022-11-10T11:19:09.793+02:00"
+      }
+     }
+    ]
+   },
+   {
+    "Id": 2201419,
+    "KnessetNum": 25,
+    "Name": "הצעת חוק לימוד חובה (תיקון - חינוך חינם לגיל הרך), התשפ\"ג-2023",
+    "TypeID": 2,
+    "TypeDesc": "הצעת חוק",
+    "SubTypeID": 54,
+    "SubTypeDesc": "פרטית",
+    "PrivateNumber": 2485,
+    "CommitteeID": -1,
+    "StatusID": 177,
+    "Number": null,
+    "PostponementReasonID": 3012,
+    "PostponementReasonDesc": "חה\"כ המציע התפטר",
+    "PublicationDate": null,
+    "PublicationSeriesID": null,
+    "PublicationSeriesDesc": null,
+    "PublicationSeriesFirstCallID": null,
+    "PublicationSeriesFirstCallDesc": null,
+    "MagazineNumber": null,
+    "PageNumber": null,
+    "IsContinuationBill": null,
+    "SummaryLaw": null,
+    "LastUpdatedDate": "2026-07-28T10:50:34.867+03:00",
+    "KNS_Status": {
+     "Id": 177,
+     "Desc": "נעצרה",
+     "TypeID": 2,
+     "TypeDesc": "הצעת חוק",
+     "OrderTransition": null,
+     "IsActive": null,
+     "LastUpdatedDate": "2013-10-06T14:08:19.8+03:00"
+    },
+    "KNS_BillInitiator": [
+     {
+      "Id": 211143,
+      "BillID": 2201419,
+      "PersonID": 30780,
+      "IsInitiator": true,
+      "Ordinal": 1,
+      "LastUpdatedDate": "2023-02-08T19:22:21.823+02:00",
+      "KNS_Person": {
+       "Id": 30780,
+       "LastName": "כץ",
+       "FirstName": "רון",
+       "GenderID": 251,
+       "GenderDesc": "זכר",
+       "Email": null,
+       "IsCurrent": false,
+       "LastUpdatedDate": "2022-11-10T11:19:09.793+02:00"
+      }
+     }
+    ]
+   },
+   {
+    "Id": 2200308,
+    "KnessetNum": 25,
+    "Name": "הצעת חוק הפיקוח על מעונות יום לפעוטות (תיקון - העברת האחריות למשרד החינוך), התשפ\"ג-2023",
+    "TypeID": 2,
+    "TypeDesc": "הצעת חוק",
+    "SubTypeID": 54,
+    "SubTypeDesc": "פרטית",
+    "PrivateNumber": 2724,
+    "CommitteeID": -1,
+    "StatusID": 177,
+    "Number": null,
+    "PostponementReasonID": 3012,
+    "PostponementReasonDesc": "חה\"כ המציע התפטר",
+    "PublicationDate": null,
+    "PublicationSeriesID": null,
+    "PublicationSeriesDesc": null,
+    "PublicationSeriesFirstCallID": null,
+    "PublicationSeriesFirstCallDesc": null,
+    "MagazineNumber": null,
+    "PageNumber": null,
+    "IsContinuationBill": null,
+    "SummaryLaw": null,
+    "LastUpdatedDate": "2026-07-28T10:50:34.477+03:00",
+    "KNS_Status": {
+     "Id": 177,
+     "Desc": "נעצרה",
+     "TypeID": 2,
+     "TypeDesc": "הצעת חוק",
+     "OrderTransition": null,
+     "IsActive": null,
+     "LastUpdatedDate": "2013-10-06T14:08:19.8+03:00"
+    },
+    "KNS_BillInitiator": [
+     {
+      "Id": 212015,
+      "BillID": 2200308,
+      "PersonID": 30780,
+      "IsInitiator": true,
+      "Ordinal": 1,
+      "LastUpdatedDate": "2023-02-28T13:25:02.337+02:00",
+      "KNS_Person": {
+       "Id": 30780,
+       "LastName": "כץ",
+       "FirstName": "רון",
+       "GenderID": 251,
+       "GenderDesc": "זכר",
+       "Email": null,
+       "IsCurrent": false,
+       "LastUpdatedDate": "2022-11-10T11:19:09.793+02:00"
+      }
+     }
+    ]
+   },
+   {
+    "Id": 2196105,
+    "KnessetNum": 25,
+    "Name": "הצעת חוק סייעות במוסדות חינוך, התשפ\"ג-2022",
+    "TypeID": 2,
+    "TypeDesc": "הצעת חוק",
+    "SubTypeID": 54,
+    "SubTypeDesc": "פרטית",
+    "PrivateNumber": 68,
+    "CommitteeID": -1,
+    "StatusID": 177,
+    "Number": null,
+    "PostponementReasonID": 3012,
+    "PostponementReasonDesc": "חה\"כ המציע התפטר",
+    "PublicationDate": null,
+    "PublicationSeriesID": null,
+    "PublicationSeriesDesc": null,
+    "PublicationSeriesFirstCallID": null,
+    "PublicationSeriesFirstCallDesc": null,
+    "MagazineNumber": null,
+    "PageNumber": null,
+    "IsContinuationBill": null,
+    "SummaryLaw": null,
+    "LastUpdatedDate": "2026-07-28T10:50:33.4+03:00",
+    "KNS_Status": {
+     "Id": 177,
+     "Desc": "נעצרה",
+     "TypeID": 2,
+     "TypeDesc": "הצעת חוק",
+     "OrderTransition": null,
+     "IsActive": null,
+     "LastUpdatedDate": "2013-10-06T14:08:19.8+03:00"
+    },
+    "KNS_BillInitiator": [
+     {
+      "Id": 202413,
+      "BillID": 2196105,
+      "PersonID": 30780,
+      "IsInitiator": true,
+      "Ordinal": 1,
+      "LastUpdatedDate": "2022-11-15T17:22:19.81+02:00",
+      "KNS_Person": {
+       "Id": 30780,
+       "LastName": "כץ",
+       "FirstName": "רון",
+       "GenderID": 251,
+       "GenderDesc": "זכר",
+       "Email": null,
+       "IsCurrent": false,
+       "LastUpdatedDate": "2022-11-10T11:19:09.793+02:00"
+      }
+     }
+    ]
+   },
+   {
+    "Id": 2196095,
+    "KnessetNum": 25,
+    "Name": "הצעת חוק החזקת תכשיר אפינפרין במוסדות חינוך ובמקומות ציבוריים (תיקון - החזקת תכשיר אפינפרין בבית אוכל), התשפ\"ג-2022",
+    "TypeID": 2,
+    "TypeDesc": "הצעת חוק",
+    "SubTypeID": 54,
+    "SubTypeDesc": "פרטית",
+    "PrivateNumber": 62,
+    "CommitteeID": -1,
+    "StatusID": 177,
+    "Number": null,
+    "PostponementReasonID": 3012,
+    "PostponementReasonDesc": "חה\"כ המציע התפטר",
+    "PublicationDate": null,
+    "PublicationSeriesID": null,
+    "PublicationSeriesDesc": null,
+    "PublicationSeriesFirstCallID": null,
+    "PublicationSeriesFirstCallDesc": null,
+    "MagazineNumber": null,
+    "PageNumber": null,
+    "IsContinuationBill": null,
+    "SummaryLaw": null,
+    "LastUpdatedDate": "2026-07-28T10:50:32.663+03:00",
+    "KNS_Status": {
+     "Id": 177,
+     "Desc": "נעצרה",
+     "TypeID": 2,
+     "TypeDesc": "הצעת חוק",
+     "OrderTransition": null,
+     "IsActive": null,
+     "LastUpdatedDate": "2013-10-06T14:08:19.8+03:00"
+    },
+    "KNS_BillInitiator": [
+     {
+      "Id": 202401,
+      "BillID": 2196095,
+      "PersonID": 30780,
+      "IsInitiator": true,
+      "Ordinal": 1,
+      "LastUpdatedDate": "2022-11-15T17:19:57.347+02:00",
+      "KNS_Person": {
+       "Id": 30780,
+       "LastName": "כץ",
+       "FirstName": "רון",
+       "GenderID": 251,
+       "GenderDesc": "זכר",
+       "Email": null,
+       "IsCurrent": false,
+       "LastUpdatedDate": "2022-11-10T11:19:09.793+02:00"
+      }
+     }
+    ]
+   },
+   {
+    "Id": 2241473,
+    "KnessetNum": 25,
+    "Name": "הצעת חוק לימוד חובה (תיקון - מנהל מוסד חינוך), התשפ\"ו-2026",
+    "TypeID": 2,
+    "TypeDesc": "הצעת חוק",
+    "SubTypeID": 54,
+    "SubTypeDesc": "פרטית",
+    "PrivateNumber": 6621,
+    "CommitteeID": -1,
+    "StatusID": 177,
+    "Number": null,
+    "PostponementReasonID": 3013,
+    "PostponementReasonDesc": "חה\"כ המציע מונה לתפקיד בממשלה",
+    "PublicationDate": null,
+    "PublicationSeriesID": null,
+    "PublicationSeriesDesc": null,
+    "PublicationSeriesFirstCallID": null,
+    "PublicationSeriesFirstCallDesc": null,
+    "MagazineNumber": null,
+    "PageNumber": null,
+    "IsContinuationBill": null,
+    "SummaryLaw": null,
+    "LastUpdatedDate": "2026-07-26T11:09:35.847+03:00",
+    "KNS_Status": {
+     "Id": 177,
+     "Desc": "נעצרה",
+     "TypeID": 2,
+     "TypeDesc": "הצעת חוק",
+     "OrderTransition": null,
+     "IsActive": null,
+     "LastUpdatedDate": "2013-10-06T14:08:19.8+03:00"
+    },
+    "KNS_BillInitiator": [
+     {
+      "Id": 229345,
+      "BillID": 2241473,
+      "PersonID": 30799,
+      "IsInitiator": true,
+      "Ordinal": 1,
+      "LastUpdatedDate": "2026-03-09T14:35:42.207+02:00",
+      "KNS_Person": {
+       "Id": 30799,
+       "LastName": "בוסקילה",
+       "FirstName": "מישל",
+       "GenderID": 251,
+       "GenderDesc": "זכר",
+       "Email": "mbuskila@knesset.gov.il",
+       "IsCurrent": true,
+       "LastUpdatedDate": "2022-11-06T18:55:42.65+02:00"
+      }
+     }
+    ]
+   },
+   {
+    "Id": 2199527,
+    "KnessetNum": 25,
+    "Name": "הצעת חוק לימוד חובה (תיקון - חינוך חינם לפעוטות ולילדים), התשפ\"ג-2023",
+    "TypeID": 2,
+    "TypeDesc": "הצעת חוק",
+    "SubTypeID": 54,
+    "SubTypeDesc": "פרטית",
+    "PrivateNumber": 2189,
+    "CommitteeID": -1,
+    "StatusID": 177,
+    "Number": null,
+    "PostponementReasonID": 3013,
+    "PostponementReasonDesc": "חה\"כ המציע מונה לתפקיד בממשלה",
+    "PublicationDate": null,
+    "PublicationSeriesID": null,
+    "PublicationSeriesDesc": null,
+    "PublicationSeriesFirstCallID": null,
+    "PublicationSeriesFirstCallDesc": null,
+    "MagazineNumber": null,
+    "PageNumber": null,
+    "IsContinuationBill": null,
+    "SummaryLaw": null,
+    "LastUpdatedDate": "2026-07-26T11:09:19.653+03:00",
+    "KNS_Status": {
+     "Id": 177,
+     "Desc": "נעצרה",
+     "TypeID": 2,
+     "TypeDesc": "הצעת חוק",
+     "OrderTransition": null,
+     "IsActive": null,
+     "LastUpdatedDate": "2013-10-06T14:08:19.8+03:00"
+    },
+    "KNS_BillInitiator": [
+     {
+      "Id": 209256,
+      "BillID": 2199527,
+      "PersonID": 30799,
+      "IsInitiator": true,
+      "Ordinal": 1,
+      "LastUpdatedDate": "2024-11-13T17:50:59.103+02:00",
+      "KNS_Person": {
+       "Id": 30799,
+       "LastName": "בוסקילה",
+       "FirstName": "מישל",
+       "GenderID": 251,
+       "GenderDesc": "זכר",
+       "Email": "mbuskila@knesset.gov.il",
+       "IsCurrent": true,
+       "LastUpdatedDate": "2022-11-06T18:55:42.65+02:00"
+      }
+     }
+    ]
+   },
+   {
+    "Id": 2196864,
+    "KnessetNum": 25,
+    "Name": "הצעת חוק חינוך ממלכתי (תיקון - איסור תמיכה בטרור), התשפ\"ג-2023",
+    "TypeID": 2,
+    "TypeDesc": "הצעת חוק",
+    "SubTypeID": 54,
+    "SubTypeDesc": "פרטית",
+    "PrivateNumber": 1179,
+    "CommitteeID": -1,
+    "StatusID": 177,
+    "Number": null,
+    "PostponementReasonID": 3013,
+    "PostponementReasonDesc": "חה\"כ המציע מונה לתפקיד בממשלה",
+    "PublicationDate": null,
+    "PublicationSeriesID": null,
+    "PublicationSeriesDesc": null,
+    "PublicationSeriesFirstCallID": null,
+    "PublicationSeriesFirstCallDesc": null,
+    "MagazineNumber": null,
+    "PageNumber": null,
+    "IsContinuationBill": null,
+    "SummaryLaw": null,
+    "LastUpdatedDate": "2026-07-26T11:09:01.997+03:00",
+    "KNS_Status": {
+     "Id": 177,
+     "Desc": "נעצרה",
+     "TypeID": 2,
+     "TypeDesc": "הצעת חוק",
+     "OrderTransition": null,
+     "IsActive": null,
+     "LastUpdatedDate": "2013-10-06T14:08:19.8+03:00"
+    },
+    "KNS_BillInitiator": [
+     {
+      "Id": 203601,
+      "BillID": 2196864,
+      "PersonID": 30799,
+      "IsInitiator": true,
+      "Ordinal": 1,
+      "LastUpdatedDate": "2024-11-13T14:36:56.34+02:00",
+      "KNS_Person": {
+       "Id": 30799,
+       "LastName": "בוסקילה",
+       "FirstName": "מישל",
+       "GenderID": 251,
+       "GenderDesc": "זכר",
+       "Email": "mbuskila@knesset.gov.il",
+       "IsCurrent": true,
+       "LastUpdatedDate": "2022-11-06T18:55:42.65+02:00"
+      }
+     }
+    ]
+   }
+  ],
+  "bill_details": {
+   "bill_id": 2209870,
+   "bill_name": "הצעת חוק שוברים להשלמת לימודי בסיס בחינוך הבלתי פורמלי, התשפ\"ד-2023",
+   "bill_number": null,
+   "knesset_num": 25,
+   "type": "הצעת חוק",
+   "sub_type": "פרטית",
+   "status": null,
+   "committee_id": -1,
+   "publication_date": null,
+   "last_updated": "2026-08-16T14:27:46.763+03:00",
+   "initiators": [
+    {
+     "person_id": 30839,
+     "full_name": "דן אילוז"
+    }
+   ],
+   "documents": [
+    {
+     "doc_id": 3414599,
+     "bill_id": 2209870,
+     "group": "הצעת חוק לדיון מוקדם",
+     "format": "DOC",
+     "url": "https://fs.knesset.gov.il/25/law/25_lst_3414599.docx"
+    },
+    {
+     "doc_id": 4295186,
+     "bill_id": 2209870,
+     "group": "הצעת חוק לדיון מוקדם",
+     "format": "PDF",
+     "url": "https://fs.knesset.gov.il/25/law/25_lst_3414599.pdf"
+    }
+   ]
+  },
+  "bill_text": {
+   "bill_id": 2209870,
+   "doc_id": 4295186,
+   "group": "הצעת חוק לדיון מוקדם",
+   "url": "https://fs.knesset.gov.il/25/law/25_lst_3414599.pdf",
+   "text": "2209870 :מספר פנימי\nהכנסת העשרים וחמש\n      חבר הכנסתדן אילוז\nיוזם:\n \n \n______________________________________________\n           \n3997/25/פ\n                                             \n2023–הצעת חוק שוברים להשלמת לימודי בסיס בחינוך הבלתי פורמלי, התשפ\"ד\nמטרת חוק זה לקדם ולעודד הקניית מיומנויות בסיס באמצעות החינוך\nהבלתי פורמלי, לתלמידי מוסדות חינוך אשר אינם מלמדים את תכנית היסוד\nבמלואה.\n.1מטרה\n– בחוק זה.2הגדרות\nפורמלי\" – כהגדרתו בחוק הרשויות המקומיות )מנהל יחידת-\"חינוך בלתי\n, לרבות תנועות נוער,12011–נוער ומועצת תלמידים ונוער(, התשע\"א\nארגוני נוער וחוגים;\n,\"לימודי מיומנויות הבסיס\" – תכנית לימודים במקצועות המתמטיקה\nהמדעים, השפה האנגלית ומיומנויות השפה העברית, המקבילה\nבהיקפה ובאיכותה לתכנית הלימודים במקצועות אלו בחינוך הרשמי;\nיבוצעו התאמות בתכניה של התכנית לערכים ולתרבות של כל מגזר\n)להלן – לימודי הבסיס(;\n\"מדד הטיפוח\" – מדד טיפוח בית ספרי שגיבש משרד החינוך, המתחשב\nכלכליים והמתפרסם מזמן לזמן בחוזרי המנהל-במדדים חברתיים\nהכללי;\n–\"מוסד חינוך מוכר שאינו רשמי\" – כהגדרתו בחוק לימוד חובה, התש\"ט\n;21",
+   "truncated": true
+  },
+  "missing_bill": null,
+  "mk_votes": [
+   {
+    "vote_id": 46672,
+    "vote_title": "הצעת חוק התקשורת (שידורים), התשפ\"ו-2026",
+    "vote_subject": "הסתייגות 22",
+    "vote_datetime": "2026-07-16T18:07:00+03:00",
+    "vote_method": "שמית",
+    "is_no_confidence": null,
+    "result": "נגד"
+   },
+   {
+    "vote_id": 46671,
+    "vote_title": "הצעת חוק התקשורת (שידורים), התשפ\"ו-2026",
+    "vote_subject": "הסתייגות 7",
+    "vote_datetime": "2026-07-16T17:55:00+03:00",
+    "vote_method": "שמית",
+    "is_no_confidence": null,
+    "result": "נגד"
+   },
+   {
+    "vote_id": 46662,
+    "vote_title": "הצעת חוק ההתיישנות (תיקון מס' 10), התשפ\"ו–2026 (פ/2569/25)",
+    "vote_subject": "סעיפים 1–2",
+    "vote_datetime": "2026-07-17T03:53:00+03:00",
+    "vote_method": "אלקטרונית",
+    "is_no_confidence": null,
+    "result": "בעד"
+   },
+   {
+    "vote_id": 46661,
+    "vote_title": "הצעת חוק ההתיישנות (תיקון מס' 10), התשפ\"ו–2026 (פ/2569/25)",
+    "vote_subject": null,
+    "vote_datetime": "2026-07-17T03:53:00+03:00",
+    "vote_method": "אלקטרונית",
+    "is_no_confidence": null,
+    "result": "בעד"
+   },
+   {
+    "vote_id": 46550,
+    "vote_title": "הצעת חוק התקשורת (שידורים), התשפ\"ו-2026",
+    "vote_subject": "סעיף 14",
+    "vote_datetime": "2026-07-16T18:35:00+03:00",
+    "vote_method": "אלקטרונית",
+    "is_no_confidence": null,
+    "result": "בעד"
+   }
+  ],
+  "votes_on_topic": [
+   {
+    "vote_id": 46361,
+    "vote_title": "הצעה דחופה לסדר היום בנושא: \"פגיעה בביטחון אזרחים וישובים לאורך הגבולות בעקבות הודעת פיקוד העורף על קיצוץ דרמטי בתקציבי מרכיבי הביטחון\"",
+    "vote_subject": "",
+    "vote_datetime": "2026-06-10T00:00:00+03:00",
+    "vote_method": "שמית",
+    "is_no_confidence": null
+   },
+   {
+    "vote_id": 46151,
+    "vote_title": "הצעת חוק המכינות הקדם-צבאיות (תיקון - תקציב ייעודי להנגשה ולשילוב חניכים עם מוגבלות), התשפ״ו-2026",
+    "vote_subject": null,
+    "vote_datetime": "2026-06-24T12:31:00+03:00",
+    "vote_method": "אלקטרונית",
+    "is_no_confidence": null
+   },
+   {
+    "vote_id": 46140,
+    "vote_title": "החלטת ועדת הכלכלה בדבר פיצול פרק י\"ג (ייעול וקידום התחרות במשק הדלק) מתוך הצעת חוק התוכנית הכלכלית (תיקוני חקיקה ליישום המדיניות הכלכלית לשנת התקציב 2026), התשפ\"ו-2026 [פוצלה לפי סעיף 84(ב) לתקנון]",
+    "vote_subject": null,
+    "vote_datetime": "2026-06-17T16:10:00+03:00",
+    "vote_method": "אלקטרונית",
+    "is_no_confidence": null
+   },
+   {
+    "vote_id": 46025,
+    "vote_title": "הצעה דחופה לסדר היום בנושא: \"הטלת מגבלות תקציביות על המרכז הרפואי לגליל בנהריה בשעת מלחמה\"",
+    "vote_subject": null,
+    "vote_datetime": "2026-06-03T22:14:00+03:00",
+    "vote_method": "אלקטרונית",
+    "is_no_confidence": null
+   },
+   {
+    "vote_id": 45856,
+    "vote_title": "הצעת חוק התקציב לשנת הכספים 2026, התשפ\"ו-2026",
+    "vote_subject": "הסתייגות מס' 2 לפני סעיף 1",
+    "vote_datetime": "2026-03-30T00:55:00+03:00",
+    "vote_method": "שמית",
+    "is_no_confidence": null
+   }
+  ],
+  "votes_on_topic_by_mk": [
+   {
+    "vote_id": 46361,
+    "vote_title": "הצעה דחופה לסדר היום בנושא: \"פגיעה בביטחון אזרחים וישובים לאורך הגבולות בעקבות הודעת פיקוד העורף על קיצוץ דרמטי בתקציבי מרכיבי הביטחון\"",
+    "vote_subject": "",
+    "vote_datetime": "2026-06-10T00:00:00+03:00",
+    "vote_method": "שמית",
+    "is_no_confidence": null,
+    "mk_name": "בנימין נתניהו",
+    "result": "לא הצביע"
+   },
+   {
+    "vote_id": 46151,
+    "vote_title": "הצעת חוק המכינות הקדם-צבאיות (תיקון - תקציב ייעודי להנגשה ולשילוב חניכים עם מוגבלות), התשפ״ו-2026",
+    "vote_subject": null,
+    "vote_datetime": "2026-06-24T12:31:00+03:00",
+    "vote_method": "אלקטרונית",
+    "is_no_confidence": null,
+    "mk_name": "בנימין נתניהו",
+    "result": "לא הצביע"
+   },
+   {
+    "vote_id": 46140,
+    "vote_title": "החלטת ועדת הכלכלה בדבר פיצול פרק י\"ג (ייעול וקידום התחרות במשק הדלק) מתוך הצעת חוק התוכנית הכלכלית (תיקוני חקיקה ליישום המדיניות הכלכלית לשנת התקציב 2026), התשפ\"ו-2026 [פוצלה לפי סעיף 84(ב) לתקנון]",
+    "vote_subject": null,
+    "vote_datetime": "2026-06-17T16:10:00+03:00",
+    "vote_method": "אלקטרונית",
+    "is_no_confidence": null,
+    "mk_name": "בנימין נתניהו",
+    "result": "לא הצביע"
+   },
+   {
+    "vote_id": 46025,
+    "vote_title": "הצעה דחופה לסדר היום בנושא: \"הטלת מגבלות תקציביות על המרכז הרפואי לגליל בנהריה בשעת מלחמה\"",
+    "vote_subject": null,
+    "vote_datetime": "2026-06-03T22:14:00+03:00",
+    "vote_method": "אלקטרונית",
+    "is_no_confidence": null,
+    "mk_name": "בנימין נתניהו",
+    "result": "לא הצביע"
+   },
+   {
+    "vote_id": 45856,
+    "vote_title": "הצעת חוק התקציב לשנת הכספים 2026, התשפ\"ו-2026",
+    "vote_subject": "הסתייגות מס' 2 לפני סעיף 1",
+    "vote_datetime": "2026-03-30T00:55:00+03:00",
+    "vote_method": "שמית",
+    "is_no_confidence": null,
+    "mk_name": "בנימין נתניהו",
+    "result": "לא הצביע"
+   }
+  ],
+  "recent_votes": [
+   {
+    "vote_id": 46701,
+    "vote_title": "הצעה להביע אי אמון בממשלה מטעם סיעת יש עתיד בנושא: \"ממשלת המשתמטים והמושחתים\"",
+    "vote_subject": "",
+    "vote_datetime": "2026-07-06T17:30:00+03:00",
+    "vote_method": "שמית",
+    "is_no_confidence": null
+   },
+   {
+    "vote_id": 46701,
+    "vote_title": "הצעה להביע אי אמון בממשלה מטעם סיעת יש עתיד בנושא: \"ממשלת המשתמטים והמושחתים\"",
+    "vote_subject": "",
+    "vote_datetime": "2026-07-06T17:30:00+03:00",
+    "vote_method": "שמית",
+    "is_no_confidence": null
+   },
+   {
+    "vote_id": 46700,
+    "vote_title": "הצעת חוק נוכחות עורך דין בחקירת קטינים ואנשים עם מוגבלות (תיקוני חקיקה והוראת שעה), התשפ\"ו-2026",
+    "vote_subject": "סעיפים 1–13",
+    "vote_datetime": "2026-07-28T14:43:00+03:00",
+    "vote_method": "אלקטרונית",
+    "is_no_confidence": null
+   },
+   {
+    "vote_id": 46699,
+    "vote_title": "הצעת חוק נוכחות עורך דין בחקירת קטינים ואנשים עם מוגבלות (תיקוני חקיקה והוראת שעה), התשפ\"ו-2026",
+    "vote_subject": null,
+    "vote_datetime": "2026-07-28T14:43:00+03:00",
+    "vote_method": "אלקטרונית",
+    "is_no_confidence": null
+   },
+   {
+    "vote_id": 46698,
+    "vote_title": "הצעת חוק לעידוד פעילות בשוק ההון (תיקוני חקיקה), התשפ\"ד-2024",
+    "vote_subject": "סעיפים 1–4",
+    "vote_datetime": "2026-07-28T14:27:00+03:00",
+    "vote_method": "אלקטרונית",
+    "is_no_confidence": null
+   }
+  ]
+ }
+}

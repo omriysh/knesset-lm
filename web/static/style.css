@@ -1216,7 +1216,26 @@ details[open] > .sub-summary::before { transform: rotate(90deg); }
   font-weight: 700;
   margin-bottom: 5px;
   direction: rtl;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
 }
+.summary-heading::-webkit-details-marker { display: none; }
+.summary-section-arrow {
+  font-size: 0.6rem;
+  color: #888;
+  transition: transform 0.15s;
+}
+.summary-section:not([open]) .summary-section-arrow { transform: rotate(90deg); }
+.summary-section-count {
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: #888;
+  background: #eef0ec;
+  border-radius: 8px;
+  padding: 0 6px;
+}
+.summary-toggle-icon { font-size: 16px; font-variation-settings: 'FILL' 1; }
 
 .summary-bullets {
   list-style: none;
@@ -1263,6 +1282,71 @@ details[open] > .sub-summary::before { transform: rotate(90deg); }
   transition: background 0.12s;
 }
 .summary-bullet-btn.active .bullet-indicator { background: #2e7d32; }
+
+.summary-quote {
+  margin: 0.1rem 1.6rem 0.4rem 0;
+  padding-right: 0.6rem;
+  border-right: 2px solid #c8d6c8;
+  font-size: 0.8rem;
+  color: #555;
+  font-style: italic;
+}
+.summary-quote-unverified {
+  margin: 0.15rem 1.6rem 0.5rem 0;
+  padding: 0.35rem 0.6rem;
+  background: #fdf6e3;
+  border: 1px dashed #d9a93a;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  color: #8a8a86;
+}
+.summary-quote-unverified-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #9a6b00;
+  margin-bottom: 2px;
+}
+.summary-quote-unverified-label .material-symbols-outlined { font-size: 0.9rem; }
+.summary-approx-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 4px;
+  padding: 1px 8px;
+  background: #fff;
+  border: 1px solid #d9a93a;
+  border-radius: 10px;
+  font-size: 0.72rem;
+  color: #9a6b00;
+  cursor: pointer;
+}
+.summary-approx-btn:hover { background: #fbeec8; }
+.summary-approx-btn .material-symbols-outlined { font-size: 0.85rem; }
+.summary-jump-btn {
+  background: none; border: none; cursor: pointer; padding: 0 0.2rem;
+  vertical-align: middle; color: #2e7d32;
+}
+.summary-jump-btn .material-symbols-outlined { font-size: 0.95rem; }
+
+/* Quote located in the transcript: highlight sweeps right→left (reading direction) once the scroll settles */
+mark.quote-highlight {
+  color: inherit;
+  background-color: transparent;
+  background-image: linear-gradient(#fff1a8, #fff1a8);
+  background-repeat: no-repeat;
+  background-position: right center;
+  background-size: 0% 100%;
+  border-radius: 3px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+mark.quote-highlight.sweep {
+  background-size: 100% 100%;
+  transition: background-size 0.9s ease-out;
+}
 
 /* ── Transcript ─────────────────────────────────────────────── */
 .transcript-body {

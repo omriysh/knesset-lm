@@ -20,7 +20,7 @@ class TestBuildToolRegistry:
             sm,
             knesset_dispatch=lambda name, args: f"result:{name}",
         )
-        assert "get_mk_profile" in registry
+        assert "find_mk" in registry
 
     def test_unknown_tool_raises_at_startup(self, tmp_path):
         """build_tool_registry must raise ValueError for any unregistered tool."""
@@ -64,9 +64,9 @@ class TestBuildToolRegistry:
             return "mock result"
 
         registry = build_tool_registry(sm, knesset_dispatch=_dispatch)
-        result = registry["get_mk_profile"]({"name": "יצחק"})
+        result = registry["find_mk"]({"query": "יצחק"})
         assert result == "mock result"
-        assert calls == [("get_mk_profile", {"name": "יצחק"})]
+        assert calls == [("find_mk", {"query": "יצחק"})]
 
     def test_summary_executor_registered(self, machine_with_tool_path):
         """Summary tools should be callable when summary_executor is provided."""
