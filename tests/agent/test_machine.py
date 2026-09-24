@@ -124,7 +124,7 @@ def test_tool_nodes(machine_with_tool_path):
     sm = StateMachine(machine_with_tool_path)
     tools = sm.tool_nodes("llm_001")
     assert len(tools) == 1
-    assert tools[0]["data"]["function_name"] == "get_mk_profile"
+    assert tools[0]["data"]["function_name"] == "find_mk"
 
 def test_tool_nodes_all(machine_with_tool_path):
     sm = StateMachine(machine_with_tool_path)
@@ -166,7 +166,7 @@ def test_build_tool_schemas(machine_with_tool_path):
     schemas = sm.build_tool_schemas(sm.tool_nodes_all())
     assert len(schemas) == 1
     fn = schemas[0]["function"]
-    assert fn["name"] == "get_mk_profile"
+    assert fn["name"] == "find_mk"
     assert "name" in fn["parameters"]["properties"]
 
 def test_build_tool_schemas_deduplicates(tmp_path):
@@ -175,7 +175,7 @@ def test_build_tool_schemas_deduplicates(tmp_path):
         data["nodes"].append(
             {"id": f"tool_{i}", "type": "tool", "label": f"t{i}",
              "position": {"x": 0, "y": i * 50},
-             "data": {"function_name": "get_mk_profile",
+             "data": {"function_name": "find_mk",
                       "description": "", "parameters": {}}}
         )
         data["edges"].append(

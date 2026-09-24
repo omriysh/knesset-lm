@@ -10,8 +10,8 @@ let _citeSid = '';
 
 /**
  * Find a protocol anchor inside a quote object/array: the first node carrying a
- * meeting_id, plus its chunk anchor (speech_idx / start_speech_idx) if present.
- * Returns {meetingId, speechIdx} or null.
+ * meeting_id, plus its chunk anchor (speech_idx / start_speech_idx) and quote if present.
+ * Returns {meetingId, speechIdx, quote} or null.
  */
 function findQuoteAnchor(obj) {
   if (obj == null || typeof obj !== 'object') return null;
@@ -25,7 +25,7 @@ function findQuoteAnchor(obj) {
   if (obj.meeting_id != null) {
     const sidx = (obj.speech_idx != null) ? obj.speech_idx
                : (obj.start_speech_idx != null ? obj.start_speech_idx : null);
-    return { meetingId: String(obj.meeting_id), speechIdx: sidx };
+    return { meetingId: String(obj.meeting_id), speechIdx: sidx, quote: (sidx != null && obj.quote) || '' };
   }
   if (Array.isArray(obj.chunks)) {
     for (const ch of obj.chunks) {
@@ -43,9 +43,9 @@ function openProtocolLinkHtml(sid, anchor) {
   if (!anchor || !anchor.meetingId) return '';
   const sidx = (anchor.speechIdx != null) ? String(anchor.speechIdx) : '';
   return (
-    `<button type="button" class="ev-open-protocol" ` +
-    `onclick="openProtocolFromCitation('${esc(sid)}','${esc(anchor.meetingId)}',` +
-    `${sidx === '' ? 'null' : `'${esc(sidx)}'`})">` +
+    `<button type="button" class="ev-open-protocol" data-sid="${esc(sid)}" ` +
+    `data-meeting-id="${esc(anchor.meetingId)}" data-speech-idx="${esc(sidx)}" data-quote="${esc(anchor.quote || '')}" ` +
+    `onclick="openProtocolFromCitationButton(this)">` +
     `${OPEN_ICON}<span>לפרוטוקול המלא ←</span></button>`
   );
 }

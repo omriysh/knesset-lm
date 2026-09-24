@@ -1,8 +1,8 @@
 """
 tests/test_knesset_db_store.py
 
-Tests for retrieval.knesset_db_store (schema, upserts, FTS searches, structural
-candidate filter) and for summarization.summary_io / output_parsing.locate_quote.
+Tests for retrieval.knesset_db_store (schema, upserts, structural candidate
+filter) and for summarization.summary_io / output_parsing.locate_quote.
 """
 
 import json
@@ -85,32 +85,6 @@ class TestSummaryRows:
         op = store.get_opinions(conn, "m1")[0]
         assert op["speaker"] == "שמחה רוטמן (הציונות הדתית)" and op["speaker_name"] == "שמחה רוטמן"
         assert op["speech_idx"] == 3 and op["quote_offset"] == 10 and op["quote_verified"] == 1
-
-
-class TestSearches:
-    def test_search_topics_ranked_with_meeting_meta(self, conn):
-        rows = store.search_topics(conn, "תקציב", 25, top_k=10)
-        assert {r["meeting_id"] for r in rows} == {"m1", "m2"}
-        assert all(r["committee"] and r["date"] for r in rows)
-
-    def test_search_topics_committee_and_date_filters(self, conn):
-        assert [r["meeting_id"] for r in store.search_topics(conn, "תקציב", 25, top_k=10, committees=["ועדת הכספים"])] == ["m2"]
-        assert [r["meeting_id"] for r in store.search_topics(conn, "תקציב", 25, top_k=10, date_to="2025-01-31")] == ["m1"]
-
-    def test_search_opinions_by_mk_and_verified(self, conn):
-        assert store.search_opinions(conn, "תומך", 25, top_k=5, mk_id="1")[0]["meeting_id"] == "m1"
-        assert store.search_opinions(conn, "תומך", 25, top_k=5, mk_id="2") == []
-        assert store.search_opinions(conn, None, 25, top_k=5, party="הציונות הדתית")[0]["opinion"] == "תומך בתקציב"
-
-    def test_search_speeches_filters(self, conn):
-        store.insert_speeches(conn, [
-            {"meeting_id": "m1", "knesset_num": 25, "idx": 0, "speaker": 'ח"כ שמחה רוטמן', "mk_id": "1", "text": "דיון על תקציב החינוך"},
-            {"meeting_id": "m2", "knesset_num": 25, "idx": 0, "speaker": "גלעד קריב", "mk_id": "2", "text": "דיון על תקציב הביטחון"},
-        ])
-        store.rebuild_fts(conn, "speeches")
-        assert len(store.search_speeches(conn, "תקציב", 25, top_k=10)) == 2
-        assert [r["meeting_id"] for r in store.search_speeches(conn, "תקציב", 25, top_k=10, meeting_ids=["m2"])] == ["m2"]
-        assert [r["meeting_id"] for r in store.search_speeches(conn, "תקציב", 25, top_k=10, speaker_tokens=["רוטמן"])] == ["m1"]
 
 
 class TestCandidateMeetingIds:

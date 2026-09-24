@@ -11,7 +11,8 @@ Targets, in dependency order:
     summaries   topics + opinions from Data/summaries/<k>/**/*.json, opinion speakers
                 resolved to mk_id, quotes located in the transcript
     speeches    every speech (structured or parsed from full_text), speaker resolved
-    bills, votes  OData lists
+
+Bills and votes are not stored: the agent queries them live from OData.
 
 Usage
 -----
@@ -44,7 +45,7 @@ from utils.knesset_db import _most_recent_faction, get_all_committees, get_all_m
 from utils.meeting import extract_attendance, get_meeting_speakers, load_meeting, parse_full_text_speeches
 from utils.tool_helpers.fuzzy_name_index import FuzzyNameIndex
 
-TARGETS = ("mks", "committees", "meetings", "summaries", "speeches", "bills", "votes")
+TARGETS = ("mks", "committees", "meetings", "summaries", "speeches")
 
 
 def _meeting_id_from_stem(stem: str) -> str:
@@ -344,71 +345,9 @@ def build_speeches(conn, knesset_num: int, rebuild: bool) -> int:
     return total
 
 
-# ── bills / votes (OData) ─────────────────────────────────────────────────────
-
-def _odata_pages(entity: str, knesset_num: int, expand: str | None = None):
-    import requests
-    params = {"$filter": f"KnessetNum eq {knesset_num}", "$top": 200, "$skip": 0, "$orderby": "Id asc"}
-    if expand:
-        params["$expand"] = expand
-    while True:
-        try:
-            r = requests.get(f"{config.OFFICIAL_KNESSET_NEW_API}/{entity}", params=params, timeout=config.API_TIMEOUT)
-            r.raise_for_status()
-        except Exception as exc:
-            print(f"  [{entity}] fetch error at skip={params['$skip']}: {exc}")
-            return
-        data = r.json().get("value", [])
-        if not data:
-            return
-        yield from data
-        params["$skip"] += 200
-        if len(data) < 200:
-            return
-
-
-def build_bills(conn, knesset_num: int, rebuild: bool) -> int:
-    rows = []
-    for bill in _odata_pages("KNS_Bill", knesset_num, "KNS_Status,KNS_BillInitiator($expand=KNS_Person)"):
-        name = (bill.get("Name") or "").strip()
-        if not name:
-            continue
-        initiators = [
-            f"{bi['KNS_Person'].get('FirstName', '')} {bi['KNS_Person'].get('LastName', '')}".strip()
-            for bi in (bill.get("KNS_BillInitiator") or []) if bi.get("KNS_Person")]
-        rows.append({"bill_id": str(bill.get("Id")), "knesset_num": knesset_num, "name": name,
-                     "status": (bill.get("KNS_Status") or {}).get("Desc", ""),
-                     "initiators": " | ".join(i for i in initiators if i)})
-    if not rows:
-        return 0
-    if rebuild:
-        store.clear_target(conn, "bills", knesset_num)
-    n = store.insert_bills(conn, rows)
-    store.rebuild_fts(conn, "bills")
-    return n
-
-
-def build_votes(conn, knesset_num: int, rebuild: bool) -> int:
-    rows = []
-    for vote in _odata_pages("KNS_PlenumVote", knesset_num):
-        title = (vote.get("VoteTitle") or vote.get("Title") or "").strip()
-        subject = (vote.get("VoteSubject") or vote.get("ItemDesc") or "").strip()
-        if not (title or subject):
-            continue
-        rows.append({"vote_id": str(vote.get("Id")), "knesset_num": knesset_num,
-                     "title": title or subject, "subject": subject})
-    if not rows:
-        return 0
-    if rebuild:
-        store.clear_target(conn, "votes", knesset_num)
-    n = store.insert_votes(conn, rows)
-    store.rebuild_fts(conn, "votes")
-    return n
-
-
 _BUILDERS = {
     "mks": build_mks, "committees": build_committees, "meetings": build_meetings,
-    "summaries": build_summaries, "speeches": build_speeches, "bills": build_bills, "votes": build_votes,
+    "summaries": build_summaries, "speeches": build_speeches,
 }
 
 

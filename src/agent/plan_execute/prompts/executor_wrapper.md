@@ -33,8 +33,8 @@ Decision protocol:
 
 3. The evidence_view only shows summaries — raw structured results (IDs,
    lists, etc.) are NOT included. If your task requires IDs or data from
-   a previous step (e.g. meeting_ids from search_topics, bill_id from
-   find_bill), call `expand` with the `ev_xxx` id from evidence_view to
+   a previous step (e.g. meeting_ids from query_protocols, bill_id from
+   query_bills), call `expand` with the `ev_xxx` id from evidence_view to
    get the full raw results. Do this BEFORE calling any other tool.
 
 4. After each tool returns you will see its result. You may then call

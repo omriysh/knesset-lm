@@ -1,25 +1,23 @@
 """Tool implementations + dispatch helpers — agent-agnostic.
 
-This module is the function-bag layer of the tool surface (per design §5.2).
-It owns:
+This module is the function-bag layer of the tool surface. It owns:
 
   * the :class:`ToolSpec` dataclass that ``research_agent/tools.py`` uses to
     enumerate the registry,
   * a generic :func:`dispatch` that looks a tool up in any registry and
     invokes its handler with raw kwargs,
-  * one ``handle_*`` function per tool in the v1 inventory (§5.3).
+  * one ``handle_*`` function per tool.
 
 This module deliberately holds *no* registry — registry construction lives
-in the agent-specific module that knows which subset of tools to expose
-(per §5.1 #5: the planner drives the surface, not the SM). Imports flow
-upward only: ``utils/`` may not import from ``agent/`` (project CLAUDE.md
-import convention), so the registry has to live one layer up.
+in the agent-specific module that knows which subset of tools to expose.
+Imports flow upward only: ``utils/`` may not import from ``agent/`` (project
+CLAUDE.md import convention), so the registry has to live one layer up.
 
 ToolEnvelope contract: every handler returns a
 :class:`agent.subgraph.evidence.ToolEnvelope` — never raises, never returns
 ``None``. Argument-validation failures and infrastructure errors (missing
 knesset.db, network exception, etc.) are reported via the envelope's ``error``
-field per §4.3.
+field.
 """
 
 from __future__ import annotations
@@ -28,8 +26,7 @@ import json
 import sys
 import traceback
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 import config
 from agent.subgraph.evidence import ToolEnvelope
@@ -38,16 +35,16 @@ from retrieval.ktiv import expand_token
 from retrieval.lemmatize import lemmatize
 from utils.speech import name_query_matches, name_tokens
 from utils.knesset_db import (
+    ODATA_PAGE_SIZE,
+    _bill_record_to_dict,
+    _fetch_members,
     _get_bill_details_by_id,
     _get_bill_text_by_id,
-    _resolve_bill_by_name,
-    get_bill_details,
+    _sanitize_odata_search,
+    _search_bills_by_term,
     get_party_members,
-    get_session_transcript,
 )
 from utils.tool_helpers.adapters import (
-    adapt_get_committee_members,
-    adapt_get_committee_sessions,
     adapt_get_mk_votes,
     adapt_get_recent_votes,
     adapt_get_votes_on_topic,
@@ -67,13 +64,8 @@ from utils.tool_helpers.name_search import name_search
 class ToolSpec:
     """Registry entry for a single tool.
 
-    Field set follows design §5.2 with one minor addition: ``description``
-    is exposed as a top-level field (it is part of the JSON schema in
-    practice, but planner-prompt rendering treats it as a header so it is
-    handy to keep it indexable).
-
-    Per project CLAUDE.md, the dataclass uses ``to_dict`` / ``from_dict``
-    explicitly — Pydantic is forbidden.
+    ``description`` lives inside ``schema`` (it is part of the JSON schema);
+    the dataclass uses ``to_dict`` explicitly — Pydantic is forbidden.
     """
 
     name: str
@@ -217,113 +209,85 @@ def _db_error_envelope(exc: Exception, source: str, **prov) -> ToolEnvelope:
     )
 
 
-# ---------------------------------------------------------------------------
-# search_topics — FTS over summary topics
-# ---------------------------------------------------------------------------
+def _as_list(value) -> list:
+    """Tool args may carry a scalar where the schema asks for an array."""
+    if value is None or value == "":
+        return []
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return [value]
 
 
-def handle_search_topics(args: dict) -> ToolEnvelope:
-    """FTS5 (BM25-ranked) search over the summary topics table."""
-    query = (args.get("query") or "").strip()
-    knesset_num = int(args.get("knesset_num") or 25)
-    top_k = int(args.get("top_k") or config.SEARCH_TOPICS_DEFAULT_TOP_K)
-    top_k = max(1, min(top_k, config.SEARCH_TOPICS_MAX_TOP_K))
-    committees = [str(c).replace("_", " ") for c in (args.get("committees") or [])]
-    date_from = (args.get("date_from") or "").strip() or None
-    date_to = (args.get("date_to") or "").strip() or None
-
-    if not query:
-        return _validation_error("missing_query", kind="search", source="topics",
-                                 query=query, knesset_num=knesset_num)
-
-    conn = _open_db()
-    if conn is None:
-        return _db_missing_envelope("topics", knesset_num)
-    try:
-        rows = store.search_topics(
-            conn, _expand_match(lemmatize(query), "topics_fts") or query, knesset_num,
-            top_k=top_k, committees=committees or None, date_from=date_from, date_to=date_to)
-    except Exception as exc:
-        return _db_error_envelope(exc, "topics", query=query, knesset_num=knesset_num)
-    finally:
-        conn.close()
-
-    payload = [{
-        "topic_id":   r["id"],
-        "text":       r["text"],
-        "meeting_id": r["meeting_id"],
-        "committee":  r["committee"],
-        "date":       r["date"],
-        "topic_idx":  r["idx"],
-    } for r in rows]
-    return ToolEnvelope(
-        summary="",
-        full=json.dumps(payload, ensure_ascii=False),
-        metadata={"kind": "search", "source": "topics", "count": len(payload)},
-        provenance={"query": query, "knesset_num": knesset_num, "top_k": top_k},
-    )
+def _fts_match(query: str, fts_table: str) -> str:
+    """FTS5 MATCH expression for a free-text query: lemmatized, ktiv-expanded, tokens AND-ed."""
+    normalized = lemmatize(query)
+    return _expand_match(normalized, fts_table) or _quote_match(normalized) or query
 
 
 # ---------------------------------------------------------------------------
-# search_opinions — MK-scoped FTS over opinions (verified quotes only)
+# query_protocols — topics / opinions / speeches over knesset.db
 # ---------------------------------------------------------------------------
 
 
-def handle_search_opinions(args: dict) -> ToolEnvelope:
-    """FTS5 search over opinion + quote text, hard-filtered to one MK (or party).
+def handle_query_protocols(args: dict) -> ToolEnvelope:
+    """Keyword search (or listing, with an empty query) over the protocol scopes.
 
-    Only opinions whose quote was verified verbatim against the transcript are
-    returned. An empty query lists the MK's opinions newest first.
+    Each requested scope is queried independently with the same query and
+    filters; ``full`` is a JSON object with one row list per scope.
     """
     query = (args.get("query") or "").strip()
-    mk_id = str(args.get("mk_id") or "").strip()
-    party = (args.get("party") or "").strip()
+    search_in = [str(s) for s in _as_list(args.get("search_in"))] or list(store.PROTOCOL_SCOPES)
+    mk_id = str(args.get("mk_id") or "").strip() or None
+    party = (args.get("party") or "").strip() or None
+    committees = [str(c).replace("_", " ") for c in _as_list(args.get("committees"))]
+    meeting_ids = [str(m).strip() for m in _as_list(args.get("meeting_ids")) if str(m).strip()]
+    date_from = (args.get("date_from") or "").strip() or None
+    date_to = (args.get("date_to") or "").strip() or None
+    sort = (args.get("sort") or ("relevance" if query else "date")).strip().lower()
+    top_k = int(args.get("top_k") or config.QUERY_PROTOCOLS_DEFAULT_TOP_K)
+    top_k = max(1, min(top_k, config.QUERY_PROTOCOLS_MAX_TOP_K))
+    offset = max(0, int(args.get("offset") or 0))
     knesset_num = int(args.get("knesset_num") or 25)
-    top_k = int(args.get("top_k") or config.SEARCH_OPINIONS_DEFAULT_TOP_K)
-    top_k = max(1, min(top_k, config.SEARCH_OPINIONS_MAX_TOP_K))
 
-    if not mk_id and not party:
-        return _validation_error("missing_mk_id", kind="search", source="opinions",
-                                 query=query, mk_id=mk_id, knesset_num=knesset_num)
+    provenance = {
+        "query": query, "search_in": search_in, "mk_id": mk_id, "party": party,
+        "committees": committees, "meeting_ids": meeting_ids, "date_from": date_from,
+        "date_to": date_to, "sort": sort, "top_k": top_k, "offset": offset, "knesset_num": knesset_num,
+    }
+    unknown_scopes = [s for s in search_in if s not in store.PROTOCOL_SCOPES]
+    if unknown_scopes:
+        return _validation_error("invalid_search_in", kind="search", source="knesset_db",
+                                 unknown_scopes=unknown_scopes, **provenance)
+    if sort not in ("relevance", "date"):
+        return _validation_error("invalid_sort", kind="search", source="knesset_db", **provenance)
 
-    conn = _open_db()
-    if conn is None:
-        return _db_missing_envelope("opinions", knesset_num)
+    if not store.exists():
+        return _db_missing_envelope("protocols", knesset_num)
+    results: dict[str, list[dict]] = {}
+    conn = None
     try:
-        rows = store.search_opinions(
-            conn, _expand_match(lemmatize(query), "opinions_fts") if query else None, knesset_num,
-            top_k=top_k, mk_id=mk_id or None, party=party or None, verified_only=True)
+        conn = store.connect()
+        for scope in search_in:
+            results[scope] = store.query_protocol_rows(
+                conn, scope, knesset_num,
+                match=_fts_match(query, f"{scope}_fts") if query else None,
+                mk_id=mk_id, party=party, committees=committees or None,
+                meeting_ids=meeting_ids or None, date_from=date_from, date_to=date_to,
+                sort=sort, top_k=top_k, offset=offset,
+            )
     except Exception as exc:
-        return _db_error_envelope(exc, "opinions", query=query, mk_id=mk_id, knesset_num=knesset_num)
+        return _db_error_envelope(exc, "knesset_db", **provenance)
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
-    payload = [{
-        "opinion_id":    r["id"],
-        "speaker":       r["speaker_name"],
-        "speaker_label": r["speaker"],
-        "mk_id":         r["mk_id"],
-        "party":         r["party"],
-        "opinion":       r["opinion"],
-        "quote":         r["quote"],
-        "meeting_id":    r["meeting_id"],
-        "committee":     r["committee"],
-        "date":          r["date"],
-        "speech_idx":    r["speech_idx"],
-        "quote_offset":  r["quote_offset"],
-    } for r in rows]
     return ToolEnvelope(
         summary="",
-        full=json.dumps(payload, ensure_ascii=False),
-        metadata={"kind": "search", "source": "opinions", "count": len(payload)},
-        provenance={"query": query, "mk_id": mk_id, "party": party,
-                    "knesset_num": knesset_num, "top_k": top_k},
+        full=json.dumps(results, ensure_ascii=False),
+        metadata={"kind": "search", "source": "knesset_db",
+                  "count": sum(len(rows) for rows in results.values())},
+        provenance=provenance,
     )
-
-
-# ---------------------------------------------------------------------------
-# search_protocols_keyword — BM25 over speech text
-# ---------------------------------------------------------------------------
 
 
 def search_speeches(
@@ -334,92 +298,75 @@ def search_speeches(
     committees: list | None = None,
     meeting_ids: list | None = None,
     speaker: str | None = None,
-    top_k: int = config.SEARCH_PROTOCOLS_DEFAULT_TOP_K,
+    top_k: int = config.QUERY_PROTOCOLS_DEFAULT_TOP_K,
     sort: str = "relevance",
 ) -> list[dict]:
-    """FTS search over speeches, shared by the agent tool and web.app.browse_rag.
+    """FTS search over speeches for the web protocol browser.
 
     The SQL speaker filter is a coarse OR over name tokens; rows are then
     refined with name_query_matches so a speech sharing one token with the
     requested name (a different MK called "אורית") is dropped. Rows carry
     id, meeting_id, speech_idx, speaker, mk_id, text, committee, date, score
-    (sqlite bm25: lower = more relevant, already sorted).
+    (sqlite bm25: lower = more relevant). sort="date" reorders the top_k
+    best matches newest first.
     """
-    normalized = lemmatize(query)
-    match_expr = _expand_match(normalized, "speeches_fts") or _quote_match(normalized) or query
     rows = store.search_speeches(
-        conn, match_expr, knesset_num,
-        top_k=max(top_k, config.KEYWORD_RERANK_TOP_K) if sort == "relevance" else top_k,
+        conn, _fts_match(query, "speeches_fts"), knesset_num,
+        top_k=top_k,
         meeting_ids=[str(m) for m in meeting_ids] if meeting_ids else None,
         committees=[str(c).replace("_", " ") for c in committees] if committees else None,
         speaker_tokens=name_tokens(speaker) if speaker else None,
     )
     if speaker:
         rows = [r for r in rows if name_query_matches(speaker, r.get("speaker") or "")]
+    if sort == "date":
+        rows.sort(key=lambda r: (r.get("date") or ""), reverse=True)
     return rows
 
 
-def handle_search_protocols_keyword(args: dict) -> ToolEnvelope:
-    """FTS over speeches with optional committee / meeting / speaker / date filters."""
-    query = (args.get("query") or "").strip()
-    knesset_num = int(args.get("knesset_num") or 25)
-    top_k = int(args.get("top_k") or config.SEARCH_PROTOCOLS_DEFAULT_TOP_K)
-    top_k = max(1, min(top_k, config.SEARCH_PROTOCOLS_MAX_TOP_K))
-    sort = (args.get("sort") or "relevance").lower()
+# ---------------------------------------------------------------------------
+# get_meeting_attendance
+# ---------------------------------------------------------------------------
 
-    if not query:
-        return _validation_error("missing_query", kind="search", source="speeches",
-                                 query=query, knesset_num=knesset_num)
 
-    committee_ids = args.get("committee_ids") or []
-    meeting_ids = args.get("meeting_ids") or []
-    speaker = (args.get("speaker") or "").strip()
-    date_from = (args.get("date_from") or "").strip()
-    date_to = (args.get("date_to") or "").strip()
-    filters = {"committee_ids": list(committee_ids), "meeting_ids": list(meeting_ids),
-               "speaker": speaker or None, "date_from": date_from or None, "date_to": date_to or None}
-
-    conn = _open_db()
-    if conn is None:
-        return _db_missing_envelope("speeches", knesset_num)
+def handle_get_meeting_attendance(args: dict) -> ToolEnvelope:
+    """Attendance list of one meeting: MKs first (with roster party), then guests."""
+    meeting_id = str(args.get("meeting_id") or "").strip()
+    if not meeting_id:
+        return _validation_error("missing_meeting_id", kind="fetch", source="knesset_db")
+    if not store.exists():
+        return _db_missing_envelope("attendance", 0)
+    conn = None
     try:
-        rows = search_speeches(
-            conn, query, knesset_num=knesset_num,
-            committees=committee_ids, meeting_ids=meeting_ids, speaker=speaker,
-            top_k=top_k, sort=sort,
-        )
+        conn = store.connect()
+        meeting = store.get_meeting(conn, meeting_id)
+        attendance = store.get_attendance(conn, meeting_id) if meeting is not None else []
     except Exception as exc:
-        return _db_error_envelope(exc, "speeches", query=query, knesset_num=knesset_num, filters=filters)
+        return _db_error_envelope(exc, "knesset_db", meeting_id=meeting_id)
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
+    if meeting is None:
+        return _validation_error("meeting_not_found", kind="fetch", source="knesset_db",
+                                 meeting_id=meeting_id)
 
-    if date_from or date_to:
-        rows = [r for r in rows if (not date_from or (r.get("date") or "") >= date_from)
-                and (not date_to or (r.get("date") or "") <= date_to)]
-
-    payload = [{
-        "speech_id":  f"{r['meeting_id']}_{r['speech_idx']}",
-        "label":      r.get("speaker") or "",
-        "text":       r["text"],
-        "meeting_id": r["meeting_id"],
-        "committee":  r.get("committee"),
-        "date":       r.get("date"),
-        "speaker":    r.get("speaker"),
-        "mk_id":      r.get("mk_id"),
-        "speech_idx": r["speech_idx"],
-    } for r in rows[:top_k]]
-
+    payload = {
+        "meeting_id": meeting_id,
+        "committee":  meeting.get("committee"),
+        "date":       meeting.get("date"),
+        "attendance": attendance,
+    }
     return ToolEnvelope(
         summary="",
         full=json.dumps(payload, ensure_ascii=False),
-        metadata={"kind": "search", "source": "speeches", "count": len(payload), "total_match": len(rows)},
-        provenance={"query": query, "knesset_num": knesset_num, "top_k": top_k, "sort": sort,
-                    "filters": filters},
+        metadata={"kind": "fetch", "source": "knesset_db", "count": len(attendance)},
+        provenance={"meeting_id": meeting_id, "committee": meeting.get("committee"),
+                    "date": meeting.get("date")},
     )
 
 
 # ---------------------------------------------------------------------------
-# Find-* tools — BM25 → candidate records
+# Find-* tools — fuzzy name index → candidate records
 # ---------------------------------------------------------------------------
 
 
@@ -503,32 +450,6 @@ def handle_find_committee(args: dict) -> ToolEnvelope:
         label_key="name",
         fetch_record=fetch_committee_record,
         default_top_k=5,
-    )
-
-
-def handle_find_bill(args: dict) -> ToolEnvelope:
-    return _generic_find(
-        args,
-        target="bills",
-        kind="search",
-        source="bills",
-        id_key="bill_id",
-        label_key="bill_name",
-        fetch_record=lambda eid: _fetch_bill_record(eid),
-        default_top_k=5,
-    )
-
-
-def handle_find_vote(args: dict) -> ToolEnvelope:
-    return _generic_find(
-        args,
-        target="votes",
-        kind="search",
-        source="votes",
-        id_key="vote_id",
-        label_key="title",
-        fetch_record=lambda eid: _fetch_vote_record(eid),
-        default_top_k=10,
     )
 
 
@@ -626,13 +547,13 @@ def _generic_find(
 
 
 def _fetch_mk_record(mk_id: str) -> dict | None:
-    """Look up an MK by id by walking the cached members lists."""
-    from utils.knesset_db import _fetch_members
+    """Look up an MK by id by walking the cached oknesset members lists."""
     target = str(mk_id)
     for is_current in (True, False):
         try:
             members = _fetch_members(is_current)
-        except Exception:
+        except Exception as exc:
+            print(f"[tools] _fetch_mk_record: members list (is_current={is_current}) failed: {exc}")
             continue
         for mk in members:
             if str(mk.get("mk_individual_id") or "") == target or \
@@ -641,217 +562,104 @@ def _fetch_mk_record(mk_id: str) -> dict | None:
     return None
 
 
-def _fetch_bill_record(bill_id: str) -> dict | None:
-    try:
-        bid = int(bill_id)
-    except (TypeError, ValueError):
-        return None
-    return _get_bill_details_by_id(bid)
-
-
-def _fetch_vote_record(vote_id: str) -> dict | None:
-    """Best-effort vote-by-id fetch via OData KNS_PlenumVote."""
-    try:
-        import requests
-        r = requests.get(
-            f"{config.OFFICIAL_KNESSET_NEW_API}/KNS_PlenumVote({int(vote_id)})",
-            timeout=config.API_TIMEOUT,
-        )
-        if r.status_code == 404:
-            return None
-        r.raise_for_status()
-        return r.json()
-    except Exception:
-        return None
-
-
 # ---------------------------------------------------------------------------
-# Profile / fetch passthroughs (delegate to adapters)
+# Bills (live OData)
 # ---------------------------------------------------------------------------
 
 
-def handle_get_mk_profile(args: dict) -> ToolEnvelope:
-    mk_id = (args.get("mk_id") or "").strip()
+def handle_query_bills(args: dict) -> ToolEnvelope:
+    """Bill title search (OData ``contains(Name, ...)``) within one Knesset, newest update first."""
+    query = (args.get("query") or "").strip()
     knesset_num = int(args.get("knesset_num") or 25)
+    top_k = max(1, min(int(args.get("top_k") or 10), ODATA_PAGE_SIZE))
+    provenance = {"query": query, "knesset_num": knesset_num, "top_k": top_k}
 
-    if not mk_id:
-        return _validation_error(
-            "missing_mk_id", kind="fetch", source="oknesset",
-            knesset_num=knesset_num,
-        )
-    record = _fetch_mk_record(mk_id)
-    if record is None:
-        return _validation_error(
-            "mk_not_found", kind="fetch", source="oknesset",
-            mk_id=mk_id, knesset_num=knesset_num,
-        )
-    return ToolEnvelope(
-        summary="",
-        full=json.dumps(record, ensure_ascii=False, default=str),
-        metadata={"kind": "fetch", "source": "oknesset", "count": 1},
-        provenance={"mk_id": mk_id, "knesset_num": knesset_num},
-    )
+    if not query:
+        return _validation_error("missing_query", kind="search", source="odata", **provenance)
+    try:
+        bills = _search_bills_by_term(_sanitize_odata_search(query), knesset_num, top=top_k)
+    except Exception as exc:
+        return _odata_error_envelope(exc, "search", **provenance)
 
-
-def handle_get_mk_committees(args: dict) -> ToolEnvelope:
-    mk_id = (args.get("mk_id") or "").strip()
-    knesset_num = int(args.get("knesset_num") or 25)
-
-    if not mk_id:
-        return _validation_error(
-            "missing_mk_id", kind="fetch", source="oknesset",
-            knesset_num=knesset_num,
-        )
-    record = _fetch_mk_record(mk_id)
-    if record is None:
-        return _validation_error(
-            "mk_not_found", kind="fetch", source="oknesset",
-            mk_id=mk_id, knesset_num=knesset_num,
-        )
-    positions = record.get("committee_positions") or []
-    filtered = [
-        p for p in positions
-        if not isinstance(p, dict) or p.get("knesset") in (None, knesset_num)
-    ]
-    payload = {
-        "mk_id":               mk_id,
-        "full_name":           record.get("full_name") or record.get("mk_individual_name") or "",
-        "knesset_num":         knesset_num,
-        "committee_positions": filtered,
-    }
+    payload = [_bill_record_to_dict(b) for b in bills]
     return ToolEnvelope(
         summary="",
         full=json.dumps(payload, ensure_ascii=False, default=str),
-        metadata={"kind": "fetch", "source": "oknesset", "count": 1},
-        provenance={"mk_id": mk_id, "knesset_num": knesset_num},
+        metadata={"kind": "search", "source": "odata", "count": len(payload)},
+        provenance=provenance,
     )
 
 
-def handle_get_committee_members(args: dict) -> ToolEnvelope:
-    committee_id = (args.get("committee_id") or "").strip()
+def handle_get_bill(args: dict) -> ToolEnvelope:
+    """Bill metadata (status, initiators, documents); ``include_text`` adds the extracted bill text."""
+    bill_id = str(args.get("bill_id") or "").strip()
     knesset_num = int(args.get("knesset_num") or 25)
-
-    if not committee_id:
-        return _validation_error(
-            "missing_committee_id", kind="fetch", source="oknesset",
-            knesset_num=knesset_num,
-        )
-    record = fetch_committee_record(committee_id)
-    if record is None:
-        return _validation_error(
-            "committee_not_found", kind="fetch", source="oknesset",
-            committee_id=committee_id, knesset_num=knesset_num,
-        )
-    return adapt_get_committee_members(
-        name=record.get("name") or "",
-        knesset_num=knesset_num,
-    )
-
-
-def handle_get_committee_sessions(args: dict) -> ToolEnvelope:
-    committee_id = (args.get("committee_id") or "").strip()
-    knesset_num = int(args.get("knesset_num") or 25)
-    date_from = args.get("date_from")
-    date_to = args.get("date_to")
-
-    if not committee_id:
-        return _validation_error(
-            "missing_committee_id", kind="fetch", source="odata",
-            knesset_num=knesset_num,
-        )
-
-    return adapt_get_committee_sessions(
-        committee_id=committee_id,
-        knesset_num=knesset_num,
-        date_from=date_from,
-        date_to=date_to,
-    )
-
-
-def handle_get_bill_details(args: dict) -> ToolEnvelope:
-    bill_id = (args.get("bill_id") or "").strip()
-    knesset_num = int(args.get("knesset_num") or 25)
-
-    if not bill_id:
-        return _validation_error(
-            "missing_bill_id", kind="fetch", source="odata",
-            knesset_num=knesset_num,
-        )
-    record = _fetch_bill_record(bill_id)
-    if record is None:
-        return _validation_error(
-            "bill_not_found", kind="fetch", source="odata",
-            bill_id=bill_id, knesset_num=knesset_num,
-        )
-    return ToolEnvelope(
-        summary="",
-        full=json.dumps(record, ensure_ascii=False, default=str),
-        metadata={"kind": "fetch", "source": "odata", "count": 1},
-        provenance={"bill_id": bill_id, "knesset_num": knesset_num},
-    )
-
-
-def handle_get_bill_text(args: dict) -> ToolEnvelope:
-    bill_id = (args.get("bill_id") or "").strip()
-    knesset_num = int(args.get("knesset_num") or 25)
+    include_text = bool(args.get("include_text"))
     max_chars = int(args.get("max_chars") or config.BILL_TEXT_DEFAULT_MAX_CHARS)
-    max_chars = max(
-        config.BILL_TEXT_MIN_MAX_CHARS,
-        min(max_chars, config.BILL_TEXT_MAX_MAX_CHARS),
-    )
+    max_chars = max(config.BILL_TEXT_MIN_MAX_CHARS, min(max_chars, config.BILL_TEXT_MAX_MAX_CHARS))
+    provenance = {"bill_id": bill_id, "knesset_num": knesset_num,
+                  "include_text": include_text, "max_chars": max_chars}
 
     if not bill_id:
-        return _validation_error(
-            "missing_bill_id", kind="fetch", source="odata",
-            knesset_num=knesset_num,
-        )
+        return _validation_error("missing_bill_id", kind="fetch", source="odata", **provenance)
+    if not bill_id.isdigit():
+        return _validation_error("invalid_bill_id", kind="fetch", source="odata", **provenance)
+
+    text_record = None
     try:
-        record = _get_bill_text_by_id(int(bill_id), max_chars=max_chars)
+        record = _get_bill_details_by_id(int(bill_id))
+        if record is not None and include_text:
+            text_record = _get_bill_text_by_id(int(bill_id), max_chars=max_chars)
     except Exception as exc:
-        return ToolEnvelope(
-            summary="",
-            full="",
-            metadata={"kind": "error", "source": "odata", "count": 0,
-                      "exception": str(exc)},
-            provenance={"bill_id": bill_id, "knesset_num": knesset_num},
-            error="bill_text_fetch_failed",
-        )
+        return _odata_error_envelope(exc, "fetch", **provenance)
     if record is None:
-        return _validation_error(
-            "bill_text_not_found", kind="fetch", source="odata",
-            bill_id=bill_id, knesset_num=knesset_num,
-        )
-    warnings = ["result_truncated_to_%d_chars" % max_chars] if record.get("truncated") else []
+        return _validation_error("bill_not_found", kind="fetch", source="odata", **provenance)
+
+    text_truncated = bool(text_record and text_record.get("truncated"))
+    if include_text:
+        record["text"] = text_record["text"] if text_record else None
+        record["text_truncated"] = text_truncated
+    metadata: dict = {"kind": "fetch", "source": "odata", "count": 1}
+    if include_text and text_record is None:
+        metadata["warnings"] = ["bill_text_not_found"]
+    elif text_truncated:
+        metadata["warnings"] = [f"result_truncated_to_{max_chars}_chars"]
     return ToolEnvelope(
         summary="",
         full=json.dumps(record, ensure_ascii=False, default=str),
-        metadata={
-            "kind":   "fetch",
-            "source": "odata",
-            "count":  1,
-            **({"warnings": warnings} if warnings else {}),
-        },
-        provenance={"bill_id": bill_id, "knesset_num": knesset_num},
-        truncated=bool(record.get("truncated")),
+        metadata=metadata,
+        provenance=provenance,
+        truncated=text_truncated,
+    )
+
+
+def _odata_error_envelope(exc: Exception, kind: str, **prov) -> ToolEnvelope:
+    print(f"[tools] OData request failed: {exc}")
+    return ToolEnvelope(
+        summary="",
+        full="",
+        metadata={"kind": "error", "source": "odata", "count": 0, "exception": str(exc)},
+        provenance=prov,
+        error="odata_request_failed",
     )
 
 
 # ---------------------------------------------------------------------------
-# Voting tools (merged)
+# Votes (live OData)
 # ---------------------------------------------------------------------------
 
 
-def handle_query_voting_records(args: dict) -> ToolEnvelope:
-    """Unified voting query — behaviour determined by which params are supplied:
-      topic + mk_id → how that MK voted on matching votes
+def handle_query_votes(args: dict) -> ToolEnvelope:
+    """Plenum votes — behaviour determined by which params are supplied:
+      query + mk_id → how that MK voted on matching votes
       mk_id only    → recent votes cast by the MK
-      topic only    → votes matching the topic keyword
+      query only    → votes matching the keyword
       neither       → most recent votes overall
     """
-    topic = (args.get("topic") or "").strip()
-    mk_id = (args.get("mk_id") or "").strip()
+    query = (args.get("query") or "").strip()
+    mk_id = str(args.get("mk_id") or "").strip()
     knesset_num = int(args.get("knesset_num") or 25)
-    top_n = int(args.get("top_n") or 20)
+    top_k = max(1, int(args.get("top_k") or 20))
 
     if mk_id:
         record = _fetch_mk_record(mk_id)
@@ -861,128 +669,16 @@ def handle_query_voting_records(args: dict) -> ToolEnvelope:
                 mk_id=mk_id, knesset_num=knesset_num,
             )
         name = record.get("full_name") or record.get("mk_individual_name") or ""
-        if topic:
+        if query:
             return adapt_get_votes_on_topic_by_mk(
-                topic=topic, name=name, knesset_num=knesset_num, top_n=top_n,
+                topic=query, name=name, knesset_num=knesset_num, top_n=top_k,
             )
-        return adapt_get_mk_votes(name=name, knesset_num=knesset_num, top_n=top_n)
+        return adapt_get_mk_votes(name=name, knesset_num=knesset_num, top_n=top_k)
 
-    if topic:
-        return adapt_get_votes_on_topic(topic=topic, top_n=top_n)
+    if query:
+        return adapt_get_votes_on_topic(topic=query, top_n=top_k)
 
-    return adapt_get_recent_votes(top_n=top_n, knesset_num=knesset_num)
-
-
-# ---------------------------------------------------------------------------
-# get_meeting_summary
-# ---------------------------------------------------------------------------
-
-
-def handle_get_meeting_summary(args: dict) -> ToolEnvelope:
-    """Render a meeting's topics, opinions (grouped by speaker) and attendance from knesset.db.
-
-    ``section`` limits the output to topics | opinions | attendance.
-    """
-    from summarization.summary_io import render_summary_text
-
-    meeting_id = str(args.get("meeting_id") or "").strip()
-    section = (args.get("section") or "").strip().lower() or None
-    if not meeting_id:
-        return _validation_error("missing_meeting_id", kind="fetch", source="summaries")
-    if section not in (None, "topics", "opinions", "attendance"):
-        return _validation_error("invalid_section", kind="fetch", source="summaries",
-                                 meeting_id=meeting_id, section=section)
-
-    conn = _open_db()
-    if conn is None:
-        return _db_missing_envelope("summaries", 0)
-    try:
-        meeting = store.get_meeting(conn, meeting_id)
-        if meeting is None or meeting.get("is_protocol") is None:
-            return ToolEnvelope(
-                summary="",
-                full="",
-                metadata={"kind": "fetch", "source": "summaries", "count": 0},
-                provenance={"meeting_id": meeting_id},
-                error="summary_not_found",
-            )
-        topics = [t["text"] for t in store.get_topics(conn, meeting_id)]
-        opinions = store.get_opinions(conn, meeting_id)
-        attendance = store.get_attendance(conn, meeting_id)
-    except Exception as exc:
-        return _db_error_envelope(exc, "summaries", meeting_id=meeting_id)
-    finally:
-        conn.close()
-
-    text = render_summary_text(topics, opinions, attendance, section=section)
-    if not meeting["is_protocol"]:
-        text = f"{config.NOT_PROTOCOL}\n\n{text}"
-    return ToolEnvelope(
-        summary="",
-        full=text,
-        metadata={"kind": "fetch", "source": "summaries", "count": 1,
-                  "topics": len(topics), "opinions": len(opinions), "attendance": len(attendance),
-                  "is_protocol": bool(meeting["is_protocol"])},
-        provenance={"meeting_id": meeting_id, "section": section,
-                    "committee": meeting.get("committee"), "date": meeting.get("date")},
-    )
-
-
-# ---------------------------------------------------------------------------
-# deep_dive_meeting (planner-only handler)
-# ---------------------------------------------------------------------------
-
-
-def handle_deep_dive_meeting(args: dict) -> ToolEnvelope:
-    """Delegate to :func:`retrieval.deep_dive.deep_dive_meeting`.
-
-    Imports of the heavy retrieval module are deferred so simply *loading*
-    the registry (e.g. for schema introspection) doesn't spin up
-    chromadb/transformers.
-    """
-    meeting_id = (args.get("meeting_id") or "").strip()
-    focus_query = (args.get("focus_query") or "").strip()
-    mode = (args.get("mode") or "rerank").lower()
-
-    if not meeting_id:
-        return _validation_error(
-            "missing_meeting_id", kind="analysis", source="deep_dive",
-        )
-    if not focus_query:
-        return _validation_error(
-            "missing_focus_query", kind="analysis", source="deep_dive",
-            meeting_id=meeting_id,
-        )
-    if mode not in ("rerank", "full"):
-        return _validation_error(
-            "invalid_mode", kind="analysis", source="deep_dive",
-            meeting_id=meeting_id, mode=mode,
-        )
-
-    try:
-        from retrieval.deep_dive import deep_dive_meeting as _dd
-        envelope = _dd(meeting_id=meeting_id, query=focus_query, mode=mode)
-    except Exception as exc:
-        return ToolEnvelope(
-            summary="",
-            full="",
-            metadata={"kind": "error", "source": "deep_dive", "count": 0,
-                      "exception": str(exc),
-                      "traceback": traceback.format_exc()},
-            provenance={"meeting_id": meeting_id, "mode": mode},
-            error="deep_dive_failed",
-        )
-
-    if not isinstance(envelope, ToolEnvelope):
-        return ToolEnvelope(
-            summary="",
-            full=json.dumps(envelope, ensure_ascii=False, default=str)
-                 if envelope is not None else "",
-            metadata={"kind": "analysis", "source": "deep_dive", "count": 0},
-            provenance={"meeting_id": meeting_id, "mode": mode},
-            error="deep_dive_returned_non_envelope",
-        )
-    return envelope
+    return adapt_get_recent_votes(top_n=top_k, knesset_num=knesset_num)
 
 
 # ---------------------------------------------------------------------------
@@ -1020,9 +716,9 @@ def _expand_match(text: str, fts_table: str) -> str:
     """Build an FTS5 MATCH expression with query-side ktiv male/haser expansion.
 
     Each whitespace token becomes an OR-slot of its corpus spelling variants
-    (``("בטחון" OR "ביטחון")``) so a query in one ktiv spelling matches speeches
-    written in the other. Slots are AND-ed (space) exactly as ``_quote_match``.
-    Falls back to the bare token when it has no extra variants.
+    (``("בטחון" OR "ביטחון")``) so a query in one ktiv spelling matches text
+    written in the other. Slots are AND-ed. Falls back to the bare token when
+    it has no extra variants.
     """
     slots: list[str] = []
     for tok in text.split():
@@ -1046,35 +742,17 @@ def _expand_match(text: str, fts_table: str) -> str:
     return " AND ".join(slots)
 
 
-# Suppress unused-import warnings — these are part of the public dispatch
-# path even if some IDEs don't resolve indirect uses.
-_ = (get_bill_details, get_session_transcript, _resolve_bill_by_name)
-
-
 __all__ = [
     "ToolSpec",
     "ToolRegistry",
     "dispatch",
-    # search
-    "handle_search_topics",
-    "handle_search_protocols_keyword",
     "search_speeches",
-    # find
+    "handle_query_protocols",
+    "handle_get_meeting_attendance",
     "handle_find_mk",
     "handle_find_committee",
-    "handle_find_bill",
-    "handle_find_vote",
     "handle_find_party",
-    # fetch
-    "handle_get_mk_profile",
-    "handle_get_mk_committees",
-    "handle_get_committee_members",
-    "handle_get_committee_sessions",
-    "handle_get_bill_details",
-    "handle_get_bill_text",
-    "handle_get_meeting_summary",
-    # votes
-    "handle_query_voting_records",
-    # deep
-    "handle_deep_dive_meeting",
+    "handle_query_bills",
+    "handle_get_bill",
+    "handle_query_votes",
 ]

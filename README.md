@@ -32,8 +32,8 @@ The agents support local LLMs via llama.cpp, or Google API calls.
 | `src/agent/plan_execute/` | Core plan-and-execute subgraph |
 | `src/agent/research_agent/` | Knesset-specific plan-and-execute research agent |
 | `src/utils/` | Knesset API data access and tools for your favorite LLMs |
-| `src/retrieval/` | Layered RAG over meeting protocols |
-| `src/indexing/` | Embedding pipeline (Qwen3-VL-Embedding-8B + ChromaDB) |
+| `src/retrieval/` | `knesset.db` schema and FTS5 keyword queries over meeting protocols |
+| `src/indexing/` | Speaker label → MK resolution |
 | `src/summarization/` | Protocol summarizer |
 | `machines/` | JSON state machines driving the agent flow |
 | `web/` | Chat UI served by `scripts/run_web.py` |
@@ -44,7 +44,6 @@ The agents support local LLMs via llama.cpp, or Google API calls.
 
 **Requirements:**
 - Python 3.10+
-- A computer that can run Qwen3-VL for embedding
 
 1. Install dependencies (project uses standard `pip`; no `requirements.txt` yet — see imports in `src/`).
    ```
@@ -56,7 +55,6 @@ The agents support local LLMs via llama.cpp, or Google API calls.
    Google AI API key to this environment server: `GOOGLE_API_KEY`.
 3. The agent will query DBs you have to create (described under Data Sources and Processing below).
    Here too you should select which models are used for summarizing, and prepare yourself - it's going to take some time.
-   Embedding is currently only done using a local Qwen model.
    ```
    cd src
    python ../scripts/process_knesset.py
@@ -87,27 +85,17 @@ API queries are cached localy up to 1 week.
 
 The pre-processing of the Knesset protocols is done as such:
 - First, the protocol is summarized by a standalone agent. The summarization contains main subjects discussed, and main opinions expressed as bullet lists.
-- Then, the speaches and summarization bullets of each protocol are being embedded to a local vector DB.
-- After the embeddings, each protocol is devided into chunks for better retrieval (the discussion context for a single speech is often required). The chunks are also embedded.
-- Speeches and bullets are also stored in a SQL DB for BM25 keyword and fuzzy searches.
+- Then, speeches, summary topics, opinions and attendance are stored in one SQLite DB with FTS5 keyword indexes (`scripts/build_knesset_db.py`).
 
 Raw protocols go in `Data/raw_transcriptions/<knesset_num>/<committee>/` as text files.
 Summaries go in `Data/summaries/<knesset_num>/<committee>/` as text files.
-Vector DB lives in `Data/chroma/`.
-SQL DB lives in `Data/bm25/<knesset_num>/`.
+SQL DB lives in `Data/knesset.db`.
 
 ---
 
 ## Agent Tools
 
 The research agent has access to the following tools:
-
-### Discovery / Search
-
-| Tool | What it does |
-|------|-------------|
-| `search_topics` | Hybrid keyword + embedding search over AI-generated meeting topics. Finds meetings relevant to a topic. |
-| `search_protocols_keyword` | BM25 keyword search over raw speech text in protocols. Supports filtering by committee, speaker, and date range. |
 
 ### Entity Resolution
 
@@ -116,21 +104,18 @@ The research agent has access to the following tools:
 | `find_mk` | Fuzzy-resolve an MK name to a full profile: party/faction history, committee positions, ministerial roles. |
 | `find_committee` | Fuzzy-resolve a committee name to its ID and current member list. |
 | `find_party` | Fuzzy-match a party/faction name and return its full member list for a given Knesset. |
-| `find_bill` | Keyword search for a bill by Hebrew title. Returns candidate bill records. |
-| `find_vote` | Search for a plenum vote by title or topic. Returns candidate vote records. |
 
-### Fetch
+### Committee Protocols (`Data/knesset.db`)
 
 | Tool | What it does |
 |------|-------------|
-| `get_meeting_summary` | Return the AI-generated summary text for a specific meeting. |
-| `get_committee_sessions` | List sessions (metadata only, no transcripts) for a committee with optional date range. |
-| `get_bill_details` | Fetch bill metadata: status, type, initiators, document links. |
-| `get_bill_text` | Extract and return text from a bill's PDF document. |
-| `query_voting_records` | Unified plenum vote query — by topic, by MK, or both. Returns how MKs voted. |
+| `query_protocols` | FTS5 keyword search (or listing, with an empty query) over summary topics, verified opinions and transcript speeches. Filters: MK, party, committees, meeting ids, date range. Also reads a meeting's summary or pages through its transcript. |
+| `get_meeting_attendance` | Who attended a meeting: MKs (with party) first, then guests. |
 
-### Deep Dive
+### Bills and Votes (live Knesset OData)
 
 | Tool | What it does |
 |------|-------------|
-| `deep_dive_meeting` | Heavier analysis of a single meeting. `rerank`/RAG mode returns top reranked protocol chunks; `full` mode runs an LLM pass over the entire transcript. |
+| `query_bills` | Search bills by Hebrew title words within a Knesset. |
+| `get_bill` | Bill metadata (status, initiators, documents), optionally with the extracted bill text. |
+| `query_votes` | Plenum votes — by keyword, by MK, both (how the MK voted), or the most recent. |

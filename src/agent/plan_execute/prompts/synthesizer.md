@@ -53,14 +53,15 @@ Citation rules:
     only the matching `committee_positions` entry — not the `factions`
     array. If citing faction membership, include only the matching
     `factions` entry.
-  - For list results (e.g. search_topics returning an array of
-    bullets): include only the specific element(s) that support the
-    claim, not the whole array.
-  - For protocol evidence (search_topics, search_protocols_keyword,
-    get_meeting_summary, deep_dive_meeting): always include `meeting_id`
-    and `committee` fields in the quote if present — even if they are not
-    the direct claim. They are needed by the UI to show meeting context.
-  - For voting evidence (query_voting_records, find_vote): always include
+  - For list results (e.g. query_protocols returning lists of rows):
+    include only the specific element(s) that support the claim, not the
+    whole list.
+  - For protocol evidence (query_protocols, get_meeting_attendance):
+    always include `meeting_id`, `committee` and `date` fields in the
+    quote if present, and `speech_idx` for speech and opinion rows — even
+    if they are not the direct claim. They are needed by the UI to show
+    meeting context and jump to the speech.
+  - For voting evidence (query_votes): always include
     `mk_name` (if present), `vote_title`, and `result` fields.
 - The same `ev_id` may appear in multiple `citations` entries with
   different N values when different parts of the same evidence support

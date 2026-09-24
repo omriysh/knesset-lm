@@ -10,15 +10,14 @@ from the environment — so all CLI args flow through cleanly.
 Usage
 -----
     cd knesset-lm
-    python scripts/run_web.py --cuda --quantize int4
-    python scripts/run_web.py --cuda --quantize int4 --machine machines/knesset_agent.json
-    python scripts/run_web.py --port 5000 --top-k 7 --top-n 20
-    python scripts/run_web.py --db ../Data/exp3_chroma --cuda --quantize int4
+    python scripts/run_web.py
+    python scripts/run_web.py --machine machines/plan_execute_agent.json
+    python scripts/run_web.py --port 5000 --top-k-browse 100
 
 Prerequisites
 -------------
-  - llama-server running (see CLAUDE.md for the command)
-  - ChromaDB indexes built (see scripts/process_knesset.py)
+  - Data/knesset.db built (scripts/build_knesset_db.py)
+  - llama-server running for agent answers (not needed to start the server)
 """
 
 import argparse
@@ -37,22 +36,12 @@ def main() -> None:
         description="Launch the KnessetLM FastAPI web server.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    ap.add_argument("--cuda",       action="store_true",
-                    help="Use GPU for embedding")
-    ap.add_argument("--quantize",   default=None, choices=["int8", "int4"],
-                    help="Quantize embedding model (int4 recommended when llama-server is running)")
-    ap.add_argument("--embed-model", default=None,
-                    help=f"Embedding model path (default: {_cfg.EMBED_MODEL_PATH})")
-    ap.add_argument("--db",          type=Path, default=None,
-                    help=f"ChromaDB directory (default: {_cfg.CHROMA_DIR})")
     ap.add_argument("--machine",     type=Path, default=None,
                     help="Path to machine JSON (default: machines/knesset_agent.json)")
     ap.add_argument("--llama-server", default=None,
                     help=f"llama-server URL (default: {_cfg.LLAMA_SERVER})")
-    ap.add_argument("--top-k",       dest="top_k", type=int, default=None,
-                    help=f"Meetings to retrieve via L1 (default: {_cfg.TOP_K_MEETINGS})")
-    ap.add_argument("--top-n",       dest="top_n", type=int, default=None,
-                    help=f"Pass-2 chunks to rank (default: {_cfg.TOP_N_DIALOGS})")
+    ap.add_argument("--top-k-browse", dest="top_k_browse", type=int, default=None,
+                    help=f"Meetings per reading-tab search (default: {_cfg.TOP_K_BROWSE})")
     ap.add_argument("--port",        type=int, default=5000,
                     help="HTTP port (default: 5000)")
     ap.add_argument("--reload",      action="store_true",
@@ -62,22 +51,12 @@ def main() -> None:
     # ── Translate args → environment variables ────────────────────────────────
     # uvicorn.run() runs in-process, so app.py reads os.environ directly.
     # Must mutate os.environ before the call — a copied dict has no effect.
-    if args.cuda:
-        os.environ["KNESSET_CUDA"] = "1"
-    if args.quantize:
-        os.environ["KNESSET_QUANTIZE"] = args.quantize
-    if args.embed_model:
-        os.environ["KNESSET_EMBED_MODEL"] = args.embed_model
-    if args.db:
-        os.environ["KNESSET_CHROMA_DIR"] = str(args.db.resolve())
     if args.machine:
         os.environ["KNESSET_MACHINE_PATH"] = str(args.machine.resolve())
     if args.llama_server:
         os.environ["KNESSET_LLAMA_SERVER"] = args.llama_server
-    if args.top_k is not None:
-        os.environ["KNESSET_TOP_K"] = str(args.top_k)
-    if args.top_n is not None:
-        os.environ["KNESSET_TOP_N"] = str(args.top_n)
+    if args.top_k_browse is not None:
+        os.environ["KNESSET_TOP_K_BROWSE"] = str(args.top_k_browse)
     os.environ["KNESSET_PORT"] = str(args.port)
 
     # ── Launch uvicorn ────────────────────────────────────────────────────────

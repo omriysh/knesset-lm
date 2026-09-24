@@ -26,11 +26,6 @@ from agent.subgraph.evidence import ToolEnvelope
 from utils.knesset_db import (
     _get_active_committee_members_by_id,
     get_all_committees,
-    get_bill_details,
-    get_bill_text,
-    get_committee_members,
-    get_committee_sessions,
-    get_mk_profile,
     get_mk_votes,
     get_recent_votes,
     get_votes_on_topic,
@@ -96,269 +91,11 @@ def _safely(fn, *, kind: str, source: str, **prov):
     try:
         return fn()
     except Exception as exc:  # noqa: BLE001 — surface to envelope, never crash
+        print(f"[adapters] {source} call failed: {exc}", flush=True)
         env = _err("adapter_exception", kind=kind, source=source, **prov)
         env.metadata["exception"] = str(exc)
         env.metadata["traceback"] = traceback.format_exc()
         return env
-
-
-# ---------------------------------------------------------------------------
-# MK / committee / bill profile fetches
-# ---------------------------------------------------------------------------
-
-
-def adapt_get_mk_profile(*, name: str, knesset_num: int = 25) -> ToolEnvelope:
-    """``get_mk_profile`` → envelope. Uses the existing name-first form."""
-    def _run() -> ToolEnvelope:
-        record = get_mk_profile(name=name, knesset_num=knesset_num)
-        if record is None:
-            return _err(
-                "mk_not_found",
-                kind="fetch",
-                source="oknesset",
-                query=name,
-                knesset_num=knesset_num,
-            )
-        return _ok(
-            record,
-            kind="fetch",
-            source="oknesset",
-            provenance={
-                "mk_id":       str(record.get("mk_individual_id") or record.get("PersonID") or ""),
-                "knesset_num": knesset_num,
-            },
-        )
-
-    return _safely(
-        _run,
-        kind="fetch",
-        source="oknesset",
-        query=name,
-        knesset_num=knesset_num,
-    )
-
-
-def adapt_get_mk_committees(*, name: str, knesset_num: int = 25) -> ToolEnvelope:
-    """Focused subset of :func:`get_mk_profile` returning only the
-    committee-membership facet for the given Knesset.
-
-    Implementation: pulls the full profile and projects the
-    ``committee_positions`` field, filtered to the requested Knesset.
-    """
-    def _run() -> ToolEnvelope:
-        profile = get_mk_profile(name=name, knesset_num=knesset_num)
-        if profile is None:
-            return _err(
-                "mk_not_found",
-                kind="fetch",
-                source="oknesset",
-                query=name,
-                knesset_num=knesset_num,
-            )
-
-        positions = profile.get("committee_positions") or []
-        filtered = [
-            p for p in positions
-            if not isinstance(p, dict) or p.get("knesset") in (None, knesset_num)
-        ]
-        payload = {
-            "mk_id":               str(profile.get("mk_individual_id") or profile.get("PersonID") or ""),
-            "full_name":           profile.get("full_name") or profile.get("mk_individual_name") or "",
-            "knesset_num":         knesset_num,
-            "committee_positions": filtered,
-        }
-        return _ok(
-            payload,
-            kind="fetch",
-            source="oknesset",
-            provenance={
-                "mk_id":       payload["mk_id"],
-                "knesset_num": knesset_num,
-            },
-        )
-
-    return _safely(
-        _run,
-        kind="fetch",
-        source="oknesset",
-        query=name,
-        knesset_num=knesset_num,
-    )
-
-
-def adapt_get_committee_members(*, name: str, knesset_num: int = 25) -> ToolEnvelope:
-    def _run() -> ToolEnvelope:
-        members = get_committee_members(name=name, knesset_num=knesset_num)
-        if not members:
-            return _err(
-                "committee_not_found",
-                kind="fetch",
-                source="oknesset",
-                query=name,
-                knesset_num=knesset_num,
-            )
-        return _ok(
-            members,
-            kind="fetch",
-            source="oknesset",
-            provenance={
-                "committee_query": name,
-                "knesset_num":     knesset_num,
-            },
-        )
-
-    return _safely(
-        _run,
-        kind="fetch",
-        source="oknesset",
-        query=name,
-        knesset_num=knesset_num,
-    )
-
-
-def adapt_get_committee_sessions(
-    *,
-    committee_id: str,
-    knesset_num: int = 25,
-    date_from: str | None = None,
-    date_to: str | None = None,
-) -> ToolEnvelope:
-    """Wrap :func:`get_committee_sessions` with optional date-range filter."""
-    def _run() -> ToolEnvelope:
-        try:
-            cid = int(committee_id)
-        except (TypeError, ValueError):
-            return _err(
-                "invalid_committee_id",
-                kind="fetch",
-                source="odata",
-                committee_id=str(committee_id),
-            )
-
-        sessions = get_committee_sessions(cid, knesset_num=knesset_num)
-
-        if date_from or date_to:
-            def _in_range(s: dict) -> bool:
-                d = (s.get("date") or "")[:10]
-                if date_from and d < date_from:
-                    return False
-                if date_to and d > date_to:
-                    return False
-                return True
-            sessions = [s for s in sessions if _in_range(s)]
-
-        return _ok(
-            sessions,
-            kind="fetch",
-            source="odata",
-            provenance={
-                "committee_id": str(committee_id),
-                "knesset_num":  knesset_num,
-                "date_from":    date_from,
-                "date_to":      date_to,
-            },
-        )
-
-    return _safely(
-        _run,
-        kind="fetch",
-        source="odata",
-        committee_id=str(committee_id),
-        knesset_num=knesset_num,
-    )
-
-
-def adapt_get_bill_details(
-    *,
-    bill_name: str,
-    knesset_num: int = 25,
-) -> ToolEnvelope:
-    def _run() -> ToolEnvelope:
-        record = get_bill_details(bill_name=bill_name, knesset_num=knesset_num)
-        if record is None:
-            return _err(
-                "bill_not_found",
-                kind="fetch",
-                source="odata",
-                query=bill_name,
-                knesset_num=knesset_num,
-            )
-        return _ok(
-            record,
-            kind="fetch",
-            source="odata",
-            provenance={
-                "bill_id":     str(record.get("bill_id") or ""),
-                "knesset_num": knesset_num,
-            },
-        )
-
-    return _safely(
-        _run,
-        kind="fetch",
-        source="odata",
-        query=bill_name,
-        knesset_num=knesset_num,
-    )
-
-
-def adapt_get_bill_text(
-    *,
-    bill_name: str,
-    knesset_num: int = 25,
-    max_chars: int,
-) -> ToolEnvelope:
-    """Wrap :func:`get_bill_text`. ``max_chars`` enforced upstream by handler."""
-    def _run() -> ToolEnvelope:
-        record = get_bill_text(
-            bill_name=bill_name,
-            knesset_num=knesset_num,
-            max_chars=max_chars,
-        )
-        if record is None:
-            return _err(
-                "bill_text_not_found",
-                kind="fetch",
-                source="odata",
-                query=bill_name,
-                knesset_num=knesset_num,
-            )
-
-        warnings: list[str] = []
-        if record.get("truncated"):
-            warnings.append(f"result_truncated_to_{max_chars}_chars")
-
-        return _ok(
-            record,
-            kind="fetch",
-            source="odata",
-            provenance={
-                "bill_id":     str(record.get("bill_id") or ""),
-                "doc_id":      str(record.get("doc_id") or ""),
-                "url":         record.get("url") or "",
-                "knesset_num": knesset_num,
-            },
-            warnings=warnings,
-        )
-
-    env = _safely(
-        _run,
-        kind="fetch",
-        source="odata",
-        query=bill_name,
-        knesset_num=knesset_num,
-    )
-    if env.error is None and "truncated" in (env.metadata or {}).get("warnings", []):
-        env.truncated = True
-    # The truncation flag lives on the wrapped record, not the envelope's
-    # own ``truncated`` field. Mirror it across when present.
-    try:
-        payload = json.loads(env.full) if env.full else None
-        if isinstance(payload, dict) and payload.get("truncated"):
-            env.truncated = True
-    except Exception:
-        pass
-    return env
 
 
 # ---------------------------------------------------------------------------
@@ -511,21 +248,16 @@ def fetch_committee_record(committee_id: str) -> dict | None:
                     }
                     try:
                         record["members"] = _get_active_committee_members_by_id(cid, knesset_num)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        print(f"[adapters] committee {cid} members fetch failed: {exc}", flush=True)
                     return record
-        except Exception:
+        except Exception as exc:
+            print(f"[adapters] committee list (knesset {knesset_num}) fetch failed: {exc}", flush=True)
             continue
     return None
 
 
 __all__ = [
-    "adapt_get_mk_profile",
-    "adapt_get_mk_committees",
-    "adapt_get_committee_members",
-    "adapt_get_committee_sessions",
-    "adapt_get_bill_details",
-    "adapt_get_bill_text",
     "adapt_get_mk_votes",
     "adapt_get_votes_on_topic",
     "adapt_get_votes_on_topic_by_mk",

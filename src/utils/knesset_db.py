@@ -58,10 +58,6 @@ _DOC_GROUP_PRIORITY = [
     "טקסט חוק מאוחד",
     "חוק - פרסום ברשומות",
 ]
-_HEBREW_DATE_RE = re.compile(r',?\s*ה?תש[\u05d0-\u05ea]{1,3}["\u05f3][\u05d0-\u05ea](?:[–\-]\d{4})?')
-_BILL_TYPE_PREFIXES = ('הצעת חוק', 'חוק', 'תיקון לחוק')
-
-
 
 
 # ── Retry helper ─────────────────────────────────────────────────────────────
@@ -394,48 +390,6 @@ def _sanitize_odata_search(name: str) -> str:
     return sanitized
 
 
-def _bill_search_terms(name: str) -> list[str]:
-    """
-    Generate a ranked list of OData search terms to try for a bill name.
-    Each term is progressively shorter/more lenient, maximising recall.
-
-    Strategy:
-      1. Full name, parentheses stripped  (most specific)
-      2. Hebrew date suffix also stripped  (removes התשפ"ד–2024 etc.)
-      3. Core subject noun phrase only     (strips leading type prefix too)
-      4. First 4 significant words of the subject  (widest net)
-    """
-    terms: list[str] = []
-
-    # Step 1 – strip parentheses
-    step1 = _sanitize_odata_search(name)
-    if step1:
-        terms.append(step1)
-
-    # Step 2 – also strip Hebrew date suffix
-    step2 = _HEBREW_DATE_RE.sub('', step1).strip().strip(',-– ').strip()
-    if step2 and step2 != step1:
-        terms.append(step2)
-
-    # Step 3 – strip leading type prefix ("הצעת חוק", "חוק" …)
-    step3 = step2
-    for prefix in _BILL_TYPE_PREFIXES:
-        if step3.startswith(prefix):
-            step3 = step3[len(prefix):].strip()
-            break
-    if step3 and step3 != step2:
-        terms.append(step3)
-
-    # Step 4 – first 4 words of the subject (skip very short words like ה/ו/ב)
-    words = [w for w in step3.split() if len(w) > 1]
-    short = ' '.join(words[:4])
-    if short and short != step3:
-        terms.append(short)
-
-    # Escape single-quotes for OData in every term
-    return [t.replace("'", "''") for t in terms if t]
-
-
 def _bill_record_to_dict(bill: dict) -> dict:
     """Normalise a raw KNS_Bill OData record into our standard shape."""
     initiators = [
@@ -448,7 +402,7 @@ def _bill_record_to_dict(bill: dict) -> dict:
     ]
     return {
         "bill_id":          bill.get("Id"),
-        "bill_name":        bill.get("Name"),
+        "name":             bill.get("Name"),
         "bill_number":      bill.get("Number"),
         "knesset_num":      bill.get("KnessetNum"),
         "type":             bill.get("TypeDesc"),
@@ -623,28 +577,6 @@ def get_all_committees(knesset_num: int = 25) -> list[dict]:
     return committees
 
 
-def _search_committees_by_name(name: str, knesset_num: int = 25) -> list[dict]:
-    """
-    Search for Knesset committees by name (Hebrew, partial match) and Knesset number.
-    Uses the /committees_kns_committee/list endpoint.
-    Returns a list of dicts: {CommitteeID, Name, KnessetNum, IsCurrent}.
-    """
-    url = f"{OKNESSET_API}/committees_kns_committee/list"
-    params = {"Name": name, "KnessetNum": knesset_num, "limit": 100}
-    response = _retry_get(url, params=params, timeout=TIMEOUT)
-    response.raise_for_status()
-    results = response.json()
-    return [
-        {
-            "CommitteeID": c["CommitteeID"],
-            "Name":        c.get("Name", ""),
-            "KnessetNum":  c.get("KnessetNum"),
-            "IsCurrent":   c.get("IsCurrent"),
-        }
-        for c in results
-    ]
-
-
 def _get_active_committee_members_by_id(
     committee_id: int,
     knesset_num: int = 25,
@@ -703,32 +635,6 @@ def get_mk_profile(name: str, knesset_num: int = 25) -> dict | None:
         result["other_matches"] = [m["full_name"] for m in matches[1:] if "full_name" in m]
     return result
 
-
-def _resolve_bill_by_name(
-    name_part: str,
-    knesset_num: int | None = None,
-) -> dict | None:
-    """
-    Search for a bill/law by partial Hebrew name.
-
-    Tries progressively shorter/simpler search terms so that names the model
-    writes (which include amendment suffixes, Hebrew dates, etc.) still match
-    the more concise names stored in the Knesset API.
-
-    Returns the single best match (most recently updated), or None.
-    """
-    for term in _bill_search_terms(name_part):
-        bills = _search_bills_by_term(term, knesset_num, top=3)
-        if bills:
-            # Prefer the bill whose stored name best overlaps with the original query
-            def _score(b: dict) -> int:
-                stored = b.get("Name") or ""
-                return sum(1 for ch in name_part if ch in stored)
-            bills.sort(key=_score, reverse=True)
-            return _bill_record_to_dict(bills[0])
-
-    return None
-    
 
 def _get_bill_documents(bill_id: int) -> list[dict]:
     """
@@ -847,40 +753,6 @@ def _get_bill_details_by_id(bill_id: int) -> dict | None:
     }
 
 
-def get_bill_details(bill_name: str, knesset_num: int | None = None) -> dict | None:
-    """
-    Look up a bill by name and return its full details.
-    Single public name-first form.
-    """
-    bill = _resolve_bill_by_name(bill_name, knesset_num)
-    if not bill:
-        return None
-    return _get_bill_details_by_id(bill["bill_id"])
-
-
-def get_bill_text(bill_name: str, knesset_num: int = 25, max_chars: int = 8000) -> dict | None:
-    """
-    Look up a bill by name, fetch its document, and return extracted text.
-    Single public name-first form.
-    """
-    bill = _resolve_bill_by_name(bill_name, knesset_num)
-    if not bill:
-        return None
-    return _get_bill_text_by_id(bill["bill_id"], max_chars)
-
-
-def get_committee_members(name: str, knesset_num: int = 25) -> list[dict]:
-    """
-    Look up a committee by name and return its active members.
-    Single public name-first form.
-    """
-    committees = _search_committees_by_name(name, knesset_num)
-    if not committees:
-        return []
-    committee = committees[0]  # take the best match
-    return _get_active_committee_members_by_id(committee["CommitteeID"], knesset_num)
-
-
 # ── Committee sessions ────────────────────────────────────────────────────────
 
 def get_committee_sessions(committee_id: int, knesset_num: int = 25) -> list[dict]:
@@ -925,14 +797,6 @@ def get_committee_sessions(committee_id: int, knesset_num: int = 25) -> list[dic
         }
         for s in all_sessions
     ]
-
-
-def _get_committee_sessions_by_name(name: str, knesset_num: int = 25) -> list[dict]:
-    """Resolve committee by name, then return its sessions."""
-    committees = _search_committees_by_name(name, knesset_num)
-    if not committees:
-        return []
-    return get_committee_sessions(committees[0]["CommitteeID"], knesset_num)
 
 
 # ── Session documents & transcripts ──────────────────────────────────────────

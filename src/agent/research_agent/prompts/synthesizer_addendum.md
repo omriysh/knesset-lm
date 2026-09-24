@@ -26,15 +26,15 @@ Each `citations` entry must contain:
   directly back the specific claim — not the whole result. For
   multi-section results (e.g. `find_mk` with separate `factions` and
   `committee_positions` arrays), include only the section relevant to
-  the current claim. For list results (e.g. `search_topics`), include
-  only the specific element(s) that support the claim.
+  the current claim. For list results (e.g. a `query_protocols` scope
+  list), include only the specific row(s) that support the claim.
 
-  For protocol evidence (search_topics, search_protocols_keyword,
-  get_meeting_summary, deep_dive_meeting): always include `meeting_id`
-  and `committee` in the quote if present — the UI uses them for
-  meeting context display.
+  For protocol evidence (query_protocols, get_meeting_attendance):
+  always include `meeting_id`, `committee` and `date` in the quote if
+  present, and `speech_idx` for speech and opinion rows — the UI uses
+  them for meeting context display and to jump to the speech.
 
-  For voting evidence (query_voting_records, find_vote): always include
+  For voting evidence (query_votes): always include
   `mk_name` (if present), `vote_title`, and `result` fields.
 
 The same `ev_id` may appear in multiple `citations` entries with

@@ -1,205 +1,40 @@
 """Research-domain tool registry.
 
 This is the *only* module that knows which tools the research agent
-exposes. Per design §5.2 / §5.3 the registry is a flat list of
-:class:`ToolSpec` entries; the planner consumes it via the view-builders
-in :mod:`agent.plan_execute.tools` (Phase 4c, out of scope for Phase 3b).
+exposes: a flat list of :class:`ToolSpec` entries whose handlers live in
+:mod:`utils.tools`. The planner consumes it via the view-builders in
+:mod:`agent.plan_execute.tools`.
 
 The pseudo-tool ``expand`` is **not** in this list — it is dispatched by
 the plan-execute graph itself, not via :func:`utils.tools.dispatch`.
 
-Schema policy
--------------
-Numeric defaults / minima / maxima are sourced from :mod:`config` (per
-design §5.3 note: "the schema is built from those constants at startup,
-not as a second source of truth"). When config and the design text
-disagree (e.g. ``BILL_TEXT_DEFAULT_MAX_CHARS`` is 1000 in both, but the
-schema example shows 1000 as well — they currently agree), we always
-follow config.
+Numeric defaults / minima / maxima are sourced from :mod:`config` so the
+schema is never a second source of truth.
 """
 
 from __future__ import annotations
 
 import config
+from retrieval.knesset_db_store import PROTOCOL_SCOPES
 from utils.tools import (
     ToolSpec,
-    handle_deep_dive_meeting,
-    handle_find_bill,
     handle_find_committee,
     handle_find_mk,
     handle_find_party,
-    handle_find_vote,
-    handle_get_bill_details,
-    handle_get_bill_text,
-    handle_get_committee_sessions,
-    handle_get_meeting_summary,
-    handle_query_voting_records,
-    handle_search_opinions,
-    handle_search_protocols_keyword,
-    handle_search_topics,
+    handle_get_bill,
+    handle_get_meeting_attendance,
+    handle_query_bills,
+    handle_query_protocols,
+    handle_query_votes,
 )
 
 
-# ---------------------------------------------------------------------------
-# Registry
-# ---------------------------------------------------------------------------
-#
-# Order: discovery → fetch → votes → deep. Matches the §5.3 inventory's
-# layout so the planner prompt rendering is reading the list in the same
-# logical order a human would.
-#
 # Each entry's ``schema`` is the JSON Schema fragment that goes under the
-# ``parameters`` key in an OpenAI-style tool definition. View-builders in
-# :mod:`agent.plan_execute.tools` are expected to wrap it with
-# ``{"name": <spec.name>, "description": <…>, "parameters": <spec.schema>}``
-# and prepend a ``"type": "function"`` envelope where required.
+# ``parameters`` key in an OpenAI-style tool definition.
 
 RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
 
-    # ── Discovery / search ────────────────────────────────────────────────
-    ToolSpec(
-        name="search_topics",
-        schema={
-            "type": "object",
-            "description": (
-                "Discover meetings whose summary topics match the query "
-                "(full-text search, BM25 ranked). Return up to top_k topics "
-                "with their meeting IDs, committee and date."
-            ),
-            "properties": {
-                "query":       {"type": "string"},
-                "top_k": {
-                    "type":    "integer",
-                    "default": config.SEARCH_TOPICS_DEFAULT_TOP_K,
-                    "minimum": 1,
-                    "maximum": config.SEARCH_TOPICS_MAX_TOP_K,
-                },
-                "knesset_num": {"type": "integer", "default": 25},
-            },
-            "required": ["query"],
-        },
-        handler=handle_search_topics,
-        task_kinds=["discover"],
-        cost_hint="cheap",
-        ui={
-            "meta_note": "נושאי דיון מתוך סיכום AI של ישיבת הוועדה",
-            "enrich_fields": ["meeting_id"],
-        },
-        compact_spec={
-            "kind": "list",
-            "max_items": 20,
-            "executor_selects": True,
-            "item_spec": {"drop_fields": ["topic_id", "topic_idx"]},
-        },
-    ),
-
-    ToolSpec(
-        name="search_opinions",
-        schema={
-            "type": "object",
-            "description": (
-                "Find stated positions of a specific MK on a topic. Full-text "
-                "search over summary opinions linked to MK identities, each "
-                "with a verbatim quote from the protocol — the go-to tool for "
-                "'what does MK X think about Y'. Requires mk_id: call find_mk "
-                "first. An empty query lists the MK's opinions, newest first."
-            ),
-            "properties": {
-                "query": {
-                    "type":        "string",
-                    "description": "Topic in Hebrew, a few key words (not the MK's name)",
-                },
-                "mk_id": {"type": "string"},
-                "top_k": {
-                    "type":    "integer",
-                    "default": config.SEARCH_OPINIONS_DEFAULT_TOP_K,
-                    "minimum": 1,
-                    "maximum": config.SEARCH_OPINIONS_MAX_TOP_K,
-                },
-                "knesset_num": {"type": "integer", "default": 25},
-            },
-            "required": ["mk_id"],
-        },
-        handler=handle_search_opinions,
-        task_kinds=["discover", "filter"],
-        cost_hint="cheap",
-        ui={
-            "meta_note": "עמדה שהובעה בישיבת ועדה, מתוך סיכום AI של הישיבה",
-            "enrich_fields": ["meeting_id"],
-        },
-        compact_spec={
-            "kind": "list",
-            "max_items": 20,
-            "executor_selects": True,
-            "item_spec": {"drop_fields": ["opinion_id", "mk_id", "speaker_label", "speech_idx", "quote_offset"]},
-        },
-    ),
-
-    ToolSpec(
-        name="search_protocols_keyword",
-        schema={
-            "type": "object",
-            "description": (
-                "BM25 keyword search over protocol speech text with optional "
-                "filters by committee, meeting, speaker, or date range. "
-                "Returns top_k speech-anchor hits with meeting+speaker context.\n"
-                "IMPORTANT — query syntax rules:\n"
-                "  • Write a plain Hebrew phrase (a few key words). All tokens "
-                "are required to appear in the same speech — they are AND-ed.\n"
-                "  • No boolean operators: do NOT write OR / AND / NOT. Those "
-                "words are treated as literal tokens and will kill recall.\n"
-                "  • Do NOT combine multiple questions into one query string. "
-                "Use separate tool calls for each distinct sub-topic.\n"
-                "  • Prefer the single most discriminative Hebrew term rather "
-                "than a long sentence.\n"
-                "Cost scales with top_k: top_k > 100 becomes expensive (BM25 "
-                "over many MB of speeches); prefer narrowing via committee_ids "
-                "/ speaker / date range before raising top_k."
-            ),
-            "properties": {
-                "query":         {"type": "string"},
-                "committee_ids": {"type": "array", "items": {"type": "string"}},
-                "meeting_ids":   {"type": "array", "items": {"type": "string"}},
-                "speaker":       {"type": "string"},
-                "date_from":     {"type": "string", "format": "date"},
-                "date_to":       {"type": "string", "format": "date"},
-                "sort": {
-                    "type":    "string",
-                    "enum":    ["relevance", "recency"],
-                    "default": "relevance",
-                },
-                "top_k": {
-                    "type":    "integer",
-                    "default": config.SEARCH_PROTOCOLS_DEFAULT_TOP_K,
-                    "minimum": 1,
-                    "maximum": config.SEARCH_PROTOCOLS_MAX_TOP_K,
-                },
-                "knesset_num": {"type": "integer", "default": 25},
-            },
-            "required": ["query"],
-        },
-        handler=handle_search_protocols_keyword,
-        task_kinds=["filter", "discover"],
-        cost_hint="cheap",
-        ui={
-            "meta_note": "קטע מפרוטוקול ישיבת הוועדה, תוצאת חיפוש מילת מפתח",
-            "enrich_fields": ["meeting_id"],
-        },
-        compact_spec={
-            "kind": "list",
-            "max_items": 20,
-            "executor_selects": True,
-            "item_spec": {
-                # Keep speech_idx: it is the chunk anchor the synthesizer copies
-                # into the citation quote so the UI can deep-link to that speech
-                # in the protocol viewer (chunk_id == speech_idx). See
-                # Documentation/.../Claude/protocol-link-ux.md.
-                "drop_fields": ["speech_id"],
-                "text_fields": {"text": 400},
-            },
-        },
-    ),
-
+    # ── Name resolution ───────────────────────────────────────────────────
     ToolSpec(
         name="find_mk",
         schema={
@@ -208,7 +43,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
                 "Resolve an MK name to one or more candidate records with "
                 "stable mk_id. Each result includes a full profile: party and "
                 "faction history, committee positions, ministerial roles. "
-                "Returns top BM25 matches sorted by score. "
+                "Returns the best fuzzy name matches sorted by score. "
                 "No separate profile or committee-list fetch is needed after this call."
             ),
             "properties": {
@@ -238,7 +73,8 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
             "type": "object",
             "description": (
                 "Resolve a committee name to candidate committee_id values. "
-                "Each result includes the full committee record with its active "
+                "Each result includes the full committee record (its exact "
+                "name, usable in query_protocols.committees) with its active "
                 "member list (mk_id, name, role). "
                 "No separate member-list fetch is needed after this call."
             ),
@@ -264,55 +100,6 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
     ),
 
     ToolSpec(
-        name="find_bill",
-        schema={
-            "type": "object",
-            "description": (
-                "Resolve a bill name to candidate bill records by Hebrew "
-                "title BM25 match."
-            ),
-            "properties": {
-                "query":       {"type": "string"},
-                "knesset_num": {"type": "integer", "default": 25},
-                "top_k":       {"type": "integer", "default": 5, "minimum": 1},
-            },
-            "required": ["query"],
-        },
-        handler=handle_find_bill,
-        task_kinds=["discover", "fetch"],
-        cost_hint="cheap",
-        ui={"meta_note": "נתונים מאתר הכנסת"},
-        compact_spec={
-            "kind": "list",
-            "max_items": 5,
-            "item_spec": {"drop_fields": ["score", "extra", "fetched"]},
-        },
-    ),
-
-    ToolSpec(
-        name="find_vote",
-        schema={
-            "type": "object",
-            "description": "Resolve a vote by title or topic to candidate vote_id values.",
-            "properties": {
-                "query":       {"type": "string"},
-                "knesset_num": {"type": "integer", "default": 25},
-                "top_k":       {"type": "integer", "default": 10, "minimum": 1},
-            },
-            "required": ["query"],
-        },
-        handler=handle_find_vote,
-        task_kinds=["discover", "fetch"],
-        cost_hint="cheap",
-        ui={"meta_note": "נתוני הצבעה"},
-        compact_spec={
-            "kind": "list",
-            "max_items": 10,
-            "item_spec": {"drop_fields": ["score", "extra", "fetched"]},
-        },
-    ),
-
-    ToolSpec(
         name="find_party",
         schema={
             "type": "object",
@@ -321,7 +108,8 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
                 "for a given Knesset. Returns up to top_k party matches, each "
                 "with party name, seat count, and a list of {mk_id, full_name, "
                 "is_current} members. Use when a question involves party composition "
-                "or party-level analysis."
+                "or party-level analysis; the returned party name is the `party` "
+                "filter of query_protocols."
             ),
             "properties": {
                 "query":       {"type": "string", "description": "Party or faction name (Hebrew)"},
@@ -341,94 +129,156 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         },
     ),
 
-    # ── Fetch / data tools ────────────────────────────────────────────────
-
-    # NOTE: get_mk_profile and get_mk_committees are intentionally absent —
-    # find_mk already returns the full profile (party/faction history,
-    # committee positions, govministries) in each candidate's `profile` field.
-    # get_committee_members is also absent — find_committee already includes
-    # the active member list in each candidate's `record` field.
-
+    # ── Committee protocols (knesset.db) ──────────────────────────────────
     ToolSpec(
-        name="get_meeting_summary",
+        name="query_protocols",
         schema={
             "type": "object",
             "description": (
-                "Return a meeting's AI summary: attendance, discussion topics and "
-                "the opinions each speaker expressed (with quotes)."
+                "Keyword search and listing over committee meeting protocols. Three "
+                "scopes, each searched independently with the same query and filters "
+                "and returned as its own list (top_k rows per scope):\n"
+                "  • topics   — discussion topics from the meeting's AI summary\n"
+                "  • opinions — positions a speaker stated, each with a verbatim "
+                "quote from the protocol (mk_id / party of the speaker)\n"
+                "  • speeches — the protocol transcript itself, one row per speech\n"
+                "Query rules: a few plain Hebrew key words; all words must appear "
+                "(AND); no OR/AND/NOT operators; one sub-topic per call. Spelling "
+                "variants (ktiv male/haser) are matched automatically.\n"
+                "An empty query lists rows instead of ranking them (newest meeting "
+                "first, in-meeting order), so filters alone are a listing. Recipes:\n"
+                "  • a meeting's summary: meeting_ids=[id], search_in=[\"topics\",\"opinions\"]\n"
+                "  • read a meeting's transcript: meeting_ids=[id], search_in=[\"speeches\"]; "
+                "page on with offset\n"
+                "  • what does MK X think about Y: find_mk (or find_party) first, then "
+                "query=Y, mk_id (or party), search_in=[\"opinions\"] (add \"speeches\" "
+                "for more)\n"
+                "  • which meetings discussed Y: query=Y, search_in=[\"topics\"]\n"
+                "Filters are AND-ed; list filters (committees, meeting_ids) OR within "
+                "themselves. mk_id/party mean: topics → meetings the MK/party attended; "
+                "opinions → opinion author; speeches → speaker. Dates are YYYY-MM-DD, "
+                "inclusive. Texts are returned in full."
+            ),
+            "properties": {
+                "query": {
+                    "type":        "string",
+                    "description": "Hebrew key words; empty = list mode",
+                },
+                "search_in": {
+                    "type":    "array",
+                    "items":   {"type": "string", "enum": list(PROTOCOL_SCOPES)},
+                    "default": list(PROTOCOL_SCOPES),
+                },
+                "mk_id":       {"type": "string", "description": "From find_mk"},
+                "party":       {"type": "string", "description": "Party name as returned by find_party"},
+                "committees":  {"type": "array", "items": {"type": "string"},
+                                "description": "Committee names as returned by find_committee"},
+                "meeting_ids": {"type": "array", "items": {"type": "string"}},
+                "date_from":   {"type": "string", "format": "date"},
+                "date_to":     {"type": "string", "format": "date"},
+                "sort": {
+                    "type":        "string",
+                    "enum":        ["relevance", "date"],
+                    "description": "Default: relevance with a query, date (newest first) without",
+                },
+                "top_k": {
+                    "type":    "integer",
+                    "default": config.QUERY_PROTOCOLS_DEFAULT_TOP_K,
+                    "minimum": 1,
+                    "maximum": config.QUERY_PROTOCOLS_MAX_TOP_K,
+                },
+                "offset":      {"type": "integer", "default": 0, "minimum": 0},
+                "knesset_num": {"type": "integer", "default": 25},
+            },
+        },
+        handler=handle_query_protocols,
+        task_kinds=["discover", "filter", "fetch"],
+        cost_hint="cheap",
+        ui={
+            "meta_note": "מתוך פרוטוקולי ועדות הכנסת וסיכומי AI שלהם",
+            "enrich_fields": ["meeting_id"],
+        },
+        compact_spec={"kind": "dict"},
+    ),
+
+    ToolSpec(
+        name="get_meeting_attendance",
+        schema={
+            "type": "object",
+            "description": (
+                "List who attended a committee meeting: MKs first (with mk_id and "
+                "party), then guests (mk_id/party null), plus the meeting's "
+                "committee and date."
             ),
             "properties": {
                 "meeting_id": {"type": "string"},
-                "section": {
-                    "type":        "string",
-                    "enum":        ["topics", "opinions", "attendance"],
-                    "description": "Optional: return only one section.",
-                },
             },
             "required": ["meeting_id"],
         },
-        handler=handle_get_meeting_summary,
+        handler=handle_get_meeting_attendance,
         task_kinds=["fetch"],
         cost_hint="cheap",
         ui={
-            "meta_note": "מתוך סיכום AI של ישיבת הוועדה",
+            "meta_note": "רשימת נוכחים מפרוטוקול ישיבת הוועדה",
             "enrich_fields": ["meeting_id"],
         },
-        compact_spec={
-            "kind": "text",
-            "max_chars": 2000,
-            "executor_selects": True,
-        },
+        compact_spec={"kind": "dict"},
     ),
 
+    # ── Bills (live Knesset OData) ────────────────────────────────────────
     ToolSpec(
-        name="get_committee_sessions",
+        name="query_bills",
         schema={
             "type": "object",
             "description": (
-                "List sessions for a committee in a Knesset. Optional date "
-                "range. Returns metadata only — no transcripts."
+                "Search bills by Hebrew title words (the whole query must appear in "
+                "the bill name) within one Knesset, most recently updated first. "
+                "Returns bill_id, name, status, type, initiators."
             ),
             "properties": {
-                "committee_id": {"type": "string"},
-                "knesset_num":  {"type": "integer", "default": 25},
-                "date_from":    {"type": "string", "format": "date"},
-                "date_to":      {"type": "string", "format": "date"},
+                "query":       {"type": "string"},
+                "knesset_num": {"type": "integer", "default": 25},
+                "top_k":       {"type": "integer", "default": 10, "minimum": 1, "maximum": 100},
             },
-            "required": ["committee_id"],
+            "required": ["query"],
         },
-        handler=handle_get_committee_sessions,
-        task_kinds=["fetch", "discover"],
+        handler=handle_query_bills,
+        task_kinds=["discover"],
         cost_hint="cheap",
-        ui={
-            "meta_note": "רשימת ישיבות ועדה, מתוך אתר הכנסת",
-            "enrich_fields": ["meeting_id"],
-        },
+        ui={"meta_note": "הצעות חוק, מנתוני אתר הכנסת"},
         compact_spec={
             "kind": "list",
-            "max_items": 20,
-            "item_spec": {"drop_fields": ["type_id", "status_id", "knesset_num"]},
+            "max_items": 10,
+            "item_spec": {"drop_fields": ["committee_id", "sub_type"]},
         },
     ),
 
     ToolSpec(
-        name="get_bill_details",
+        name="get_bill",
         schema={
             "type": "object",
             "description": (
-                "Fetch metadata for a bill. "
-                "Returns status, type, initiators, document links. "
-                "Use find_bill first to get bill_id."
+                "Fetch a bill by bill_id (from query_bills): status, type, "
+                "initiators, document links. include_text=true also returns the "
+                "extracted bill text, capped at max_chars — raise max_chars only "
+                "when the bill text itself is the answer."
             ),
             "properties": {
-                "bill_id":     {"type": "string"},
-                "knesset_num": {"type": "integer", "default": 25},
+                "bill_id":      {"type": "string"},
+                "include_text": {"type": "boolean", "default": False},
+                "max_chars": {
+                    "type":    "integer",
+                    "default": config.BILL_TEXT_DEFAULT_MAX_CHARS,
+                    "minimum": config.BILL_TEXT_MIN_MAX_CHARS,
+                    "maximum": config.BILL_TEXT_MAX_MAX_CHARS,
+                },
+                "knesset_num":  {"type": "integer", "default": 25},
             },
             "required": ["bill_id"],
         },
-        handler=handle_get_bill_details,
+        handler=handle_get_bill,
         task_kinds=["fetch"],
-        cost_hint="cheap",
+        cost_hint="medium",
         ui={"meta_note": "פרטי הצעת חוק, מנתוני אתר הכנסת"},
         compact_spec={
             "kind": "dict",
@@ -436,60 +286,27 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         },
     ),
 
+    # ── Votes (live Knesset OData) ────────────────────────────────────────
     ToolSpec(
-        name="get_bill_text",
+        name="query_votes",
         schema={
             "type": "object",
             "description": (
-                "Fetch the extracted text of a bill PDF, capped at "
-                "max_chars characters. The cap keeps this tool usable inside "
-                "the plan-execute loop without blowing the executor's "
-                "context; raise max_chars only when the bill text itself is "
-                "the answer the user wants. Use find_bill first to get bill_id."
-            ),
-            "properties": {
-                "bill_id":     {"type": "string"},
-                "knesset_num": {"type": "integer", "default": 25},
-                "max_chars": {
-                    "type":    "integer",
-                    "default": config.BILL_TEXT_DEFAULT_MAX_CHARS,
-                    "minimum": config.BILL_TEXT_MIN_MAX_CHARS,
-                    "maximum": config.BILL_TEXT_MAX_MAX_CHARS,
-                },
-            },
-            "required": ["bill_id"],
-        },
-        handler=handle_get_bill_text,
-        task_kinds=["fetch"],
-        cost_hint="medium",
-        ui={"meta_note": "טקסט הצעת חוק"},
-        compact_spec={
-            "kind": "text",
-            "max_chars": 1500,
-        },
-    ),
-
-    # ── Voting tools ──────────────────────────────────────────────────────
-    ToolSpec(
-        name="query_voting_records",
-        schema={
-            "type": "object",
-            "description": (
-                "Unified plenum vote query. Behaviour depends on which params are supplied:\n"
-                "  topic + mk_id → how that MK voted on each matching vote\n"
-                "  mk_id only   → recent votes cast by the MK\n"
-                "  topic only   → vote metadata for votes matching the keyword\n"
-                "  neither      → most recent votes overall\n"
+                "Plenum votes. Behaviour depends on which params are supplied:\n"
+                "  query + mk_id → how that MK voted on each matching vote\n"
+                "  mk_id only    → recent votes cast by the MK\n"
+                "  query only    → votes whose title matches the keyword\n"
+                "  neither       → most recent votes overall\n"
                 "Use find_mk first to obtain mk_id."
             ),
             "properties": {
-                "topic":       {"type": "string"},
+                "query":       {"type": "string"},
                 "mk_id":       {"type": "string"},
                 "knesset_num": {"type": "integer", "default": 25},
-                "top_n":       {"type": "integer", "default": 20, "minimum": 1},
+                "top_k":       {"type": "integer", "default": 20, "minimum": 1},
             },
         },
-        handler=handle_query_voting_records,
+        handler=handle_query_votes,
         task_kinds=["discover", "fetch", "filter"],
         cost_hint="cheap",
         ui={"meta_note": "רשומות הצבעה ממאגרי הכנסת"},
@@ -498,48 +315,6 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
             "max_items": 20,
             "executor_selects": True,
             "item_spec": {"drop_fields": ["vote_id"]},
-        },
-    ),
-
-    # ── Deep-dive ─────────────────────────────────────────────────────────
-    ToolSpec(
-        name="deep_dive_meeting",
-        schema={
-            "type": "object",
-            "description": (
-                "Heavy analysis of a single meeting. mode='rerank' returns "
-                "top reranked pass-1/pass-2 chunks for focus_query. "
-                "mode='full' runs an LLM pass over the entire meeting "
-                "(approximately 5 LLM calls budget). Use sparingly."
-            ),
-            "properties": {
-                "meeting_id":  {"type": "string"},
-                "focus_query": {"type": "string"},
-                "mode": {
-                    "type":    "string",
-                    "enum":    ["rerank", "full"],
-                    "default": "rerank",
-                },
-            },
-            "required": ["meeting_id", "focus_query"],
-        },
-        handler=handle_deep_dive_meeting,
-        task_kinds=["deep_dive"],
-        cost_hint="expensive",
-        ui={
-            "meta_note": "מתוך ניתוח מעמיק של קטעים רלוונטיים מישיבת הוועדה",
-            "enrich_fields": ["meeting_id"],
-        },
-        compact_spec={
-            "kind": "nested_list",
-            "list_path": "chunks",
-            "alt_list_path": "responses",
-            "max_items": 10,
-            "executor_selects": True,
-            "item_spec": {
-                "drop_fields": ["pass1_id", "pass2_id", "p1_sim", "p2_score"],
-                "text_fields": {"text": 600, "response": 800},
-            },
         },
     ),
 ]

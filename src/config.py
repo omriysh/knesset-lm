@@ -4,7 +4,6 @@ config.py
 All project-wide constants and path helpers.
 """
 
-import os
 from pathlib import Path
 
 _SRC_DIR = Path(__file__).parent
@@ -35,52 +34,13 @@ API_RETRY_SLEEP     = 30     # seconds between retries
 
 NOT_PROTOCOL        = "לא פרוטוקול"   # sentinel the summarization prompts return for non-protocol documents
 
-# ── Embedding model ───────────────────────────────────────────────────────────
-# Override with environment variables for non-standard installs.
+# ── Indexing ──────────────────────────────────────────────────────────────────
 
-EMBED_MODEL_PATH = os.environ.get(
-    "KNESSET_EMBED_MODEL",
-    str(Path.home() / "Downloads/llama.cpp/unsloth/Qwen3-VL-Embedding-8B"),
-)
+MIN_SPEECH_CHARS = 50    # speeches shorter than this are not stored in knesset.db
 
-# Short slug used to namespace the ChromaDB directory so embeddings from
-# different models are never mixed.  Derived from the model directory name
-# by default; override with KNESSET_EMBED_MODEL_NAME if needed.
-EMBED_MODEL_NAME = os.environ.get(
-    "KNESSET_EMBED_MODEL_NAME",
-    Path(EMBED_MODEL_PATH).name.lower().replace("_", "-"),
-)
+# ── Web reading tab ───────────────────────────────────────────────────────────
 
-# ── Indexing parameters ───────────────────────────────────────────────────────
-
-EMBED_BATCH_SIZE          = 4     # reduce to 1–2 if OOM during indexing
-MIN_SPEECH_CHARS          = 50    # speeches shorter than this are skipped
-COHERENCE_WINDOW          = 3     # speeches on each side for block similarity
-COHERENCE_DEPTH_THRESHOLD = 0.02  # min valley depth to count as a topic boundary
-COHERENCE_PEAK_WINDOW     = 8     # look-ahead/behind window for reference peak
-MIN_DIALOG_SPEECHES       = 2     # groups smaller than this are merged into a neighbour
-MAX_DIALOG_CHARS          = 3000  # oversized chunks are split at the deepest valley
-
-# ── ChromaDB ─────────────────────────────────────────────────────────────────
-# Embeddings from different models are stored in separate subdirectories under
-# CHROMA_ROOT so they are never mixed.  The active model's directory is CHROMA_DIR.
-# Use --db <path> at the CLI to override the full path (e.g. for an experimental
-# store that pre-dates the per-model layout).
-
-CHROMA_ROOT = DATA_DIR / "chroma"
-CHROMA_DIR  = CHROMA_ROOT / EMBED_MODEL_NAME
-
-SPEECHES_COLLECTION = "knesset_speeches"
-BULLETS_COLLECTION  = "knesset_bullets"
-PASS1_COLLECTION    = "knesset_dialogs_pass1"
-PASS2_COLLECTION    = "knesset_dialogs_pass2"
-
-# ── RAG retrieval parameters ──────────────────────────────────────────────────
-
-TOP_K_MEETINGS    = 15     # meetings to surface via L1 bullet search (research)
-TOP_K_BROWSE      = 50     # meetings to surface via L1 bullet search (browse tab)
-TOP_N_DIALOGS     = 15     # pass-2 chunks to rank per query
-MAX_CONTEXT_CHARS = 50_000 # ~25k tokens; leaves headroom for LLM output
+TOP_K_BROWSE = 50        # meetings per reading-tab search
 
 # ── Data paths ────────────────────────────────────────────────────────────────
 
@@ -115,9 +75,6 @@ RESEARCH_MAX_TOOL_CALLS         = 50
 RESEARCH_MAX_REPLANS            = 2
 RESEARCH_MAX_PLAN_STEPS_V1      = 8
 RESEARCH_MAX_DEEP_DIVES_PER_PLAN = 3       # validator caps plan deep-dives
-DEEP_DIVE_CALLS_PER_STEP        = 2        # kept for backward compat
-DEEP_DIVE_FULL_MODEL            = "gemini-2.5-flash-lite"
-DEEP_DIVE_FULL_BATCH_HEADROOM   = 0.60    # fraction of ctx used for input; rest = output budget
 MAX_TOOL_CALLS_PER_STEP         = 20       # max tool calls per executor step
 EVIDENCE_MAX_ENTRIES            = 200
 EVIDENCE_MAX_BYTES_PER_STEP     = 500 * 1024
@@ -141,15 +98,8 @@ DICTABERT_MODEL      = "dicta-il/dictabert-seg"
 DICTABERT_DEVICE     = "cuda"   # used only when USE_DICTABERT_LEMMA=True
 
 # Retrieval
-RRF_K                              = 60
-SEARCH_TOPICS_DEFAULT_TOP_K        = 500
-SEARCH_OPINIONS_DEFAULT_TOP_K      = 500
-SEARCH_OPINIONS_MAX_TOP_K          = 1000
-SEARCH_TOPICS_MAX_TOP_K            = 2000
-SEARCH_PROTOCOLS_DEFAULT_TOP_K     = 50
-SEARCH_PROTOCOLS_MAX_TOP_K         = 200
-HYBRID_FIRST_STAGE_TOP_K           = 1000   # per-signal cap before RRF
-KEYWORD_RERANK_TOP_K               = 200    # cosine rerank window when sort=relevance
+QUERY_PROTOCOLS_DEFAULT_TOP_K      = 50     # rows per scope (topics / opinions / speeches)
+QUERY_PROTOCOLS_MAX_TOP_K          = 200
 NAME_RESOLUTION_AUTO_THRESHOLD     = 0.35
 FUZZY_SEARCH_THRESHOLD             = 55.0   # minimum RapidFuzz score (0–100) to include a candidate
 FUZZY_BODY_SCORE_WEIGHT            = 0.85   # body match weighted lower than label match
@@ -159,7 +109,7 @@ FUZZY_BODY_SCORE_WEIGHT            = 0.85   # body match weighted lower than lab
 FUZZY_TOKEN_CONTAINMENT_SCORE      = 95.0
 
 # Stricter bar for meeting-participant/guest MK resolution (speaker/roster
-# names -> mk_id, in build_meeting_index.py and web/app.py::browse_rag).
+# names -> mk_id, in web/app.py::browse_search).
 # At the general-purpose FUZZY_SEARCH_THRESHOLD=55, real non-MK names that
 # happen to share one name token with an MK false-positive up to ~85
 # (e.g. "עודד ברוק" -> MK "עודד פורר", "שי טייב" -> MK "יוסף טייב") — while
@@ -181,10 +131,6 @@ BILL_TEXT_MAX_MAX_CHARS      = 8000
 EXECUTOR_TOOL_RESULT_CHARS   = 4000
 # Max chars of `full` text included in the step_completed SSE event payload.
 AGENT_STEP_FULL_CHARS        = 8000
-
-# Embedding device for query path. Flip to "cpu" when the local model
-# running on llama-server is large enough to leave no VRAM headroom.
-EMBED_DEVICE_FOR_QUERY = "cuda"
 
 # Sessions on disk (evidence overflow)
 SESSIONS_DIR = DATA_DIR / "sessions"

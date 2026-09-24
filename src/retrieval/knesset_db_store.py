@@ -124,31 +124,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS speeches_fts USING fts5(
     text, content='speeches', content_rowid='id', {_FTS_TOKENIZE}
 );
 
-CREATE TABLE IF NOT EXISTS bills (
-    id          INTEGER PRIMARY KEY,
-    bill_id     TEXT NOT NULL,
-    knesset_num INTEGER NOT NULL,
-    name        TEXT NOT NULL,
-    status      TEXT,
-    initiators  TEXT,
-    UNIQUE (bill_id, knesset_num)
-);
-CREATE VIRTUAL TABLE IF NOT EXISTS bills_fts USING fts5(
-    name, initiators, content='bills', content_rowid='id', {_FTS_TOKENIZE}
-);
-
-CREATE TABLE IF NOT EXISTS votes (
-    id          INTEGER PRIMARY KEY,
-    vote_id     TEXT NOT NULL,
-    knesset_num INTEGER NOT NULL,
-    title       TEXT NOT NULL,
-    subject     TEXT,
-    UNIQUE (vote_id, knesset_num)
-);
-CREATE VIRTUAL TABLE IF NOT EXISTS votes_fts USING fts5(
-    title, subject, content='votes', content_rowid='id', {_FTS_TOKENIZE}
-);
-
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT
@@ -163,8 +138,6 @@ TARGET_TABLES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "meetings":   (("attendance",), ()),
     "summaries":  (("topics", "opinions"), ("topics_fts", "opinions_fts")),
     "speeches":   (("speeches",), ("speeches_fts",)),
-    "bills":      (("bills",), ("bills_fts",)),
-    "votes":      (("votes",), ("votes_fts",)),
 }
 
 _BATCH = 1000
@@ -180,7 +153,11 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     p.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(p))
     conn.row_factory = sqlite3.Row
-    conn.executescript(_SCHEMA)
+    try:
+        conn.executescript(_SCHEMA)
+    except sqlite3.Error:
+        conn.close()
+        raise
     return conn
 
 
@@ -268,14 +245,6 @@ def insert_speeches(conn, rows):
     return _insert_rows(conn, "speeches", ("meeting_id", "knesset_num", "idx", "speaker", "mk_id", "text"), rows)
 
 
-def insert_bills(conn, rows):
-    return _insert_rows(conn, "bills", ("bill_id", "knesset_num", "name", "status", "initiators"), rows)
-
-
-def insert_votes(conn, rows):
-    return _insert_rows(conn, "votes", ("vote_id", "knesset_num", "title", "subject"), rows)
-
-
 def set_meta(conn, key: str, value: str) -> None:
     conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)", (key, value))
     conn.commit()
@@ -286,7 +255,7 @@ def set_meta(conn, key: str, value: str) -> None:
 def name_entries(conn, target: str, knesset_num: int) -> list[dict]:
     """
     Rows shaped for FuzzyNameIndex: {id, label, body, extra}. target is one of
-    mks | committees | bills | votes.
+    mks | committees.
     """
     if target == "mks":
         sql = ("SELECT mk_id AS id, full_name AS label, aliases AS body, party FROM mks "
@@ -298,21 +267,6 @@ def name_entries(conn, target: str, knesset_num: int) -> list[dict]:
         sql = "SELECT committee_id AS id, name AS label, is_current FROM committees WHERE knesset_num = ?"
         return [{"id": r["id"], "label": r["label"], "body": r["label"],
                  "extra": {"committee_id": r["id"], "knesset_num": knesset_num, "is_current": r["is_current"]}}
-                for r in conn.execute(sql, (knesset_num,))]
-    if target == "bills":
-        sql = "SELECT bill_id AS id, name AS label, status, initiators FROM bills WHERE knesset_num = ?"
-        return [{"id": r["id"], "label": r["label"],
-                 "body": " | ".join(filter(None, [r["label"], r["initiators"], r["status"]])),
-                 "extra": {"bill_id": r["id"], "bill_name": r["label"], "status": r["status"],
-                           "initiators": (r["initiators"] or "").split(" | ") if r["initiators"] else [],
-                           "knesset_num": knesset_num}}
-                for r in conn.execute(sql, (knesset_num,))]
-    if target == "votes":
-        sql = "SELECT vote_id AS id, title AS label, subject FROM votes WHERE knesset_num = ?"
-        return [{"id": r["id"], "label": r["label"] or r["subject"] or "",
-                 "body": " | ".join(filter(None, [r["label"], r["subject"]])),
-                 "extra": {"vote_id": r["id"], "vote_title": r["label"], "subject": r["subject"],
-                           "knesset_num": knesset_num}}
                 for r in conn.execute(sql, (knesset_num,))]
     raise ValueError(f"unknown name target {target!r}")
 
@@ -358,53 +312,78 @@ def meeting_ids_with_summary(conn, knesset_num: int) -> set[str]:
 
 # ── searches ──────────────────────────────────────────────────────────────────
 
-def search_topics(conn, match: str, knesset_num: int, *, top_k: int,
-                  committees: list[str] | None = None,
-                  date_from: str | None = None, date_to: str | None = None) -> list[dict]:
-    where = ["topics_fts MATCH ?", "t.knesset_num = ?"]
-    params: list = [match, knesset_num]
-    _meeting_filters(where, params, "m", committees, date_from, date_to)
-    sql = (f"SELECT t.id, t.meeting_id, t.idx, t.text, m.committee, m.date, bm25(topics_fts) AS score "
-           f"FROM topics_fts JOIN topics t ON t.id = topics_fts.rowid "
-           f"JOIN meetings m ON m.meeting_id = t.meeting_id "
-           f"WHERE {' AND '.join(where)} ORDER BY score LIMIT ?")
-    params.append(top_k)
-    return [dict(r) for r in conn.execute(sql, params)]
+PROTOCOL_SCOPES = ("topics", "opinions", "speeches")
+
+_SCOPE_COLUMNS = {
+    "topics":   "x.idx, x.text AS topic",
+    "opinions": ("x.idx, x.speaker_label AS speaker, x.speaker_name, x.mk_id, x.party, x.opinion, x.quote, "
+                 "x.speech_idx, x.quote_offset"),
+    "speeches": "x.idx AS speech_idx, x.speaker, x.mk_id, x.text",
+}
 
 
-def search_opinions(conn, match: str | None, knesset_num: int, *, top_k: int,
-                    mk_id: str | None = None, party: str | None = None,
-                    verified_only: bool = True,
-                    committees: list[str] | None = None,
-                    date_from: str | None = None, date_to: str | None = None) -> list[dict]:
-    """FTS over opinion+quote; match=None lists (newest first) instead of ranking."""
-    where = ["o.knesset_num = ?"]
+def query_protocol_rows(conn, scope: str, knesset_num: int, *, match: str | None = None,
+                        mk_id: str | None = None, party: str | None = None,
+                        committees: list[str] | None = None, meeting_ids: list[str] | None = None,
+                        date_from: str | None = None, date_to: str | None = None,
+                        sort: str = "relevance", top_k: int, offset: int = 0) -> list[dict]:
+    """
+    Rows of one protocol scope (topics | opinions | speeches) with meeting_id,
+    committee and date. match=None lists instead of ranking. Filters AND
+    together; mk_id / party mean attendance for topics, the opinion author for
+    opinions and the speaker (roster party) for speeches. Opinions are always
+    verified-only and is_protocol = 0 meetings are always excluded.
+    Order: bm25 (sort="relevance" with a match) or date DESC, meeting_id,
+    in-meeting idx.
+    """
+    if scope not in PROTOCOL_SCOPES:
+        raise ValueError(f"unknown protocol scope {scope!r}")
+    fts = f"{scope}_fts"
+    where = ["x.knesset_num = ?", "(m.is_protocol IS NULL OR m.is_protocol != 0)"]
     params: list = [knesset_num]
-    if match:
-        where.insert(0, "opinions_fts MATCH ?")
-        params.insert(0, match)
-    if mk_id:
-        where.append("o.mk_id = ?")
-        params.append(str(mk_id))
-    if party:
-        where.append("o.party = ?")
-        params.append(party)
-    if verified_only:
-        where.append("o.quote_verified = 1")
     _meeting_filters(where, params, "m", committees, date_from, date_to)
-    select = ("SELECT o.id, o.meeting_id, o.idx, o.speaker_label AS speaker, o.speaker_name, o.mk_id, "
-              "o.party, o.opinion, o.quote, o.quote_verified, o.speech_idx, o.quote_offset, "
-              "m.committee, m.date")
-    if match:
-        sql = (f"{select}, bm25(opinions_fts) AS score FROM opinions_fts "
-               f"JOIN opinions o ON o.id = opinions_fts.rowid "
-               f"JOIN meetings m ON m.meeting_id = o.meeting_id "
-               f"WHERE {' AND '.join(where)} ORDER BY score LIMIT ?")
+    if meeting_ids:
+        where.append(f"m.meeting_id IN ({','.join('?' * len(meeting_ids))})")
+        params.extend(str(m) for m in meeting_ids)
+    if scope == "topics":
+        if mk_id:
+            where.append("x.meeting_id IN (SELECT meeting_id FROM attendance WHERE mk_id = ?)")
+            params.append(str(mk_id))
+        if party:
+            where.append("x.meeting_id IN (SELECT meeting_id FROM attendance WHERE party = ?)")
+            params.append(party)
+    elif scope == "opinions":
+        where.append("x.quote_verified = 1")
+        if mk_id:
+            where.append("x.mk_id = ?")
+            params.append(str(mk_id))
+        if party:
+            where.append("x.party = ?")
+            params.append(party)
     else:
-        sql = (f"{select}, 0.0 AS score FROM opinions o "
-               f"JOIN meetings m ON m.meeting_id = o.meeting_id "
-               f"WHERE {' AND '.join(where)} ORDER BY m.date DESC, o.idx LIMIT ?")
-    params.append(top_k)
+        if mk_id:
+            where.append("x.mk_id = ?")
+            params.append(str(mk_id))
+        if party:
+            where.append("x.mk_id IN (SELECT mk_id FROM mks WHERE party = ? AND knesset_num = ?)")
+            params.extend([party, knesset_num])
+
+    select = f"SELECT x.meeting_id, m.committee, m.date, {_SCOPE_COLUMNS[scope]}"
+    if match:
+        where.insert(0, f"{fts} MATCH ?")
+        params.insert(0, match)
+        source = (f"FROM {fts} JOIN {scope} x ON x.id = {fts}.rowid "
+                  f"JOIN meetings m ON m.meeting_id = x.meeting_id")
+        select += f", bm25({fts}) AS score"
+    elif mk_id or party:
+        source = f"FROM {scope} x JOIN meetings m ON m.meeting_id = x.meeting_id"
+    else:
+        # Walk meetings newest-first via idx_meetings_date so LIMIT stops early;
+        # left to itself the planner scans and sorts the whole scope table.
+        source = f"FROM meetings m CROSS JOIN {scope} x ON x.meeting_id = m.meeting_id"
+    order = "score" if match and sort == "relevance" else "m.date DESC, m.meeting_id, x.idx"
+    sql = f"{select} {source} WHERE {' AND '.join(where)} ORDER BY {order} LIMIT ? OFFSET ?"
+    params.extend([top_k, offset])
     return [dict(r) for r in conn.execute(sql, params)]
 
 
@@ -488,3 +467,88 @@ def query_candidate_meeting_ids(
 
     sql = f"SELECT m.meeting_id FROM meetings m WHERE {' AND '.join(where)} ORDER BY m.date DESC"
     return [r[0] for r in conn.execute(sql, params)]
+
+
+# ── web browser queries ───────────────────────────────────────────────────────
+
+def _browsable_meetings_where(knesset_num: int, candidate_meeting_ids: list[str] | None) -> tuple[list[str], list]:
+    """Meetings of the Knesset that are protocols (or not summarized yet), optionally limited to candidates."""
+    where = ["m.knesset_num = ?", "(m.is_protocol IS NULL OR m.is_protocol != 0)"]
+    params: list = [knesset_num]
+    if candidate_meeting_ids is not None:
+        if not candidate_meeting_ids:
+            where.append("0")
+        else:
+            where.append(f"m.meeting_id IN ({','.join('?' * len(candidate_meeting_ids))})")
+            params.extend(str(m) for m in candidate_meeting_ids)
+    return where, params
+
+
+def recent_meetings(conn, knesset_num: int, *, limit: int,
+                    candidate_meeting_ids: list[str] | None = None) -> list[dict]:
+    """Newest browsable meetings: rows meeting_id/committee/date."""
+    where, params = _browsable_meetings_where(knesset_num, candidate_meeting_ids)
+    sql = (f"SELECT m.meeting_id, m.committee, m.date FROM meetings m WHERE {' AND '.join(where)} "
+           f"ORDER BY m.date DESC, m.meeting_id DESC LIMIT ?")
+    return [dict(r) for r in conn.execute(sql, params + [limit])]
+
+
+def meetings_by_best_speech(conn, match: str, knesset_num: int, *, limit: int, sort: str = "relevance",
+                            candidate_meeting_ids: list[str] | None = None) -> list[dict]:
+    """
+    Browsable meetings with at least one speech matching the FTS expression, one row per meeting:
+    meeting_id/committee/date, best_speech_rowid, score (bm25 of the best speech, lower = better).
+    sort="relevance" orders by that score, anything else by date DESC.
+    """
+    where, params = _browsable_meetings_where(knesset_num, candidate_meeting_ids)
+    order_by = "score" if sort == "relevance" else "date DESC, meeting_id DESC"
+    sql = (f"WITH matching_speeches AS MATERIALIZED ("
+           f"  SELECT s.meeting_id, m.committee, m.date, speeches_fts.rowid AS best_speech_rowid, "
+           f"         bm25(speeches_fts) AS speech_score "
+           f"  FROM speeches_fts JOIN speeches s ON s.id = speeches_fts.rowid "
+           f"  JOIN meetings m ON m.meeting_id = s.meeting_id "
+           f"  WHERE speeches_fts MATCH ? AND {' AND '.join(where)}) "
+           f"SELECT meeting_id, committee, date, best_speech_rowid, MIN(speech_score) AS score "
+           f"FROM matching_speeches GROUP BY meeting_id ORDER BY {order_by} LIMIT ?")
+    return [dict(r) for r in conn.execute(sql, [match] + params + [limit])]
+
+
+def speech_snippet(conn, match: str, speech_rowid: int, *, tokens: int = 24) -> str:
+    row = conn.execute(
+        "SELECT snippet(speeches_fts, 0, '', '', '…', ?) FROM speeches_fts "
+        "WHERE speeches_fts MATCH ? AND rowid = ?", (tokens, match, speech_rowid)).fetchone()
+    return row[0] if row else ""
+
+
+def first_topic_by_meeting(conn, meeting_ids: list[str]) -> dict[str, str]:
+    if not meeting_ids:
+        return {}
+    sql = (f"SELECT meeting_id, text, MIN(idx) FROM topics "
+           f"WHERE meeting_id IN ({','.join('?' * len(meeting_ids))}) GROUP BY meeting_id")
+    return {r[0]: r[1] for r in conn.execute(sql, [str(m) for m in meeting_ids])}
+
+
+def meeting_speech_hits(conn, word_matches: list[str], meeting_id: str) -> list[dict]:
+    """Speeches of one meeting matching at least one of the per-word FTS expressions.
+
+    Rows: speech_idx, matched_words (how many of word_matches the speech contains), relevance
+    (summed -bm25 over the matched words, higher = better), ordered by speech_idx.
+    """
+    speech_id_range = conn.execute(
+        "SELECT MIN(id), MAX(id) FROM speeches WHERE meeting_id = ?", (str(meeting_id),)).fetchone()
+    if speech_id_range[0] is None:
+        return []
+    sql = ("SELECT s.idx, -bm25(speeches_fts) FROM speeches_fts JOIN speeches s ON s.id = speeches_fts.rowid "
+           "WHERE speeches_fts MATCH ? AND speeches_fts.rowid BETWEEN ? AND ? AND s.meeting_id = ?")
+    hits_by_speech: dict[int, dict] = {}
+    for word_match in word_matches:
+        for speech_idx, relevance in conn.execute(
+                sql, (word_match, speech_id_range[0], speech_id_range[1], str(meeting_id))):
+            hit = hits_by_speech.setdefault(speech_idx, {"speech_idx": speech_idx, "matched_words": 0, "relevance": 0.0})
+            hit["matched_words"] += 1
+            hit["relevance"] += relevance
+    return [hits_by_speech[idx] for idx in sorted(hits_by_speech)]
+
+
+def table_row_counts(conn, tables: tuple[str, ...] = ("meetings", "topics", "opinions", "speeches")) -> dict[str, int]:
+    return {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in tables}

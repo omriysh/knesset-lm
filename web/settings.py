@@ -18,21 +18,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import config as _cfg
 
-# ── Embedding model ───────────────────────────────────────────────────────────
-
-EMBED_MODEL_PATH: str = os.environ.get("KNESSET_EMBED_MODEL", _cfg.EMBED_MODEL_PATH)
-EMBED_MODEL_NAME: str = os.environ.get("KNESSET_EMBED_MODEL_NAME", _cfg.EMBED_MODEL_NAME)
-
-CUDA:     bool       = os.environ.get("KNESSET_CUDA", "").lower() in ("1", "true", "yes")
-QUANTIZE: str | None = os.environ.get("KNESSET_QUANTIZE") or None
-
 # ── LLM server ────────────────────────────────────────────────────────────────
 
 LLAMA_SERVER: str = os.environ.get("KNESSET_LLAMA_SERVER", _cfg.LLAMA_SERVER)
-
-# ── ChromaDB ─────────────────────────────────────────────────────────────────
-
-CHROMA_DIR: Path = Path(os.environ.get("KNESSET_CHROMA_DIR", str(_cfg.CHROMA_DIR)))
 
 # ── State machine ─────────────────────────────────────────────────────────────
 
@@ -50,11 +38,9 @@ TRANSCRIPTIONS_ROOT: Path = Path(
     os.environ.get("KNESSET_TRANSCRIPTIONS_DIR", str(_cfg.DATA_DIR / "raw_transcriptions"))
 )
 
-# ── RAG retrieval ─────────────────────────────────────────────────────────────
+# ── Reading-tab browser ───────────────────────────────────────────────────────
 
-TOP_K_MEETINGS: int = int(os.environ.get("KNESSET_TOP_K",        str(_cfg.TOP_K_MEETINGS)))
-TOP_K_BROWSE:   int = int(os.environ.get("KNESSET_TOP_K_BROWSE", str(_cfg.TOP_K_BROWSE)))
-TOP_N_DIALOGS:  int = int(os.environ.get("KNESSET_TOP_N",        str(_cfg.TOP_N_DIALOGS)))
+TOP_K_BROWSE: int = int(os.environ.get("KNESSET_TOP_K_BROWSE", str(_cfg.TOP_K_BROWSE)))
 
 # ── Sessions ─────────────────────────────────────────────────────────────────
 
