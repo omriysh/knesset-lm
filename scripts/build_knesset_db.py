@@ -40,12 +40,13 @@ import config
 from indexing.speaker_link import resolve_speaker
 from retrieval import knesset_db_store as store
 from summarization.output_parsing import QuoteLocator
-from summarization.summary_io import SUMMARY_SUFFIX, load_summary, transcript_path_for_summary
+from summarization.summary_io import load_summary, summary_path_for_transcript, transcript_path_for_summary
 from utils.knesset_db import _most_recent_faction, get_all_committees, get_all_mks, mk_name_variants
 from utils.meeting import extract_attendance, get_meeting_speakers, load_meeting, parse_full_text_speeches
 from utils.tool_helpers.fuzzy_name_index import FuzzyNameIndex
 
 TARGETS = ("mks", "committees", "meetings", "summaries", "speeches")
+NOT_MEETINGS_DIR = "not_meetings"
 
 
 def _meeting_id_from_stem(stem: str) -> str:
@@ -58,6 +59,42 @@ def _iso_date(stem: str) -> str:
     if len(parts) >= 3 and len(parts[2]) == 4 and parts[0].isdigit() and parts[1].isdigit():
         return f"{parts[2]}-{parts[1].zfill(2)}-{parts[0].zfill(2)}"
     return ""
+
+
+def _newest(paths: list[Path]) -> Path:
+    return max(paths, key=lambda path: path.stat().st_mtime)
+
+
+def _json_files_by_meeting(root: Path, label: str) -> dict[str, list[Path]]:
+    """All *.json under root grouped by meeting_id, skipping NOT_MEETINGS_DIR folders."""
+    by_meeting: dict[str, list[Path]] = {}
+    for json_path in sorted(root.rglob("*.json")):
+        if NOT_MEETINGS_DIR in json_path.relative_to(root).parts:
+            continue
+        by_meeting.setdefault(_meeting_id_from_stem(json_path.stem), []).append(json_path)
+    n_duplicated = sum(1 for paths in by_meeting.values() if len(paths) > 1)
+    if n_duplicated:
+        print(f"  [{label}] {n_duplicated} meeting_ids have more than one file; keeping one each")
+    return by_meeting
+
+
+def _transcripts_by_meeting(knesset_num: int) -> dict[str, Path]:
+    """One transcript per meeting_id. Among duplicates (same meeting saved under a renamed
+    committee folder) prefer the copy that has a summary, then the newest file."""
+    chosen: dict[str, Path] = {}
+    for meeting_id, paths in _json_files_by_meeting(config.transcriptions_dir(knesset_num), "transcripts").items():
+        with_summary = [path for path in paths if summary_path_for_transcript(path).exists()]
+        chosen[meeting_id] = _newest(with_summary or paths)
+    return chosen
+
+
+def _summaries_by_meeting(knesset_num: int, transcripts: dict[str, Path]) -> dict[str, Path]:
+    """One summary per meeting_id: the one paired with the chosen transcript, else the newest."""
+    chosen: dict[str, Path] = {}
+    for meeting_id, paths in _json_files_by_meeting(config.summaries_dir(knesset_num), "summaries").items():
+        paired = [path for path in paths if transcript_path_for_summary(path) == transcripts.get(meeting_id)]
+        chosen[meeting_id] = paired[0] if paired else _newest(paths)
+    return chosen
 
 
 def _roster_index(conn, knesset_num: int) -> FuzzyNameIndex | None:
@@ -136,13 +173,12 @@ def build_meetings(conn, knesset_num: int, rebuild: bool) -> int:
     meeting_rows: list[dict] = []
     attendance_rows: list[dict] = []
     n_resolved = n_guests = 0
-    for json_path in sorted(root.rglob("*.json")):
+    for meeting_id, json_path in _transcripts_by_meeting(knesset_num).items():
         try:
             meeting = load_meeting(json_path)
         except Exception as exc:
             print(f"  [meetings] skip {json_path.name}: {exc}")
             continue
-        meeting_id = _meeting_id_from_stem(json_path.stem)
         meeting_rows.append({
             "meeting_id":      meeting_id,
             "knesset_num":     knesset_num,
@@ -230,13 +266,12 @@ def build_summaries(conn, knesset_num: int, rebuild: bool) -> int:
     n_meetings = n_opinions = n_resolved = n_located = 0
     unresolved: dict[str, int] = {}
     label_cache: dict[str, dict | None] = {}
-    for summary_path in sorted(root.rglob(f"*{SUMMARY_SUFFIX}")):
+    for meeting_id, summary_path in _summaries_by_meeting(knesset_num, _transcripts_by_meeting(knesset_num)).items():
         try:
             summary = load_summary(summary_path)
         except Exception as exc:
             print(f"  [summaries] skip {summary_path.name}: {exc}")
             continue
-        meeting_id = _meeting_id_from_stem(summary_path.stem)
         transcript_path = transcript_path_for_summary(summary_path)
         if meeting_id not in known_meetings:
             store.insert_meetings(conn, [{
@@ -315,13 +350,12 @@ def build_speeches(conn, knesset_num: int, rebuild: bool) -> int:
         store.clear_target(conn, "speeches", knesset_num)
     total = 0
     batch: list[dict] = []
-    for json_path in sorted(root.rglob("*.json")):
+    for meeting_id, json_path in _transcripts_by_meeting(knesset_num).items():
         try:
             meeting = load_meeting(json_path)
         except Exception as exc:
             print(f"  [speeches] skip {json_path.name}: {exc}")
             continue
-        meeting_id = _meeting_id_from_stem(json_path.stem)
         if "speeches" in meeting:
             speeches = meeting["speeches"]
         else:
@@ -342,6 +376,9 @@ def build_speeches(conn, knesset_num: int, rebuild: bool) -> int:
         total += store.insert_speeches(conn, batch)
     if total:
         store.rebuild_fts(conn, "speeches")
+    n_distinct_meetings = conn.execute("SELECT COUNT(DISTINCT meeting_id) FROM speeches WHERE knesset_num = ?",
+                                       (knesset_num,)).fetchone()[0]
+    print(f"  [speeches] {total} speeches across {n_distinct_meetings} meetings")
     return total
 
 

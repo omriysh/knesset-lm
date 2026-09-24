@@ -52,6 +52,10 @@ def transcript_path_for_summary(summary_path: Path) -> Path:
     return Path(str(summary_path).replace("summaries", "raw_transcriptions", 1))
 
 
+def summary_path_for_transcript(transcript_path: Path) -> Path:
+    return Path(str(transcript_path).replace("raw_transcriptions", "summaries", 1))
+
+
 def render_summary_text(
     topics: list[str],
     opinions: list[dict],
