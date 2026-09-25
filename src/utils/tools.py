@@ -221,9 +221,10 @@ def _as_list(value) -> list:
 
 
 def _fts_match(query: str, fts_table: str) -> str:
-    """FTS5 MATCH expression for a free-text query: lemmatized, ktiv-expanded, tokens AND-ed."""
+    """FTS5 MATCH expression for a free-text query: lemmatized, ktiv-expanded, tokens AND-ed.
+    Empty when no token survives metacharacter stripping (the raw query never reaches MATCH)."""
     normalized = lemmatize(query)
-    return _expand_match(normalized, fts_table) or _quote_match(normalized) or query
+    return _expand_match(normalized, fts_table) or _quote_match(normalized)
 
 
 # ---------------------------------------------------------------------------
@@ -270,9 +271,13 @@ def handle_query_protocols(args: dict) -> ToolEnvelope:
     try:
         conn = store.connect()
         for scope in search_in:
+            match = _fts_match(query, f"{scope}_fts") if query else None
+            if query and not match:
+                results[scope] = []
+                continue
             results[scope] = store.query_protocol_rows(
                 conn, scope, knesset_num,
-                match=_fts_match(query, f"{scope}_fts") if query else None,
+                match=match,
                 mk_id=mk_id, party=party, committees=committees or None,
                 meeting_ids=meeting_ids or None, date_from=date_from, date_to=date_to,
                 sort=sort, top_k=top_k, offset=offset,
@@ -312,8 +317,11 @@ def search_speeches(
     (sqlite bm25: lower = more relevant). sort="date" reorders the top_k
     best matches newest first.
     """
+    match = _fts_match(query, "speeches_fts")
+    if not match:
+        return []
     rows = store.search_speeches(
-        conn, _fts_match(query, "speeches_fts"), knesset_num,
+        conn, match, knesset_num,
         top_k=top_k,
         meeting_ids=[str(m) for m in meeting_ids] if meeting_ids else None,
         committees=[str(c).replace("_", " ") for c in committees] if committees else None,
@@ -391,7 +399,7 @@ def _build_mk_full_profile(record: dict, knesset_num: int) -> dict:
         profile.update(get_mk_positions(record.get("PersonID") or mk_id, knesset_num))
     except Exception as exc:
         print(f"[tools] OData positions fetch failed for mk {mk_id}: {exc}")
-        profile["positions_error"] = str(exc)
+        profile["positions_error"] = "positions unavailable: the Knesset OData request failed"
     return profile
 
 
@@ -600,7 +608,7 @@ def handle_get_bill(args: dict) -> ToolEnvelope:
 
     if not bill_id:
         return _validation_error("missing_bill_id", kind="fetch", source="odata", **provenance)
-    if not bill_id.isdigit():
+    if not (bill_id.isascii() and bill_id.isdigit()):
         return _validation_error("invalid_bill_id", kind="fetch", source="odata", **provenance)
 
     text_record = None
@@ -704,15 +712,13 @@ _FTS5_META = set('"*():^-+')
 
 
 def _safe_match(text: str) -> str:
-    """Strip FTS5 metacharacters."""
-    return "".join(ch for ch in text if ch not in _FTS5_META).strip() or text
+    """Strip FTS5 metacharacters; empty when nothing else is left."""
+    return "".join(ch for ch in text if ch not in _FTS5_META).strip()
 
 
 def _quote_match(text: str) -> str:
     """Wrap each whitespace-separated token in double quotes (FTS5)."""
     tokens = [tok for tok in text.split() if tok.strip()]
-    if not tokens:
-        return text
     return " ".join(f'"{_safe_match(tok)}"' for tok in tokens if _safe_match(tok))
 
 

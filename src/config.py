@@ -128,11 +128,21 @@ API_PROTOCOLS_DEFAULT_SCOPES  = ("topics", "opinions")
 API_FIND_MAX_TOP_K            = 5
 API_LIST_MAX_TOP_K            = 50
 API_MAX_RESPONSE_CHARS        = 90_000
+API_MAX_QUERY_CHARS           = 200
+API_MAX_QUERY_WORDS           = 12       # FTS5 AND-slots per protocol query
+API_MAX_NAME_CHARS            = 100      # party / committee filter values
+API_MAX_LIST_ITEMS            = 20       # repeated / comma-separated list params
+API_MAX_ID_DIGITS             = 12
+API_MAX_OFFSET                = 5000
+API_KNESSET_NUM_RANGE         = (1, 26)
 
 # Bill text
 BILL_TEXT_DEFAULT_MAX_CHARS  = 1000
 BILL_TEXT_MIN_MAX_CHARS      = 200
 BILL_TEXT_MAX_MAX_CHARS      = 8000
+BILL_DOCUMENT_HOST_SUFFIX    = "knesset.gov.il"   # bill PDFs are only fetched over https from this domain
+BILL_PDF_MAX_BYTES           = 15_000_000
+BILL_PDF_MAX_PAGES           = 40
 
 # Tool result truncation
 # Max chars of `full` text sent to the executor LLM per tool result message.

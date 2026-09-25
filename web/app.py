@@ -53,6 +53,7 @@ from pydantic import BaseModel
 
 import config
 from api.routes import router as api_router
+from api.validation import install_error_handlers
 from agent.llm.gemma import GemmaLlamaBackend
 
 # ── Tool-result lazy-load cache ───────────────────────────────────────────────
@@ -409,6 +410,7 @@ _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 app.include_router(api_router)
+install_error_handlers(app)
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
 _MK_PHOTOS_DIR = config.MK_PHOTOS_DIR

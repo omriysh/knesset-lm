@@ -53,6 +53,13 @@ class _FakeResponse:
         if self.status_code >= 400:
             raise requests.exceptions.HTTPError(f"HTTP {self.status_code}", response=self)
 
+    def iter_content(self, chunk_size=1):
+        for i in range(0, len(self.content), chunk_size):
+            yield self.content[i:i + chunk_size]
+
+    def close(self):
+        pass
+
 
 def _strip_top(params: dict) -> dict:
     return {k: str(v) for k, v in (params or {}).items() if k != "$top"}

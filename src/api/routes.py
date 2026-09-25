@@ -3,7 +3,9 @@ Public read-only HTTP surface over the research tools (RESEARCH_TOOL_REGISTRY).
 
 Every /v1 route maps query-string params to tool args, runs the same `dispatch` the research
 agent uses, and unwraps the ToolEnvelope. No query logic lives here: only API-side limits
-(smaller top_k, response size cap), hints for the calling agent, and error → status mapping.
+(input validation in api.validation, smaller top_k, response size cap), hints for the calling
+agent, and error → status mapping. 5xx bodies carry a generic message; the real exception is
+printed server-side.
 """
 
 import json
@@ -14,6 +16,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 import config
 from agent.research_agent.tools import RESEARCH_TOOL_REGISTRY
+from api import validation as valid
 from api.markdown import render_markdown
 from retrieval import knesset_db_store as store
 from utils.tools import dispatch
@@ -39,7 +42,16 @@ _STATUS_BY_ERROR = {
     "db_search_failed":      500,
     "dispatch_exception":    500,
     "unknown_tool":          500,
+    "adapter_exception":     502,
+    "no_votes_found":        404,
 }
+
+_PUBLIC_5XX_MESSAGES = {
+    502: "the upstream Knesset API request failed; retry later",
+    503: "the database is temporarily unavailable",
+}
+
+_INTERNAL_PROVENANCE_KEYS = {"expected_path", "traceback", "exception", "args"}
 
 
 def _error_status(error_code: str) -> int:
@@ -113,13 +125,22 @@ def _hint(tool: str, args: dict, results, trimmed: bool) -> str:
     return ""
 
 
+def _error_response(tool: str, envelope, provenance: dict) -> JSONResponse:
+    status = _error_status(envelope.error)
+    if status >= 500:
+        print(f"[api] {tool} → {status} {envelope.error}: {(envelope.metadata or {}).get('exception')}")
+        message = _PUBLIC_5XX_MESSAGES.get(status, "internal error")
+    else:
+        message = envelope.error.replace("_", " ")
+    return JSONResponse({"error_code": envelope.error, "message": message, "tool": tool, "args": provenance},
+                        status_code=status)
+
+
 def run_tool(tool: str, args: dict, response_format: str = "json"):
     envelope = dispatch(RESEARCH_TOOL_REGISTRY, tool, {k: v for k, v in args.items() if v is not None})
-    provenance = dict(envelope.provenance or {})
+    provenance = {k: v for k, v in (envelope.provenance or {}).items() if k not in _INTERNAL_PROVENANCE_KEYS}
     if envelope.error:
-        message = (envelope.metadata or {}).get("exception") or envelope.error.replace("_", " ")
-        return JSONResponse({"error_code": envelope.error, "message": message, "tool": tool, "args": provenance},
-                            status_code=_error_status(envelope.error))
+        return _error_response(tool, envelope, provenance)
     try:
         results = json.loads(envelope.full) if envelope.full else None
     except json.JSONDecodeError as exc:
@@ -141,22 +162,24 @@ def run_tool(tool: str, args: dict, response_format: str = "json"):
 
 # ── tool routes ──────────────────────────────────────────────────────────────
 
+def _find(tool: str, q: str, knesset_num: int, top_k: int | None, format: str):
+    return run_tool(tool, {"query": valid.search_text(q), "knesset_num": valid.knesset_num(knesset_num),
+                           "top_k": _clamp(top_k, config.API_FIND_MAX_TOP_K)}, valid.response_format(format))
+
+
 @router.get("/v1/mks")
 def find_mk(q: str = "", knesset_num: int = 25, top_k: int | None = None, format: str = "json"):
-    return run_tool("find_mk", {"query": q, "knesset_num": knesset_num,
-                                "top_k": _clamp(top_k, config.API_FIND_MAX_TOP_K)}, format)
+    return _find("find_mk", q, knesset_num, top_k, format)
 
 
 @router.get("/v1/committees")
 def find_committee(q: str = "", knesset_num: int = 25, top_k: int | None = None, format: str = "json"):
-    return run_tool("find_committee", {"query": q, "knesset_num": knesset_num,
-                                       "top_k": _clamp(top_k, config.API_FIND_MAX_TOP_K)}, format)
+    return _find("find_committee", q, knesset_num, top_k, format)
 
 
 @router.get("/v1/parties")
 def find_party(q: str = "", knesset_num: int = 25, top_k: int | None = None, format: str = "json"):
-    return run_tool("find_party", {"query": q, "knesset_num": knesset_num,
-                                   "top_k": _clamp(top_k, config.API_FIND_MAX_TOP_K)}, format)
+    return _find("find_party", q, knesset_num, top_k, format)
 
 
 @router.get("/v1/protocols")
@@ -175,45 +198,51 @@ def query_protocols(
     knesset_num: int = 25,
     format: str = "json",
 ):
+    scopes = valid.list_param(_split_list(search_in), "search_in")
+    committees = [valid.name_filter(c, "committee") for c in valid.list_param(committee or [], "committee")]
+    meeting_ids = [valid.numeric_id(m, "meeting_id") for m in valid.list_param(_split_list(meeting_id), "meeting_id")]
     return run_tool("query_protocols", {
-        "query":       q,
-        "search_in":   _split_list(search_in) or list(config.API_PROTOCOLS_DEFAULT_SCOPES),
-        "mk_id":       mk_id,
-        "party":       party,
-        "committees":  committee or None,
-        "meeting_ids": _split_list(meeting_id) or None,
-        "date_from":   date_from,
-        "date_to":     date_to,
-        "sort":        sort,
+        "query":       valid.keyword_query(q),
+        "search_in":   list(dict.fromkeys(scopes)) or list(config.API_PROTOCOLS_DEFAULT_SCOPES),
+        "mk_id":       valid.numeric_id(mk_id, "mk_id"),
+        "party":       valid.name_filter(party, "party"),
+        "committees":  [c for c in committees if c] or None,
+        "meeting_ids": meeting_ids or None,
+        "date_from":   valid.iso_date(date_from, "date_from"),
+        "date_to":     valid.iso_date(date_to, "date_to"),
+        "sort":        valid.name_filter(sort, "sort"),
         "top_k":       _clamp(top_k or config.API_PROTOCOLS_DEFAULT_TOP_K, config.API_PROTOCOLS_MAX_TOP_K),
-        "offset":      offset,
-        "knesset_num": knesset_num,
-    }, format)
+        "offset":      valid.offset(offset),
+        "knesset_num": valid.knesset_num(knesset_num),
+    }, valid.response_format(format))
 
 
 @router.get("/v1/meetings/{meeting_id}/attendance")
 def get_meeting_attendance(meeting_id: str, format: str = "json"):
-    return run_tool("get_meeting_attendance", {"meeting_id": meeting_id}, format)
+    return run_tool("get_meeting_attendance", {"meeting_id": valid.numeric_id(meeting_id, "meeting_id")},
+                    valid.response_format(format))
 
 
 @router.get("/v1/bills")
 def query_bills(q: str = "", knesset_num: int = 25, top_k: int | None = None, format: str = "json"):
-    return run_tool("query_bills", {"query": q, "knesset_num": knesset_num,
-                                    "top_k": _clamp(top_k, config.API_LIST_MAX_TOP_K)}, format)
+    return run_tool("query_bills", {"query": valid.search_text(q), "knesset_num": valid.knesset_num(knesset_num),
+                                    "top_k": _clamp(top_k, config.API_LIST_MAX_TOP_K)}, valid.response_format(format))
 
 
 @router.get("/v1/bills/{bill_id}")
 def get_bill(bill_id: str, include_text: bool = False, max_chars: int | None = None,
              knesset_num: int = 25, format: str = "json"):
-    return run_tool("get_bill", {"bill_id": bill_id, "include_text": include_text,
-                                 "max_chars": max_chars, "knesset_num": knesset_num}, format)
+    return run_tool("get_bill", {"bill_id": valid.numeric_id(bill_id, "bill_id"), "include_text": include_text,
+                                 "max_chars": _clamp(max_chars, config.BILL_TEXT_MAX_MAX_CHARS),
+                                 "knesset_num": valid.knesset_num(knesset_num)}, valid.response_format(format))
 
 
 @router.get("/v1/votes")
 def query_votes(q: str = "", mk_id: str | None = None, knesset_num: int = 25,
                 top_k: int | None = None, format: str = "json"):
-    return run_tool("query_votes", {"query": q, "mk_id": mk_id, "knesset_num": knesset_num,
-                                    "top_k": _clamp(top_k, config.API_LIST_MAX_TOP_K)}, format)
+    return run_tool("query_votes", {"query": valid.search_text(q), "mk_id": valid.numeric_id(mk_id, "mk_id"),
+                                    "knesset_num": valid.knesset_num(knesset_num),
+                                    "top_k": _clamp(top_k, config.API_LIST_MAX_TOP_K)}, valid.response_format(format))
 
 
 # ── discovery / meta ─────────────────────────────────────────────────────────
@@ -235,7 +264,8 @@ def list_tools():
 @router.get("/v1/meta")
 def meta():
     if not store.exists():
-        return JSONResponse({"error_code": "knesset_db_missing", "message": "knesset.db missing"}, status_code=503)
+        return JSONResponse({"error_code": "knesset_db_missing", "message": _PUBLIC_5XX_MESSAGES[503]},
+                            status_code=503)
     conn = store.connect()
     try:
         counts = store.table_row_counts(conn, ("mks", "committees", "meetings", "attendance",

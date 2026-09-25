@@ -27,7 +27,7 @@ Usage:
 import os
 import time
 import requests
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from functools import lru_cache
 import io
 import pdfplumber
@@ -382,8 +382,8 @@ def _extract_pdf_text_pymupdf(pdf_bytes: bytes) -> str:
     """
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     pages = []
-    for page in doc:
-        text = page.get_text("text")
+    for page_number in range(min(len(doc), _config.BILL_PDF_MAX_PAGES)):
+        text = doc[page_number].get_text("text")
         if text:
             pages.append(text)
     doc.close()
@@ -396,7 +396,7 @@ def _extract_pdf_text_pdfplumber(pdf_bytes: bytes) -> str:
     """
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         pages = []
-        for page in pdf.pages:
+        for page in pdf.pages[:_config.BILL_PDF_MAX_PAGES]:
             text = page.extract_text(x_tolerance=2, y_tolerance=2)
             if text:
                 pages.append(text)
@@ -728,6 +728,44 @@ def _get_bill_documents(bill_id: int) -> list[dict]:
     ]
 
 
+def _is_knesset_document_url(url: str) -> bool:
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower()
+    suffix = _config.BILL_DOCUMENT_HOST_SUFFIX
+    return (parts.scheme == "https" and not parts.username and not parts.port
+            and (host == suffix or host.endswith("." + suffix)))
+
+
+def _download_bill_document(url: str) -> bytes | None:
+    """Bill document bytes, or None when the URL is not an https Knesset URL or the file exceeds
+    BILL_PDF_MAX_BYTES (checked on Content-Length and again while streaming)."""
+    if not _is_knesset_document_url(url):
+        print(f"[knesset_db] refusing bill document outside {_config.BILL_DOCUMENT_HOST_SUFFIX}: {url!r}", flush=True)
+        return None
+    max_bytes = _config.BILL_PDF_MAX_BYTES
+    response = _retry_get(url, timeout=TIMEOUT, stream=True)
+    try:
+        response.raise_for_status()
+        final_url = getattr(response, "url", None) or url
+        if not _is_knesset_document_url(final_url):
+            print(f"[knesset_db] bill document {url!r} redirected outside the Knesset domain: {final_url!r}", flush=True)
+            return None
+        declared = int(response.headers.get("Content-Length") or 0)
+        if declared > max_bytes:
+            print(f"[knesset_db] bill document {url!r} too large ({declared} bytes)", flush=True)
+            return None
+        chunks, size = [], 0
+        for chunk in response.iter_content(chunk_size=64 * 1024):
+            size += len(chunk)
+            if size > max_bytes:
+                print(f"[knesset_db] bill document {url!r} exceeds {max_bytes} bytes", flush=True)
+                return None
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        response.close()
+
+
 def _get_bill_text_by_id(bill_id: int, max_chars: int = 8000) -> dict | None:
     """
     Fetch the most relevant document for a bill and extract its text.
@@ -743,10 +781,10 @@ def _get_bill_text_by_id(bill_id: int, max_chars: int = 8000) -> dict | None:
         if doc["format"] not in ("PDF",):
             continue
         try:
-            response = _retry_get(doc["url"], timeout=TIMEOUT)
-            response.raise_for_status()
-
-            full_text = _extract_pdf_text(response.content)
+            pdf_bytes = _download_bill_document(doc["url"])
+            if not pdf_bytes:
+                continue
+            full_text = _extract_pdf_text(pdf_bytes)
             if not full_text:
                 continue  # try next doc
 
