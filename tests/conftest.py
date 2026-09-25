@@ -176,3 +176,14 @@ def sample_db(tmp_path, monkeypatch):
     path = build_sample_db(tmp_path / "knesset.db")
     monkeypatch.setattr(config, "KNESSET_DB", path)
     return path
+
+
+@pytest.fixture(autouse=True)
+def _uncached_http_and_no_rate_limit(monkeypatch):
+    """Tests replay HTTP by patching requests.get, so knesset_db must not go through the disk
+    cache session; the public API rate limiter is enabled only by the tests that exercise it."""
+    import requests
+    import config
+    import utils.knesset_db as kdb
+    monkeypatch.setattr(kdb, "HTTP_SESSION", requests, raising=False)
+    monkeypatch.setattr(config, "API_RATE_LIMIT_ENABLED", False, raising=False)

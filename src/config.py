@@ -20,6 +20,7 @@ API_TIMEOUT = 30
 CACHE_DB      = DATA_DIR / "knesset_api_cache"
 MK_PHOTOS_DIR = DATA_DIR / "mk_photos"
 CACHE_TTL = 7 * 24 * 3600   # 1 week (seconds)
+CACHE_TTL_VOTES = 24 * 3600
 
 # ── LLM ──────────────────────────────────────────────────────────────────────
 
@@ -31,6 +32,7 @@ CHARS_PER_TOK       = 2      # rough estimate for Hebrew
 
 API_RETRY_ATTEMPTS  = 5      # number of attempts for external API calls
 API_RETRY_SLEEP     = 30     # seconds between retries
+HTTP_TIMEOUT_SECONDS = 60
 
 NOT_PROTOCOL        = "לא פרוטוקול"   # sentinel the summarization prompts return for non-protocol documents
 
@@ -128,6 +130,14 @@ API_PROTOCOLS_DEFAULT_SCOPES  = ("topics", "opinions")
 API_FIND_MAX_TOP_K            = 5
 API_LIST_MAX_TOP_K            = 50
 API_MAX_RESPONSE_CHARS        = 90_000
+PUBLIC_API_RETRY_ATTEMPTS        = 2    # standalone api.app only: fail fast when the Knesset API is down
+PUBLIC_API_RETRY_SLEEP           = 1
+PUBLIC_API_HTTP_TIMEOUT_SECONDS  = 10
+API_RATE_LIMIT_ENABLED              = True
+API_RATE_LIMIT_UPSTREAM_PER_MINUTE  = 10   # per client IP, routes that call the Knesset APIs
+API_RATE_LIMIT_DB_PER_MINUTE        = 60   # per client IP, knesset.db-only routes
+API_TRUST_CLOUDFLARE_IP_HEADER      = False  # True only when the server is reachable solely through Cloudflare
+DB_QUERY_TIMEOUT_SECONDS            = 20
 API_MAX_QUERY_CHARS           = 200
 API_MAX_QUERY_WORDS           = 12       # FTS5 AND-slots per protocol query
 API_MAX_NAME_CHARS            = 100      # party / committee filter values

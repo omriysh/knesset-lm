@@ -43,10 +43,10 @@ except ImportError:
     _WORD_COM_AVAILABLE = False
 
 import config as _config
+from utils.cache import SESSION as HTTP_SESSION
 
 OKNESSET_API = "https://backend.oknesset.org"
 OFFICIAL_KNESSET_NEW_API = "https://knesset.gov.il/OdataV4/ParliamentInfo"
-TIMEOUT = 60
 ODATA_PAGE_SIZE = 100  # the OData service silently caps $top at 100
 
 SESSION_TYPE_CLASSIFIED  = 160  # חסויה — classified session; no public transcript
@@ -62,19 +62,21 @@ _DOC_GROUP_PRIORITY = [
 
 # ── Retry helper ─────────────────────────────────────────────────────────────
 
-def _retry_get(url: str, **kwargs) -> requests.Response:
+def _retry_get(url: str, *, cached: bool = True, **kwargs) -> requests.Response:
     """
-    requests.get with retry on transient network errors.
+    GET through the disk-cached HTTP_SESSION (plain requests when cached=False, for large
+    documents) with retry on transient network errors.
     Retries on ConnectionError, Timeout, and HTTP 5xx.
     4xx responses are returned as-is for the caller to handle.
     """
+    http = HTTP_SESSION if cached else requests
     attempts = _config.API_RETRY_ATTEMPTS
     sleep    = _config.API_RETRY_SLEEP
     last_exc: BaseException | None = None
 
     for i in range(attempts):
         try:
-            r = requests.get(url, **kwargs)
+            r = http.get(url, **kwargs)
             if r.status_code < 500:
                 return r
             last_exc = requests.exceptions.HTTPError(
@@ -104,7 +106,7 @@ def _fetch_members(is_current: bool) -> list[dict]:
     """
     url    = f"{OKNESSET_API}/members"
     params = {"is_current": "true" if is_current else "false"}
-    response = _retry_get(url, params=params, timeout=TIMEOUT)
+    response = _retry_get(url, params=params, timeout=_config.HTTP_TIMEOUT_SECONDS)
     response.raise_for_status()
     return response.json()
 
@@ -128,7 +130,7 @@ def _fetch_person_positions(knesset_num: int) -> tuple[dict, ...]:
             "$top":     ODATA_PAGE_SIZE,
             "$skip":    skip,
         }
-        response = _retry_get(url, params=params, timeout=TIMEOUT)
+        response = _retry_get(url, params=params, timeout=_config.HTTP_TIMEOUT_SECONDS)
         response.raise_for_status()
         page = response.json().get("value", [])
         if not page:
@@ -141,7 +143,7 @@ def _fetch_person_positions(knesset_num: int) -> tuple[dict, ...]:
 @lru_cache(maxsize=1)
 def _position_names() -> dict[int, str]:
     """KNS_Position Id -> Hebrew description (חבר ועדה, יו"ר סיעה, שר …)."""
-    response = _retry_get(f"{OFFICIAL_KNESSET_NEW_API}/KNS_Position", params={"$top": ODATA_PAGE_SIZE}, timeout=TIMEOUT)
+    response = _retry_get(f"{OFFICIAL_KNESSET_NEW_API}/KNS_Position", params={"$top": ODATA_PAGE_SIZE}, timeout=_config.HTTP_TIMEOUT_SECONDS)
     response.raise_for_status()
     return {row["Id"]: (row.get("Description") or "").strip() for row in response.json().get("value", [])}
 
@@ -488,7 +490,7 @@ def _search_bills_by_term(
         "$top":     top,
         "$orderby": "LastUpdatedDate desc",
     }
-    r = _retry_get(base_url, params=params, timeout=TIMEOUT)
+    r = _retry_get(base_url, params=params, timeout=_config.HTTP_TIMEOUT_SECONDS)
     r.raise_for_status()
     return r.json().get("value", [])
 
@@ -618,7 +620,7 @@ def get_all_committees(knesset_num: int = 25) -> list[dict]:
     Each entry: {CommitteeID, Name, KnessetNum, IsCurrent}.
     """
     url      = f"{OKNESSET_API}/committees_kns_committee/list"
-    response = _retry_get(url, params={"KnessetNum": knesset_num, "limit": 1000}, timeout=TIMEOUT)
+    response = _retry_get(url, params={"KnessetNum": knesset_num, "limit": 1000}, timeout=_config.HTTP_TIMEOUT_SECONDS)
     response.raise_for_status()
     committees = [
         {
@@ -653,7 +655,7 @@ def _get_active_committee_members_by_id(
         "$filter": filter_expr,
         "$top":    500,
     }
-    r = _retry_get(url, params=params, timeout=TIMEOUT)
+    r = _retry_get(url, params=params, timeout=_config.HTTP_TIMEOUT_SECONDS)
     r.raise_for_status()
 
     seen: dict[int, dict] = {}
@@ -701,7 +703,7 @@ def _get_bill_documents(bill_id: int) -> list[dict]:
     r = _retry_get(
         f"{OFFICIAL_KNESSET_NEW_API}/KNS_DocumentBill",
         params={"$filter": f"BillID eq {bill_id}", "$top": 20},
-        timeout=TIMEOUT,
+        timeout=_config.HTTP_TIMEOUT_SECONDS,
     )
     r.raise_for_status()
 
@@ -743,7 +745,7 @@ def _download_bill_document(url: str) -> bytes | None:
         print(f"[knesset_db] refusing bill document outside {_config.BILL_DOCUMENT_HOST_SUFFIX}: {url!r}", flush=True)
         return None
     max_bytes = _config.BILL_PDF_MAX_BYTES
-    response = _retry_get(url, timeout=TIMEOUT, stream=True)
+    response = _retry_get(url, cached=False, timeout=_config.HTTP_TIMEOUT_SECONDS, stream=True)
     try:
         response.raise_for_status()
         final_url = getattr(response, "url", None) or url
@@ -810,7 +812,7 @@ def _get_bill_details_by_id(bill_id: int) -> dict | None:
         f"{OFFICIAL_KNESSET_NEW_API}/KNS_Bill({bill_id})"
         f"?$expand=KNS_Status"
     )
-    r = _retry_get(url, timeout=TIMEOUT)
+    r = _retry_get(url, timeout=_config.HTTP_TIMEOUT_SECONDS)
     if r.status_code == 404:
         return None
     r.raise_for_status()
@@ -820,7 +822,7 @@ def _get_bill_details_by_id(bill_id: int) -> dict | None:
     r2 = _retry_get(
         f"{OFFICIAL_KNESSET_NEW_API}/KNS_BillInitiator",
         params={"$filter": f"BillID eq {bill_id}", "$expand": "KNS_Person", "$top": 20},
-        timeout=TIMEOUT,
+        timeout=_config.HTTP_TIMEOUT_SECONDS,
     )
     r2.raise_for_status()
     initiators = [
@@ -868,7 +870,7 @@ def get_committee_sessions(committee_id: int, knesset_num: int = 25) -> list[dic
     }
 
     # First request: get count + first page in one shot
-    r = _retry_get(url, params={**base_params, "$count": "true"}, timeout=TIMEOUT)
+    r = _retry_get(url, params={**base_params, "$count": "true"}, timeout=_config.HTTP_TIMEOUT_SECONDS)
     r.raise_for_status()
     data  = r.json()
     total = data.get("@odata.count", 0)
@@ -876,7 +878,7 @@ def get_committee_sessions(committee_id: int, knesset_num: int = 25) -> list[dic
 
     # Fetch remaining pages (exactly ceil(total/page_size) - 1 more requests)
     for offset in range(page_size, total, page_size):
-        r = _retry_get(url, params={**base_params, "$skip": offset}, timeout=TIMEOUT)
+        r = _retry_get(url, params={**base_params, "$skip": offset}, timeout=_config.HTTP_TIMEOUT_SECONDS)
         r.raise_for_status()
         all_sessions.extend(r.json().get("value", []))
 
@@ -947,7 +949,7 @@ def _get_session_documents(session_id: int) -> list[dict]:
     r = _retry_get(
         f"{OFFICIAL_KNESSET_NEW_API}/KNS_DocumentCommitteeSession",
         params={"$filter": f"CommitteeSessionID eq {session_id}", "$top": 20},
-        timeout=TIMEOUT,
+        timeout=_config.HTTP_TIMEOUT_SECONDS,
     )
     r.raise_for_status()
     return [
@@ -983,7 +985,7 @@ def _get_session_protocol_text(session_id: int, max_chars: int | None = None) ->
         if fmt not in ("pdf", "word", "doc", "docx"):
             continue
         try:
-            response = _retry_get(doc["url"], timeout=TIMEOUT)
+            response = _retry_get(doc["url"], cached=False, timeout=_config.HTTP_TIMEOUT_SECONDS)
             response.raise_for_status()
             if fmt == "pdf":
                 text = _extract_pdf_text(response.content)
@@ -1068,7 +1070,7 @@ def _fetch_votes_metadata(vote_ids: list[int]) -> dict[int, dict]:
     r = requests.get(
         f"{OFFICIAL_KNESSET_NEW_API}/KNS_PlenumVote",
         params={"$filter": filter_expr},
-        timeout=TIMEOUT,
+        timeout=_config.HTTP_TIMEOUT_SECONDS,
     )
     r.raise_for_status()
     return {v["Id"]: v for v in r.json().get("value", [])}
@@ -1116,7 +1118,7 @@ def get_mk_votes(mk_name: str, knesset_num: int = 25, top_n: int = 20) -> list[d
             "$top":     top_n,
             "$orderby": "Id desc",
         },
-        timeout=TIMEOUT,
+        timeout=_config.HTTP_TIMEOUT_SECONDS,
     )
     r.raise_for_status()
     results = r.json().get("value", [])
@@ -1142,7 +1144,7 @@ def get_votes_on_topic(topic: str, top_n: int = 20) -> list[dict]:
     r = requests.get(
         f"{OFFICIAL_KNESSET_NEW_API}/KNS_PlenumVote",
         params={"$filter": filter_expr, "$top": top_n, "$orderby": "Id desc"},
-        timeout=TIMEOUT,
+        timeout=_config.HTTP_TIMEOUT_SECONDS,
     )
     r.raise_for_status()
     return [
@@ -1189,7 +1191,7 @@ def get_votes_on_topic_by_mk(
         r = requests.get(
             f"{OFFICIAL_KNESSET_NEW_API}/KNS_PlenumVoteResult",
             params={"$filter": f"{name_filter} and ({id_filter})"},
-            timeout=TIMEOUT,
+            timeout=_config.HTTP_TIMEOUT_SECONDS,
         )
         r.raise_for_status()
         for row in r.json().get("value", []):
@@ -1210,7 +1212,7 @@ def get_recent_votes(top_n: int = 10) -> list[dict]:
     r = requests.get(
         f"{OFFICIAL_KNESSET_NEW_API}/KNS_PlenumVote",
         params={"$orderby": "Id desc", "$top": top_n},
-        timeout=TIMEOUT,
+        timeout=_config.HTTP_TIMEOUT_SECONDS,
     )
     r.raise_for_status()
     return [

@@ -23,6 +23,7 @@ field.
 from __future__ import annotations
 
 import json
+import sqlite3
 import sys
 import traceback
 from dataclasses import dataclass, field
@@ -182,11 +183,15 @@ def _safe_args(args: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _connect_for_query():
+    return store.connect(interrupt_after_seconds=config.DB_QUERY_TIMEOUT_SECONDS)
+
+
 def _open_db():
     """Open knesset.db (built offline by scripts/build_knesset_db.py) or None when missing."""
     if not store.exists():
         return None
-    return store.connect()
+    return _connect_for_query()
 
 
 def _db_missing_envelope(target: str, knesset_num: int) -> ToolEnvelope:
@@ -200,8 +205,16 @@ def _db_missing_envelope(target: str, knesset_num: int) -> ToolEnvelope:
     )
 
 
-def _db_error_envelope(exc: Exception, source: str, **prov) -> ToolEnvelope:
+def _db_error_envelope(exc: Exception, source: str, conn=None, **prov) -> ToolEnvelope:
     print(f"[tools] {source} query failed: {exc}")
+    if isinstance(exc, sqlite3.OperationalError) and store.deadline_passed(conn):
+        return ToolEnvelope(
+            summary="",
+            full="",
+            metadata={"kind": "error", "source": source, "count": 0, "exception": str(exc)},
+            provenance=prov,
+            error="query_timeout",
+        )
     return ToolEnvelope(
         summary="",
         full="",
@@ -269,7 +282,7 @@ def handle_query_protocols(args: dict) -> ToolEnvelope:
     results: dict[str, list[dict]] = {}
     conn = None
     try:
-        conn = store.connect()
+        conn = _connect_for_query()
         for scope in search_in:
             match = _fts_match(query, f"{scope}_fts") if query else None
             if query and not match:
@@ -283,7 +296,7 @@ def handle_query_protocols(args: dict) -> ToolEnvelope:
                 sort=sort, top_k=top_k, offset=offset,
             )
     except Exception as exc:
-        return _db_error_envelope(exc, "knesset_db", **provenance)
+        return _db_error_envelope(exc, "knesset_db", conn, **provenance)
     finally:
         if conn is not None:
             conn.close()
@@ -348,11 +361,11 @@ def handle_get_meeting_attendance(args: dict) -> ToolEnvelope:
         return _db_missing_envelope("attendance", 0)
     conn = None
     try:
-        conn = store.connect()
+        conn = _connect_for_query()
         meeting = store.get_meeting(conn, meeting_id)
         attendance = store.get_attendance(conn, meeting_id) if meeting is not None else []
     except Exception as exc:
-        return _db_error_envelope(exc, "knesset_db", meeting_id=meeting_id)
+        return _db_error_envelope(exc, "knesset_db", conn, meeting_id=meeting_id)
     finally:
         if conn is not None:
             conn.close()

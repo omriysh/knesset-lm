@@ -44,6 +44,12 @@ _STATUS_BY_ERROR = {
     "unknown_tool":          500,
     "adapter_exception":     502,
     "no_votes_found":        404,
+    "query_timeout":         503,
+}
+
+_PUBLIC_MESSAGES_BY_ERROR = {
+    "query_timeout": "the query took too long: use more specific key words or add a filter "
+                     "(committee, meeting_id, mk_id, party, dates)",
 }
 
 _PUBLIC_5XX_MESSAGES = {
@@ -129,7 +135,7 @@ def _error_response(tool: str, envelope, provenance: dict) -> JSONResponse:
     status = _error_status(envelope.error)
     if status >= 500:
         print(f"[api] {tool} → {status} {envelope.error}: {(envelope.metadata or {}).get('exception')}")
-        message = _PUBLIC_5XX_MESSAGES.get(status, "internal error")
+        message = _PUBLIC_MESSAGES_BY_ERROR.get(envelope.error) or _PUBLIC_5XX_MESSAGES.get(status, "internal error")
     else:
         message = envelope.error.replace("_", " ")
     return JSONResponse({"error_code": envelope.error, "message": message, "tool": tool, "args": provenance},

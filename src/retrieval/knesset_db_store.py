@@ -20,6 +20,7 @@ full_text files. Both are NULL when the quote was not verified.
 from __future__ import annotations
 
 import sqlite3
+import time
 from pathlib import Path
 from typing import Iterable
 
@@ -143,21 +144,40 @@ TARGET_TABLES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
 _BATCH = 1000
 
 
+_PROGRESS_HANDLER_OPCODES = 10_000
+
+
+class _DeadlineConnection(sqlite3.Connection):
+    interrupt_deadline: float | None = None
+
+
+def deadline_passed(conn) -> bool:
+    """True once a connection opened with interrupt_after_seconds is past its deadline
+    (its running statement is then aborted, surfacing as some sqlite3.OperationalError)."""
+    deadline = getattr(conn, "interrupt_deadline", None)
+    return deadline is not None and time.monotonic() > deadline
+
+
 def db_path() -> Path:
     return config.KNESSET_DB
 
 
-def connect(path: Path | None = None) -> sqlite3.Connection:
-    """Open the db, creating the file and schema when missing (readers check exists() first)."""
+def connect(path: Path | None = None, *, interrupt_after_seconds: float | None = None) -> sqlite3.Connection:
+    """Open the db, creating the file and schema when missing (readers check exists() first).
+    interrupt_after_seconds: statements still running that long after connect raise
+    sqlite3.OperationalError("interrupted")."""
     p = Path(path or db_path())
     p.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(p))
+    conn = sqlite3.connect(str(p), factory=_DeadlineConnection)
     conn.row_factory = sqlite3.Row
     try:
         conn.executescript(_SCHEMA)
     except sqlite3.Error:
         conn.close()
         raise
+    if interrupt_after_seconds is not None:
+        conn.interrupt_deadline = time.monotonic() + interrupt_after_seconds
+        conn.set_progress_handler(lambda: deadline_passed(conn), _PROGRESS_HANDLER_OPCODES)
     return conn
 
 
