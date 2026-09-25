@@ -240,3 +240,17 @@ class TestQueryVotes:
 
     def test_unknown_mk(self, odata):
         assert tools.handle_query_votes({"mk_id": "99999999"}).error == "mk_not_found"
+
+    @pytest.mark.parametrize("args", [
+        {"query": META["vote_topic"], "mk_id": VOTE_MK_ID, "top_k": 5},
+        {"mk_id": VOTE_MK_ID, "top_k": 5},
+        {"query": META["vote_topic"], "top_k": 5},
+        {"top_k": 5},
+    ], ids=["query_and_mk", "mk_only", "query_only", "neither"])
+    def test_provenance_has_normalized_args(self, odata, args):
+        env = tools.handle_query_votes(args)
+        assert not env.error
+        assert env.provenance["query"] == args.get("query", "")
+        assert env.provenance["mk_id"] == args.get("mk_id", "")
+        assert env.provenance["knesset_num"] == 25
+        assert env.provenance["top_k"] == 5

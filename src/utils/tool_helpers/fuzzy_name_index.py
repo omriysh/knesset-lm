@@ -29,6 +29,8 @@ _CONTAINMENT_SCORE: float = getattr(config, "FUZZY_TOKEN_CONTAINMENT_SCORE", 95.
 
 _TRAILING_PARENTHETICAL_RE = re.compile(r"\s*[\(\[][^()\[\]]*[\)\]]\s*$")
 
+_PUNCTUATION_RE = re.compile(r"[^\w\"']")
+
 _QUOTE_TRANSLATION = str.maketrans({
     "״": '"',   # ״ gershayim
     "“": '"',   # “
@@ -49,6 +51,12 @@ def _normalize_name(text: str) -> str:
 def _name_tokens(text: str) -> list[str]:
     """Normalized name split into tokens, dropping punctuation-only tokens."""
     return [t for t in _normalize_name(text).split(" ") if any(c.isalnum() for c in t)]
+
+
+def _punctuation_free_tokens(text: str) -> list[str]:
+    """Normalized name tokens with commas and other punctuation removed, for exact/prefix comparison."""
+    stripped_tokens = (_PUNCTUATION_RE.sub("", token) for token in _normalize_name(text).split(" "))
+    return [token for token in stripped_tokens if token]
 
 
 def _is_middle_name_variant(query_tokens: list[str], label_tokens: list[str]) -> bool:
@@ -78,6 +86,33 @@ class FuzzyNameIndex:
         self._entries = entries  # [{id, label, body, extra}]
         self._normalized_labels = [_normalize_name(e["label"]) for e in entries]
         self._label_tokens = [_name_tokens(e["label"]) for e in entries]
+        self._punctuation_free_label_tokens = [_punctuation_free_tokens(e["label"]) for e in entries]
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    def unambiguous_label_match(self, query: str) -> str | None:
+        """Id of the one entry whose label equals the query, or else of the one
+        entry whose label starts with the query's (2+) tokens; None when no
+        entry or several entries qualify.
+
+        Tokens are compared without punctuation, so "ועדת החוקה" resolves to
+        "ועדת החוקה, חוק ומשפט" while "ועדת המשנה" (many subcommittees) does not.
+        """
+        query_tokens = _punctuation_free_tokens(query)
+        if not query_tokens:
+            return None
+        exact_ids = {entry["id"] for entry, label_tokens
+                     in zip(self._entries, self._punctuation_free_label_tokens)
+                     if label_tokens == query_tokens}
+        if exact_ids:
+            return exact_ids.pop() if len(exact_ids) == 1 else None
+        if len(query_tokens) < 2:
+            return None
+        prefix_ids = {entry["id"] for entry, label_tokens
+                      in zip(self._entries, self._punctuation_free_label_tokens)
+                      if label_tokens[:len(query_tokens)] == query_tokens}
+        return prefix_ids.pop() if len(prefix_ids) == 1 else None
 
     def search(
         self,

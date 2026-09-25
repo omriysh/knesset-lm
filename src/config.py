@@ -121,6 +121,14 @@ FUZZY_TOKEN_CONTAINMENT_SCORE      = 95.0
 # is the right call specifically for this use case.
 PARTICIPANT_FUZZY_THRESHOLD        = 90.0
 
+# Public API (src/api) — sized for a browsing agent's context, smaller than the research agent's
+API_PROTOCOLS_DEFAULT_TOP_K   = 10
+API_PROTOCOLS_MAX_TOP_K       = 50
+API_PROTOCOLS_DEFAULT_SCOPES  = ("topics", "opinions")
+API_FIND_MAX_TOP_K            = 5
+API_LIST_MAX_TOP_K            = 50
+API_MAX_RESPONSE_CHARS        = 90_000
+
 # Bill text
 BILL_TEXT_DEFAULT_MAX_CHARS  = 1000
 BILL_TEXT_MIN_MAX_CHARS      = 200

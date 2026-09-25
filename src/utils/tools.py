@@ -668,15 +668,21 @@ def handle_query_votes(args: dict) -> ToolEnvelope:
             )
         name = mk_full_name(record)
         if query:
-            return adapt_get_votes_on_topic_by_mk(
+            envelope = adapt_get_votes_on_topic_by_mk(
                 topic=query, name=name, knesset_num=knesset_num, top_n=top_k,
             )
-        return adapt_get_mk_votes(name=name, knesset_num=knesset_num, top_n=top_k)
+        else:
+            envelope = adapt_get_mk_votes(name=name, knesset_num=knesset_num, top_n=top_k)
+    elif query:
+        envelope = adapt_get_votes_on_topic(topic=query, top_n=top_k)
+    else:
+        envelope = adapt_get_recent_votes(top_n=top_k, knesset_num=knesset_num)
 
-    if query:
-        return adapt_get_votes_on_topic(topic=query, top_n=top_k)
-
-    return adapt_get_recent_votes(top_n=top_k, knesset_num=knesset_num)
+    envelope.provenance = {
+        **(envelope.provenance or {}),
+        "query": query, "mk_id": mk_id, "knesset_num": knesset_num, "top_k": top_k,
+    }
+    return envelope
 
 
 # ---------------------------------------------------------------------------

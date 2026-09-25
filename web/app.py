@@ -52,6 +52,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 import config
+from api.routes import router as api_router
 from agent.llm.gemma import GemmaLlamaBackend
 
 # ── Tool-result lazy-load cache ───────────────────────────────────────────────
@@ -407,6 +408,7 @@ _STATIC_DIR    = Path(__file__).parent / "static"
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+app.include_router(api_router)
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
 _MK_PHOTOS_DIR = config.MK_PHOTOS_DIR
