@@ -546,6 +546,11 @@ async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return FileResponse(str(_STATIC_DIR / "favicon.ico"), media_type="image/x-icon")
+
+
 @app.get("/api/help", response_class=PlainTextResponse)
 async def help_content():
     path = Path(__file__).parent / "templates" / "user-help.md"
@@ -1229,22 +1234,6 @@ async def research_respond(
             "X-Accel-Buffering": "no",
         },
     )
-
-
-@app.delete("/api/research/{session_id}")
-async def research_delete(session_id: str, request: Request):
-    """Delete a research session file from disk."""
-    if not _ok_session_id(session_id):
-        from fastapi.responses import Response
-        return Response(status_code=400)
-
-    from web.session import delete_session
-
-    sessions_dir = request.app.state.sessions_dir
-    delete_session(session_id, sessions_dir)
-    # Return 204 regardless of whether the file existed (idempotent delete)
-    from fastapi.responses import Response
-    return Response(status_code=204)
 
 
 @app.get("/api/research/{session_id}/tool_result/{ref_id}")

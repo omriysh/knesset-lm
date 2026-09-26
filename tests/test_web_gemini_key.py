@@ -284,3 +284,11 @@ class TestAgentRateLimit:
         assert route_bucket("/api/query") == "agent"
         assert route_bucket(f"/api/research/{uuid.uuid4()}/stream") is None
         assert route_bucket("/api/browse/search") == "db"
+
+
+class TestSessionsCannotBeDeleted:
+    def test_delete_route_is_gone_and_session_stays(self, web):
+        sid = awaiting_session(web)
+        r = web.client.delete(f"/api/research/{sid}")
+        assert r.status_code in (404, 405)
+        assert (web.sessions / f"{sid}.json").exists()

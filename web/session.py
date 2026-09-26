@@ -87,15 +87,6 @@ def load_session(session_id: str, sessions_dir: Path) -> ResearchSession | None:
         return None
 
 
-def delete_session(session_id: str, sessions_dir: Path) -> bool:
-    """Delete session file. Returns True if deleted, False if not found."""
-    path = _session_path(session_id, sessions_dir)
-    if path.exists():
-        path.unlink()
-        return True
-    return False
-
-
 def cleanup_stale_sessions(sessions_dir: Path, max_age_hours: float = 2.0) -> int:
     """
     Remove session files older than max_age_hours.
