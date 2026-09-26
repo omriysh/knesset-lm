@@ -19,7 +19,7 @@ import config
 WINDOW_SECONDS = 60
 UPSTREAM_ROUTE_PREFIXES = ("/v1/mks", "/v1/committees", "/v1/parties", "/v1/bills", "/v1/votes")
 DB_ROUTE_PREFIXES = ("/v1/protocols", "/v1/meetings/", "/api/browse/search")
-AGENT_ROUTE_PATTERN = re.compile(r"^/api/(query|research/start|research/[^/]+/(respond|workspace/ask))$")
+AGENT_ROUTE_PATTERN = re.compile(r"^/api/research/(start|[^/]+/(respond|workspace/ask))$")
 
 
 def route_bucket(path: str) -> str | None:

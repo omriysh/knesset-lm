@@ -27,7 +27,6 @@ VISITOR_KEY = "AIzaSyVisitorKeyForTests_0123456789abc"
 KEY_HEADER = {"X-Gemini-Api-Key": VISITOR_KEY}
 AGENT_POSTS = [
     ("/api/research/start", {"question": "מה אמרו על דיור ציבורי?"}),
-    ("/api/query", {"question": "מה אמרו על דיור ציבורי?"}),
 ]
 
 
@@ -70,7 +69,6 @@ def web(sample_db, tmp_path, monkeypatch):
     webapp.app.state.machine = SimpleNamespace(name="test_machine", version=2)
     webapp.app.state.backend = None
     webapp.app.state.tool_registry = {}
-    monkeypatch.setattr(webapp, "_QUERY_LOG", tmp_path / "query_log.jsonl")
     monkeypatch.setattr(webapp, "MachineRunner", FakeRunner)
     FakeRunner.created = []
     FakeRunner.events = [("token", "תשובה"), ("done", {})]
@@ -136,7 +134,6 @@ class TestKeyPassedNotStored:
 
     def test_key_not_in_session_files_log_or_stream(self, web):
         body = web.client.post("/api/research/start", json=AGENT_POSTS[0][1], headers=KEY_HEADER).text
-        web.client.post("/api/query", json=AGENT_POSTS[1][1], headers=KEY_HEADER)
         wait_for_session_file(web.sessions)
         assert any(web.sessions.iterdir())
         assert VISITOR_KEY not in body
@@ -181,8 +178,8 @@ class TestKeyCheckedWithGoogleFirst:
         assert FakeRunner.created == []
 
     def test_verdict_is_cached(self, web, google_answers):
-        for path, body in AGENT_POSTS:
-            assert web.client.post(path, json=body, headers=KEY_HEADER).status_code == 200
+        for _ in range(2):
+            assert web.client.post(AGENT_POSTS[0][0], json=AGENT_POSTS[0][1], headers=KEY_HEADER).status_code == 200
         assert google_answers.checked == [VISITOR_KEY]
 
     def test_unverifiable_verdict_is_not_cached(self, web, google_answers):
@@ -268,7 +265,7 @@ class TestAgentRateLimit:
         monkeypatch.setattr(config, "API_RATE_LIMIT_ENABLED", True)
         monkeypatch.setattr(config, "API_RATE_LIMIT_AGENT_PER_MINUTE", 2)
         web.app.rate_limiter.reset()
-        statuses = [web.client.post(path, json=body, headers=KEY_HEADER).status_code for path, body in AGENT_POSTS]
+        statuses = [web.client.post(AGENT_POSTS[0][0], json=AGENT_POSTS[0][1], headers=KEY_HEADER).status_code for _ in range(2)]
         sid = awaiting_session(web)
         r = web.client.post(f"/api/research/{sid}/respond", json={"output_var": "x", "value": "y"}, headers=KEY_HEADER)
         assert statuses == [200, 200]
@@ -281,7 +278,7 @@ class TestAgentRateLimit:
         assert route_bucket(f"/api/research/{uuid.uuid4()}/workspace/ask") == "agent"
         assert route_bucket(f"/api/research/{uuid.uuid4()}/respond") == "agent"
         assert route_bucket("/api/research/start") == "agent"
-        assert route_bucket("/api/query") == "agent"
+        assert route_bucket("/api/query") is None
         assert route_bucket(f"/api/research/{uuid.uuid4()}/stream") is None
         assert route_bucket("/api/browse/search") == "db"
 
@@ -292,3 +289,7 @@ class TestSessionsCannotBeDeleted:
         r = web.client.delete(f"/api/research/{sid}")
         assert r.status_code in (404, 405)
         assert (web.sessions / f"{sid}.json").exists()
+
+
+def test_legacy_query_route_is_gone(web):
+    assert web.client.post("/api/query", json=AGENT_POSTS[0][1], headers=KEY_HEADER).status_code in (404, 405)

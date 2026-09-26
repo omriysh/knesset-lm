@@ -511,10 +511,6 @@ async def mk_photo(name: str):
 
 # ── Models ────────────────────────────────────────────────────────────────────
 
-class QueryRequest(BaseModel):
-    question: str
-
-
 class ResearchStartRequest(BaseModel):
     question: str
 
@@ -522,21 +518,6 @@ class ResearchStartRequest(BaseModel):
 class ResearchRespondRequest(BaseModel):
     output_var: str
     value: Any
-
-
-# ── Query log ─────────────────────────────────────────────────────────────────
-_QUERY_LOG      = Path(__file__).parent / "query_log.jsonl"
-_QUERY_LOG_LOCK = threading.Lock()
-
-def _log_query(question: str, ip: str) -> None:
-    entry = json.dumps({
-        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "ip": ip,
-        "q":  question,
-    }, ensure_ascii=False)
-    with _QUERY_LOG_LOCK:
-        with open(_QUERY_LOG, "a", encoding="utf-8") as f:
-            f.write(entry + "\n")
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -577,105 +558,6 @@ async def health(request: Request):
         "db_path": str(store.db_path()),
         "db":      db_row_counts,
     }
-
-
-@app.post("/api/query")
-async def query(req: QueryRequest, request: Request):
-    question = req.question.strip()
-    if not question:
-        return JSONResponse({"error": "שאלה ריקה"}, status_code=400)
-    if not _ok_question(question):
-        return JSONResponse({"error": "שאלה מכילה תווים לא חוקיים או ארוכה מדי"}, status_code=400)
-
-    gemini_api_key, gemini_key_error = await asyncio.to_thread(visitor_gemini_key_or_error, request)
-    if gemini_key_error is not None:
-        return gemini_key_error
-
-    _log_query(question, request.client.host if request.client else "unknown")
-
-    machine       = request.app.state.machine
-    backend       = request.app.state.backend
-    tool_registry = request.app.state.tool_registry
-
-    async def generate():
-        loop      = asyncio.get_event_loop()
-        queue: asyncio.Queue = asyncio.Queue()
-        _SENTINEL = object()
-
-        def _run_sync():
-            from agent.subgraph.llm_bridge import set_thread_event_sink
-            set_thread_event_sink(
-                lambda ev: loop.call_soon_threadsafe(
-                    queue.put_nowait,
-                    ("subgraph_event", {"kind": ev.kind, "name": ev.name, "payload": ev.payload}),
-                )
-            )
-            if not _RESEARCH_SEM.acquire(blocking=False):
-                loop.call_soon_threadsafe(queue.put_nowait, ("queued", {}))
-                _RESEARCH_SEM.acquire()
-            try:
-                runner = MachineRunner(
-                    machine        = machine,
-                    backend        = backend,
-                    tool_registry  = tool_registry,
-                    gemini_api_key = gemini_api_key,
-                )
-                for event in stop_on_rejected_gemini_key(runner.run_stream(question)):
-                    loop.call_soon_threadsafe(queue.put_nowait, event)
-            except Exception as exc:
-                loop.call_soon_threadsafe(
-                    queue.put_nowait,
-                    ("error", str(exc) + "\n" + traceback.format_exc()),
-                )
-            finally:
-                _RESEARCH_SEM.release()
-                loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
-
-        thread = threading.Thread(target=_run_sync, daemon=True)
-        thread.start()
-
-        try:
-            while True:
-                item = await queue.get()
-                if item is _SENTINEL:
-                    break
-                ev_type, ev_data = item
-                if ev_type == "token":
-                    yield _sse("token",          {"text": ev_data})
-                elif ev_type == "status":
-                    yield _sse("status",         {"msg": ev_data})
-                elif ev_type == "node_start":
-                    yield _sse("node_start",     ev_data)
-                elif ev_type == "thinking_token":
-                    yield _sse("thinking_token", {"text": ev_data})
-                elif ev_type == "node_result":
-                    yield _sse("node_result",    ev_data)
-                elif ev_type == "subgraph_event":
-                    yield _sse("subgraph_event", {
-                        "type":    "subgraph_event",
-                        "kind":    ev_data.get("kind"),
-                        "name":    ev_data.get("name"),
-                        "payload": ev_data.get("payload", {}),
-                    })
-                elif ev_type == "queued":
-                    yield _sse("queued",         {})
-                elif ev_type == "gemini_key_invalid":
-                    yield _sse("gemini_key_invalid", {})
-                elif ev_type == "done":
-                    yield _sse("done",           {})
-                elif ev_type == "error":
-                    yield _sse("error",          {"error": ev_data})
-        except Exception as exc:
-            yield _sse("error", {"error": str(exc) + "\n" + traceback.format_exc()})
-
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control":     "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
 
 
 # ── Research session routes ───────────────────────────────────────────────────
