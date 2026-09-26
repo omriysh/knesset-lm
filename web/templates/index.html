@@ -102,16 +102,12 @@
       <!-- Desktop tab navigation (center) -->
       <nav class="hidden md:flex items-center gap-1 bg-surface-container-low p-1.5 rounded-lg">
         <button onclick="switchTab('research')" id="dt-tab-research"
-          class="app-tab-btn active px-5 py-1.5 rounded-md text-sm font-semibold transition-all duration-200">
+          class="app-tab-btn px-5 py-1.5 rounded-md text-sm font-semibold transition-all duration-200">
           מחקר אוטומטי
         </button>
         <button onclick="switchTab('reading')" id="dt-tab-reading"
-          class="app-tab-btn px-5 py-1.5 rounded-md text-sm font-semibold transition-all duration-200">
+          class="app-tab-btn active px-5 py-1.5 rounded-md text-sm font-semibold transition-all duration-200">
           קריאה עצמית
-        </button>
-        <button onclick="switchTab('history')" id="dt-tab-history"
-          class="app-tab-btn px-5 py-1.5 rounded-md text-sm font-semibold transition-all duration-200">
-          היסטוריה
         </button>
       </nav>
 
@@ -130,7 +126,7 @@
   <!-- ══════════════════════════════════════════════════════════
        Tab: Research (מחקר אוטומטי) — existing chat interface
   ══════════════════════════════════════════════════════════ -->
-  <div id="tab-research" class="app-tab-panel">
+  <div id="tab-research" class="app-tab-panel hidden">
 
     <div id="chat-column" class="flex-1 overflow-y-auto px-4 py-6 space-y-4">
       <!-- Welcome state (shown until first query) -->
@@ -174,7 +170,7 @@
   <!-- ══════════════════════════════════════════════════════════
        Tab: Reading (קריאה עצמית) — protocol browser
   ══════════════════════════════════════════════════════════ -->
-  <div id="tab-reading" class="app-tab-panel hidden">
+  <div id="tab-reading" class="app-tab-panel">
 
     <!-- Filter bar -->
     <div class="rfb flex-shrink-0">
@@ -331,30 +327,15 @@
     </div>
   </div>
 
-  <!-- ══════════════════════════════════════════════════════════
-       Tab: History (היסטוריה) — coming soon placeholder
-  ══════════════════════════════════════════════════════════ -->
-  <div id="tab-history" class="app-tab-panel hidden">
-    <div class="flex flex-col items-center justify-center flex-1 gap-3 text-center px-6">
-      <div style="font-size:56px;line-height:1">😉</div>
-      <div class="text-2xl font-bold text-on-surface" style="font-family:'Be Vietnam Pro',sans-serif">בקרוב</div>
-      <div class="text-sm text-on-surface-variant max-w-xs leading-relaxed">שמירת מחקרים, תשובות ופרוטוקולים מועדפים</div>
-    </div>
-  </div>
-
   <!-- ── Mobile bottom tab navigation ── -->
   <nav id="mobile-tab-bar" class="md:hidden fixed bottom-0 inset-x-0 z-50 bg-surface-container-lowest border-t border-surface-variant/20 flex safe-area-bottom">
-    <button onclick="switchTab('research')" id="mob-tab-research" class="mobile-tab-btn active flex-1">
+    <button onclick="switchTab('research')" id="mob-tab-research" class="mobile-tab-btn flex-1">
       <span class="material-symbols-outlined" style="font-size:22px">chat</span>
       <span>מחקר</span>
     </button>
-    <button onclick="switchTab('reading')" id="mob-tab-reading" class="mobile-tab-btn flex-1">
+    <button onclick="switchTab('reading')" id="mob-tab-reading" class="mobile-tab-btn active flex-1">
       <span class="material-symbols-outlined" style="font-size:22px">library_books</span>
       <span>קריאה</span>
-    </button>
-    <button onclick="switchTab('history')" id="mob-tab-history" class="mobile-tab-btn flex-1">
-      <span class="material-symbols-outlined" style="font-size:22px">history</span>
-      <span>היסטוריה</span>
     </button>
   </nav>
 
@@ -380,7 +361,34 @@
           <span class="toggle-track"></span>
         </label>
       </div>
+      <div class="settings-row">
+        <div>
+          <div class="settings-label">מפתח Gemini API</div>
+          <div class="settings-desc" id="gemini-key-status">לא הוגדר</div>
+        </div>
+        <div class="gemini-key-settings-actions">
+          <button onclick="replaceGeminiKeyFromSettings()">החלפה</button>
+          <button onclick="deleteGeminiKeyFromSettings()">מחיקה</button>
+        </div>
+      </div>
       <button id="settings-close" onclick="closeSettings()">סגור</button>
+    </div>
+  </div>
+
+  <!-- ── Gemini key dialog (auto-research runs on the visitor's key) ── -->
+  <div id="gemini-key-overlay" onclick="if(event.target===this)cancelGeminiKeyDialog()">
+    <div id="gemini-key-panel">
+      <h2>מפתח Gemini API</h2>
+      <p class="settings-desc">המחקר האוטומטי משתמש במודל Gemini של Google, על חשבון מפתח ה-API שלכם.
+        המפתח נשמר רק בדפדפן הזה ונשלח לשרת רק לצורך הבקשה — השרת לא שומר אותו.</p>
+      <p class="settings-desc"><a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">ליצירת מפתח ב-Google AI Studio</a></p>
+      <input id="gemini-key-input" type="password" autocomplete="off" spellcheck="false" dir="ltr" placeholder="AIza…"
+        onkeydown="if(event.key==='Enter')saveGeminiKeyFromDialog()">
+      <div id="gemini-key-error" class="hidden"></div>
+      <div class="gemini-key-actions">
+        <button id="gemini-key-save" onclick="saveGeminiKeyFromDialog()">שמירה</button>
+        <button id="gemini-key-later" onclick="cancelGeminiKeyDialog()">אחר כך</button>
+      </div>
     </div>
   </div>
 

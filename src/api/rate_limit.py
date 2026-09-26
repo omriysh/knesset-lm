@@ -1,10 +1,12 @@
 """
 In-process per-client-IP sliding-window rate limits for the standalone public API.
 
-Routes that call the Knesset APIs share a low budget, knesset.db-only /v1 routes a higher one;
-docs, health and meta are not limited. Limits are read from config on every request.
+Routes that call the Knesset APIs share a low budget, knesset.db-only routes a higher one,
+web-UI routes that run an LLM the lowest; docs, health, meta and stream replays are not limited.
+Limits are read from config on every request.
 """
 
+import re
 import time
 from collections import deque
 
@@ -16,10 +18,13 @@ import config
 
 WINDOW_SECONDS = 60
 UPSTREAM_ROUTE_PREFIXES = ("/v1/mks", "/v1/committees", "/v1/parties", "/v1/bills", "/v1/votes")
-DB_ROUTE_PREFIXES = ("/v1/protocols", "/v1/meetings/")
+DB_ROUTE_PREFIXES = ("/v1/protocols", "/v1/meetings/", "/api/browse/search")
+AGENT_ROUTE_PATTERN = re.compile(r"^/api/(query|research/start|research/[^/]+/(respond|workspace/ask))$")
 
 
 def route_bucket(path: str) -> str | None:
+    if AGENT_ROUTE_PATTERN.match(path):
+        return "agent"
     if path.startswith(UPSTREAM_ROUTE_PREFIXES):
         return "upstream"
     if path.startswith(DB_ROUTE_PREFIXES):
@@ -30,15 +35,18 @@ def route_bucket(path: str) -> str | None:
 def bucket_limit(bucket: str) -> int:
     if bucket == "upstream":
         return config.API_RATE_LIMIT_UPSTREAM_PER_MINUTE
+    if bucket == "agent":
+        return config.API_RATE_LIMIT_AGENT_PER_MINUTE
     return config.API_RATE_LIMIT_DB_PER_MINUTE
 
 
 def client_ip(request: Request) -> str:
-    if config.API_TRUST_CLOUDFLARE_IP_HEADER:
+    peer_host = request.client.host if request.client else "unknown"
+    if config.API_TRUST_CLOUDFLARE_IP_HEADER and peer_host in config.API_TRUSTED_PROXY_HOSTS:
         forwarded = request.headers.get("CF-Connecting-IP", "").strip()
         if forwarded:
             return forwarded
-    return request.client.host if request.client else "unknown"
+    return peer_host
 
 
 class SlidingWindowRateLimiter:

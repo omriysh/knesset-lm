@@ -18,6 +18,7 @@ import {
 import { appendStagesCard, wireStatusToggle } from './render/stages.js';
 import { applyEvidenceCitations, buildSourcesHtml } from './render/citations.js';
 import { scheduleReconnect } from './reconnect.js';
+import { requireGeminiKey } from './gemini_key.js';
 
 export async function startQuery() {
   const question = queryInput.value.trim();
@@ -25,6 +26,7 @@ export async function startQuery() {
   const err = validateQuestion(question);
   if (err) { showQueryError(err); return; }
   clearQueryError();
+  if (!(await requireGeminiKey())) return;
 
   state.lastQuestion = question;
   state.running      = true;
@@ -47,6 +49,7 @@ export async function startQuery() {
 
 export async function submitResponse(outputVar, value) {
   if (!state.sessionId) return;
+  if (!(await requireGeminiKey())) return;
   state.running      = true;
   submitBtn.disabled = true;
 

@@ -30,6 +30,7 @@ import { startQuery, submitResponse } from './controller.js';
 import { configureUserInput } from './render/user_input.js';
 import { attachLazyToggleListener } from './render/lazy.js';
 import { attemptReconnect } from './reconnect.js';
+import { promptGeminiKeyIfMissing, refreshGeminiKeySettingsStatus } from './gemini_key.js';
 
 // ── marked config ──────────────────────────────────────────────────────
 marked.use({ breaks: true, gfm: true });
@@ -67,6 +68,7 @@ function openSettings() {
   document.getElementById('settings-overlay').classList.add('open');
   document.getElementById('toggle-stages-always').checked =
     localStorage.getItem('showStagesAlways') === 'true';
+  refreshGeminiKeySettingsStatus();
 }
 function closeSettings() {
   document.getElementById('settings-overlay').classList.remove('open');
@@ -99,3 +101,5 @@ window.closeSettings        = closeSettings;
 window.openHelp             = openHelp;
 window.closeHelp            = closeHelp;
 window.onStagesAlwaysToggle = onStagesAlwaysToggle;
+
+if (!document.getElementById('tab-research')?.classList.contains('hidden')) promptGeminiKeyIfMissing();

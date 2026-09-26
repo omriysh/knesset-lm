@@ -32,6 +32,8 @@ function switchTab(name) {
   // Activate mobile button
   const mobBtn = document.getElementById(`mob-tab-${name}`);
   if (mobBtn) mobBtn.classList.add('active');
+
+  if (name === 'research' && typeof window.promptGeminiKeyIfMissing === 'function') window.promptGeminiKeyIfMissing();
 }
 
 /* ── Browse search (keyword; empty = newest meetings) ────────────── */

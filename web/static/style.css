@@ -1741,6 +1741,56 @@ body { font-size: 16px; }
 }
 #settings-close:hover { background: #e8e8e5; }
 
+.gemini-key-settings-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.gemini-key-settings-actions button,
+.gemini-key-actions button {
+  padding: 6px 12px;
+  background: #f7f6f3;
+  border: 1px solid #e2e3df;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.gemini-key-settings-actions button:hover,
+.gemini-key-actions button:hover { background: #e8e8e5; }
+
+#gemini-key-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.35);
+  z-index: 210;
+  align-items: center;
+  justify-content: center;
+}
+#gemini-key-overlay.open { display: flex; }
+#gemini-key-panel {
+  background: #fff;
+  border-radius: 18px;
+  padding: 28px 32px;
+  max-width: 440px;
+  width: calc(100vw - 32px);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+  direction: rtl;
+}
+#gemini-key-panel h2 { font-size: 1.05rem; font-weight: 700; color: #2e2f2d; margin-bottom: 12px; }
+#gemini-key-panel p { margin-bottom: 8px; line-height: 1.5; }
+#gemini-key-panel a { color: #266829; text-decoration: underline; }
+#gemini-key-input {
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid #e2e3df;
+  border-radius: 10px;
+  font-family: monospace;
+  font-size: 0.85rem;
+}
+#gemini-key-error { color: #b3261e; font-size: 0.8rem; margin-top: 6px; }
+.gemini-key-actions { display: flex; gap: 8px; margin-top: 16px; }
+.gemini-key-actions button { flex: 1; padding: 10px; }
+#gemini-key-save { background: #266829; border-color: #266829; color: #fff; }
+#gemini-key-save:hover { background: #1f5622; }
+
 /* ── Evidence citations ─────────────────────────────────────── */
 sup.ev-cite {
   color: #6366f1;

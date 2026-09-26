@@ -69,6 +69,7 @@ class TestRateLimit:
 
     def test_cloudflare_client_ip_only_when_trusted(self, limited, monkeypatch):
         from api.app import rate_limiter
+        monkeypatch.setattr(config, "API_TRUST_CLOUDFLARE_IP_HEADER", False)
 
         def statuses(ip):
             return [limited.get("/v1/bills", params={"q": META["bill_query"]},
@@ -78,9 +79,13 @@ class TestRateLimit:
         monkeypatch.setattr(config, "API_TRUST_CLOUDFLARE_IP_HEADER", True)
         rate_limiter.reset()
         assert statuses("1.1.1.1") == [200, 200, 429]
+        assert statuses("2.2.2.2")[0] == 429, "trusted only from the local cloudflared peer"
+        monkeypatch.setattr(config, "API_TRUSTED_PROXY_HOSTS", ("testclient",))
+        rate_limiter.reset()
+        assert statuses("1.1.1.1") == [200, 200, 429]
         assert statuses("2.2.2.2") == [200, 200, 429]
 
-    def test_web_ui_server_is_not_rate_limited(self, sample_db, network, monkeypatch, tmp_path):
+    def test_web_ui_server_is_rate_limited_too(self, sample_db, network, monkeypatch, tmp_path):
         import web.app as webapp
         import web.settings as settings
         monkeypatch.setattr(config, "API_RATE_LIMIT_ENABLED", True)
@@ -88,9 +93,11 @@ class TestRateLimit:
         webapp.app.state.settings = settings
         webapp.app.state.sessions_dir = tmp_path
         webapp.app.state.machine = SimpleNamespace(name="test_machine", version=2)
+        webapp.rate_limiter.reset()
         web_client = TestClient(webapp.app)
-        for _ in range(3):
-            assert web_client.get("/v1/protocols", params={"q": REAL_WORD}).status_code == 200
+        statuses = [web_client.get("/v1/protocols", params={"q": REAL_WORD}).status_code for _ in range(2)]
+        webapp.rate_limiter.reset()
+        assert statuses == [200, 429]
 
 
 # ── upstream retries / timeout ───────────────────────────────────────────────

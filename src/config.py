@@ -69,7 +69,7 @@ EXECUTOR_MODEL_HEAVY = "gemini-2.5-flash-lite"
 INTENT_MODEL         = "local"            # always llama-server
 
 # Fallback
-GOOGLE_API_FALLBACK_TO_LOCAL = True
+GOOGLE_API_FALLBACK_TO_LOCAL = False
 
 # Caps (hit-cap = abort)
 RESEARCH_MAX_LLM_TOKENS         = 1_000_000
@@ -136,7 +136,13 @@ PUBLIC_API_HTTP_TIMEOUT_SECONDS  = 10
 API_RATE_LIMIT_ENABLED              = True
 API_RATE_LIMIT_UPSTREAM_PER_MINUTE  = 10   # per client IP, routes that call the Knesset APIs
 API_RATE_LIMIT_DB_PER_MINUTE        = 60   # per client IP, knesset.db-only routes
-API_TRUST_CLOUDFLARE_IP_HEADER      = False  # True only when the server is reachable solely through Cloudflare
+API_TRUST_CLOUDFLARE_IP_HEADER      = True  # True only when the server is reachable solely through Cloudflare
+API_RATE_LIMIT_AGENT_PER_MINUTE     = 5    # per client IP, web routes that run an LLM (Gemini or the local llama-server)
+WEB_REQUIRE_USER_GEMINI_KEY         = True   # web agent tab bills the visitor's key (X-Gemini-Api-Key), never the server's
+GEMINI_KEY_CHECK_TIMEOUT_SECONDS    = 10
+GEMINI_KEY_CHECK_CACHE_SECONDS      = 600
+GEMINI_KEY_CHECK_CACHE_MAX_ENTRIES  = 10_000
+API_TRUSTED_PROXY_HOSTS             = ("127.0.0.1", "::1")  # cloudflared runs on this machine
 DB_QUERY_TIMEOUT_SECONDS            = 20
 API_MAX_QUERY_CHARS           = 200
 API_MAX_QUERY_WORDS           = 12       # FTS5 AND-slots per protocol query

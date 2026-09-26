@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -52,8 +53,10 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 import config
+from api.rate_limit import RateLimitMiddleware, SlidingWindowRateLimiter
 from api.routes import router as api_router
 from api.validation import install_error_handlers
+from web.gemini_keys import forget_server_gemini_keys, stop_on_rejected_gemini_key, visitor_gemini_key_or_error
 from agent.llm.gemma import GemmaLlamaBackend
 
 # ── Tool-result lazy-load cache ───────────────────────────────────────────────
@@ -337,6 +340,7 @@ def _meeting_title(meeting: dict, meeting_id: str) -> tuple[str, str, str]:
 async def lifespan(app: FastAPI):
     import web.settings as settings
 
+    forget_server_gemini_keys()
     print("[web] Loading machine …", flush=True)
     machine = StateMachine(settings.MACHINE_PATH)
     print(f"[web]   Machine: '{machine.name}' (v{machine.version})", flush=True)
@@ -408,6 +412,8 @@ app = FastAPI(title="KnessetLM", lifespan=lifespan)
 _STATIC_DIR    = Path(__file__).parent / "static"
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
+rate_limiter = SlidingWindowRateLimiter()
+app.add_middleware(RateLimitMiddleware, limiter=rate_limiter)
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 app.include_router(api_router)
 install_error_handlers(app)
@@ -576,6 +582,10 @@ async def query(req: QueryRequest, request: Request):
     if not _ok_question(question):
         return JSONResponse({"error": "שאלה מכילה תווים לא חוקיים או ארוכה מדי"}, status_code=400)
 
+    gemini_api_key, gemini_key_error = await asyncio.to_thread(visitor_gemini_key_or_error, request)
+    if gemini_key_error is not None:
+        return gemini_key_error
+
     _log_query(question, request.client.host if request.client else "unknown")
 
     machine       = request.app.state.machine
@@ -600,11 +610,12 @@ async def query(req: QueryRequest, request: Request):
                 _RESEARCH_SEM.acquire()
             try:
                 runner = MachineRunner(
-                    machine       = machine,
-                    backend       = backend,
-                    tool_registry = tool_registry,
+                    machine        = machine,
+                    backend        = backend,
+                    tool_registry  = tool_registry,
+                    gemini_api_key = gemini_api_key,
                 )
-                for event in runner.run_stream(question):
+                for event in stop_on_rejected_gemini_key(runner.run_stream(question)):
                     loop.call_soon_threadsafe(queue.put_nowait, event)
             except Exception as exc:
                 loop.call_soon_threadsafe(
@@ -643,6 +654,8 @@ async def query(req: QueryRequest, request: Request):
                     })
                 elif ev_type == "queued":
                     yield _sse("queued",         {})
+                elif ev_type == "gemini_key_invalid":
+                    yield _sse("gemini_key_invalid", {})
                 elif ev_type == "done":
                     yield _sse("done",           {})
                 elif ev_type == "error":
@@ -678,6 +691,10 @@ async def research_start(req: ResearchStartRequest, request: Request):
         return JSONResponse({"error": "שאלה ריקה"}, status_code=400)
     if not _ok_question(question):
         return JSONResponse({"error": "שאלה מכילה תווים לא חוקיים או ארוכה מדי"}, status_code=400)
+
+    gemini_api_key, gemini_key_error = await asyncio.to_thread(visitor_gemini_key_or_error, request)
+    if gemini_key_error is not None:
+        return gemini_key_error
 
     machine       = request.app.state.machine
     backend       = request.app.state.backend
@@ -723,11 +740,12 @@ async def research_start(req: ResearchStartRequest, request: Request):
             _outcome: tuple | None = None  # ('done', answer) | ('error', msg) | ('user_paused',)
             try:
                 runner = MachineRunner(
-                    machine       = machine,
-                    backend       = backend,
-                    tool_registry = tool_registry,
+                    machine        = machine,
+                    backend        = backend,
+                    tool_registry  = tool_registry,
+                    gemini_api_key = gemini_api_key,
                 )
-                for event in runner.run_stream(question):
+                for event in stop_on_rejected_gemini_key(runner.run_stream(question)):
                     _t, _d = event
                     if _t == "token":
                         _final_token += _d
@@ -842,6 +860,8 @@ async def research_start(req: ResearchStartRequest, request: Request):
 
                 elif ev_type == "queued":
                     yield _sse("queued", {})
+                elif ev_type == "gemini_key_invalid":
+                    yield _sse("gemini_key_invalid", {})
 
                 elif ev_type == "user_input_required":
                     # ev_data contains the full payload including "checkpoint"
@@ -977,6 +997,9 @@ async def research_respond(
     """
     if not _ok_session_id(session_id):
         return JSONResponse({"error": "Invalid session ID"}, status_code=400)
+    gemini_api_key, gemini_key_error = await asyncio.to_thread(visitor_gemini_key_or_error, request)
+    if gemini_key_error is not None:
+        return gemini_key_error
 
     from web.session import load_session, save_session, ResearchSession
 
@@ -1019,15 +1042,16 @@ async def research_respond(
             _outcome: tuple | None = None
             try:
                 runner = MachineRunner(
-                    machine       = machine,
-                    backend       = backend,
-                    tool_registry = tool_registry,
+                    machine        = machine,
+                    backend        = backend,
+                    tool_registry  = tool_registry,
+                    gemini_api_key = gemini_api_key,
                 )
-                for event in runner.run_stream(
+                for event in stop_on_rejected_gemini_key(runner.run_stream(
                     question      = question,
                     resume        = checkpoint,
                     user_response = user_response,
-                ):
+                )):
                     _t, _d = event
                     if _t == "token":
                         _final_token += _d
@@ -1137,6 +1161,8 @@ async def research_respond(
 
                 elif ev_type == "queued":
                     yield _sse("queued", {})
+                elif ev_type == "gemini_key_invalid":
+                    yield _sse("gemini_key_invalid", {})
 
                 elif ev_type == "user_input_required":
                     new_checkpoint = ev_data.get("checkpoint", {})

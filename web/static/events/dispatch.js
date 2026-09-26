@@ -17,6 +17,7 @@ import {
   appendAgentCard, appendErrorMsg, setStatusMsg,
 } from '../render/chat.js';
 import { renderUserInputPanel } from '../render/user_input.js';
+import { clearGeminiKey, openGeminiKeyDialog } from '../gemini_key.js';
 
 import { handleSubgraphEvent } from './subgraph.js';
 
@@ -96,6 +97,11 @@ function onUserInputRequired(data, session) {
   renderUserInputPanel(data);
 }
 
+function onGeminiKeyInvalid() {
+  clearGeminiKey();
+  openGeminiKeyDialog('המפתח הקודם נדחה על ידי Google.');
+}
+
 function noop() {}
 
 const EVENT_HANDLERS = {
@@ -110,6 +116,7 @@ const EVENT_HANDLERS = {
   error:               onError,
   user_input_required: onUserInputRequired,
   user_paused:         noop,
+  gemini_key_invalid:  onGeminiKeyInvalid,
 };
 
 export function handleEvent(eventName, data, session) {

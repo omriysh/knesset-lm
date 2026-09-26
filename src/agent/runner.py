@@ -145,10 +145,18 @@ class MachineRunner:
         machine:   StateMachine,
         backend:   LLMBackend,
         tool_registry: dict[str, Callable],
+        gemini_api_key: Optional[str] = None,
     ) -> None:
-        self.machine       = machine
-        self.backend       = backend
-        self.tool_registry = tool_registry
+        self.machine        = machine
+        self.backend        = backend
+        self.tool_registry  = tool_registry
+        self.gemini_api_key = gemini_api_key
+
+    def make_subgraph_agent(self, agent_cls: type):
+        if self.gemini_api_key is None:
+            return agent_cls()
+        from agent.subgraph.llm_bridge import LLMBridge
+        return agent_cls(llm_bridge=LLMBridge(fallback_to_local=False, api_key=self.gemini_api_key))
 
     # ── Status helpers ────────────────────────────────────────────────────────
 
@@ -583,7 +591,7 @@ class MachineRunner:
             },
         })
 
-        agent     = agent_cls()
+        agent     = self.make_subgraph_agent(agent_cls)
         router    = HookRouter(hooks)
         gen       = agent.run(inputs)
         last_done_payload: dict | None = None

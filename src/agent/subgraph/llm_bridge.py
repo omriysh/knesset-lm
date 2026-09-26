@@ -104,8 +104,9 @@ class LLMBridge:
     the first actual LLM call is attempted.
     """
 
-    def __init__(self, fallback_to_local: bool = True):
+    def __init__(self, fallback_to_local: bool = True, api_key: str | None = None):
         self._fallback_to_local = bool(fallback_to_local)
+        self._api_key = api_key
         self._cache: dict[tuple[str, str], Any] = {}
 
     # ── Public API ──────────────────────────────────────────────────────────
@@ -326,7 +327,7 @@ class LLMBridge:
             backend = GemmaLlamaBackend()
         else:
             from agent.llm.google import GoogleBackend
-            backend = GoogleBackend(model=model)
+            backend = GoogleBackend(model=model, api_key=self._api_key)
 
         self._cache[cache_key] = backend
         return backend

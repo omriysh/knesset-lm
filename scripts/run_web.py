@@ -44,6 +44,9 @@ def main() -> None:
                     help=f"Meetings per reading-tab search (default: {_cfg.TOP_K_BROWSE})")
     ap.add_argument("--port",        type=int, default=5000,
                     help="HTTP port (default: 5000)")
+    ap.add_argument("--host",        default="127.0.0.1",
+                    help="Bind address (default: 127.0.0.1, reachable only through a local cloudflared; "
+                         "0.0.0.0 exposes the server to the network)")
     ap.add_argument("--reload",      action="store_true",
                     help="Enable uvicorn hot-reload (development only)")
     args = ap.parse_args()
@@ -74,11 +77,11 @@ def main() -> None:
     if knesset_lm_root_str not in sys.path:
         sys.path.insert(0, knesset_lm_root_str)
 
-    print(f"[run_web] Starting KnessetLM on http://0.0.0.0:{args.port}/", flush=True)
+    print(f"[run_web] Starting KnessetLM on http://{args.host}:{args.port}/", flush=True)
 
     uvicorn.run(
         "web.app:app",
-        host="0.0.0.0",
+        host=args.host,
         port=args.port,
         reload=args.reload,
         env_file=None,
