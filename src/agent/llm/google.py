@@ -350,8 +350,8 @@ class GoogleBackend(LLMBackend):
                     thinking_budget=config.MAX_THINKING_TOKENS,
                     include_thoughts=True,
                 )
-            except Exception:  # noqa: BLE001 — SDK version may not support it
-                pass
+            except Exception as exc:  # noqa: BLE001 — SDK version may not support it
+                print(f"[google] thinking config not supported, running without it: {exc}", flush=True)
 
         gen_config = types.GenerateContentConfig(
             max_output_tokens  = max_tokens,

@@ -5,7 +5,7 @@ Every /v1 route maps query-string params to tool args, runs the same `dispatch` 
 agent uses, and unwraps the ToolEnvelope. No query logic lives here: only API-side limits
 (input validation in api.validation, smaller top_k, response size cap), hints for the calling
 agent, and error → status mapping. 5xx bodies carry a generic message; the real exception is
-printed server-side.
+printed server-side and logged to errors.log with the request id.
 """
 
 import json
@@ -18,6 +18,7 @@ import config
 from agent.research_agent.tools import RESEARCH_TOOL_REGISTRY
 from api import validation as valid
 from api.markdown import render_markdown
+from api.request_log import current_request_id, log_server_error
 from retrieval import knesset_db_store as store
 from utils.tools import dispatch
 
@@ -134,7 +135,10 @@ def _hint(tool: str, args: dict, results, trimmed: bool) -> str:
 def _error_response(tool: str, envelope, provenance: dict) -> JSONResponse:
     status = _error_status(envelope.error)
     if status >= 500:
-        print(f"[api] {tool} → {status} {envelope.error}: {(envelope.metadata or {}).get('exception')}")
+        metadata = envelope.metadata or {}
+        print(f"[api] {tool} → {status} {envelope.error}: {metadata.get('exception')}")
+        log_server_error(current_request_id.get(), f"api {tool} → {status} {envelope.error}: {metadata.get('exception')}",
+                         metadata.get("traceback") or "")
         message = _PUBLIC_MESSAGES_BY_ERROR.get(envelope.error) or _PUBLIC_5XX_MESSAGES.get(status, "internal error")
     else:
         message = envelope.error.replace("_", " ")

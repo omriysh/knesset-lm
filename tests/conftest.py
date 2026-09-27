@@ -187,3 +187,13 @@ def _uncached_http_and_no_rate_limit(monkeypatch):
     import utils.knesset_db as kdb
     monkeypatch.setattr(kdb, "HTTP_SESSION", requests, raising=False)
     monkeypatch.setattr(config, "API_RATE_LIMIT_ENABLED", False, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _server_logs_in_tmp(tmp_path, monkeypatch):
+    """Server log files go to the test's tmp dir, never Data/logs; handlers are closed after each test."""
+    import config
+    from api import request_log
+    monkeypatch.setattr(config, "LOG_DIR", tmp_path / "logs")
+    yield
+    request_log.close_file_logging()

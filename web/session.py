@@ -67,9 +67,10 @@ def save_session(session: ResearchSession, sessions_dir: Path) -> None:
             try:
                 tmp.replace(target)
                 break
-            except PermissionError:
+            except PermissionError as exc:
                 if _attempt == 4:
                     raise
+                print(f"[session] {target.name} is locked, retrying: {exc}", flush=True)
                 time.sleep(0.05 * (_attempt + 1))
     except Exception:
         try:

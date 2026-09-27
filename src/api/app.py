@@ -1,6 +1,9 @@
 """
-Standalone public API server (no sessions, no LLM): uvicorn api.app:app
-Run from src/ or with src/ on sys.path.
+Standalone public API server (no sessions, no LLM):
+    uvicorn api.app:app --no-proxy-headers --no-access-log
+Run from src/ or with src/ on sys.path. --no-proxy-headers keeps the peer address as the connecting
+host so rate_limit.client_ip trusts CF-Connecting-IP only from a local cloudflared; requests are
+logged to config.LOG_DIR/requests.jsonl by RequestLogMiddleware instead of uvicorn's access log.
 """
 
 import sys
@@ -14,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import config
 from api.rate_limit import RateLimitMiddleware, SlidingWindowRateLimiter
+from api.request_log import RequestLogMiddleware, setup_file_logging
 from api.routes import router
 from api.validation import install_error_handlers
 
@@ -27,6 +31,7 @@ def use_public_api_http_settings() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    setup_file_logging()
     use_public_api_http_settings()
     yield
 
@@ -39,5 +44,6 @@ app = FastAPI(title="KnessetLM public API",
               lifespan=lifespan)
 app.add_middleware(RateLimitMiddleware, limiter=rate_limiter)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET"], allow_headers=["*"])
+app.add_middleware(RequestLogMiddleware)
 app.include_router(router)
 install_error_handlers(app)

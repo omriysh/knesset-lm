@@ -13,6 +13,11 @@ Usage
     python scripts/run_web.py
     python scripts/run_web.py --machine machines/plan_execute_agent.json
     python scripts/run_web.py --port 5000 --top-k-browse 100
+    python scripts/run_web.py --console-log      # also copy console output to Data/logs/console-<date>.log
+
+Requests, visitor questions and server errors are logged under config.LOG_DIR by
+api.request_log; uvicorn's own access log and proxy-header rewriting are off so the
+peer stays the local cloudflared and CF-Connecting-IP gives the real client IP.
 
 Prerequisites
 -------------
@@ -23,12 +28,42 @@ Prerequisites
 import argparse
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Ensure src/ is importable for the config import below
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import config as _cfg
+
+
+class Tee:
+    """Writes to the real console stream and to a log file."""
+
+    def __init__(self, console_stream, log_file):
+        self.console_stream = console_stream
+        self.log_file = log_file
+
+    def write(self, text):
+        self.console_stream.write(text)
+        self.log_file.write(text)
+        return len(text)
+
+    def flush(self):
+        self.console_stream.flush()
+        self.log_file.flush()
+
+    def __getattr__(self, name):
+        return getattr(self.console_stream, name)
+
+
+def tee_console_to_log_file() -> Path:
+    _cfg.LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = _cfg.LOG_DIR / f"console-{datetime.now(timezone.utc):%Y-%m-%d}.log"
+    log_file = open(log_path, "a", encoding="utf-8", buffering=1)
+    sys.stdout = Tee(sys.stdout, log_file)
+    sys.stderr = Tee(sys.stderr, log_file)
+    return log_path
 
 
 def main() -> None:
@@ -49,7 +84,12 @@ def main() -> None:
                          "0.0.0.0 exposes the server to the network)")
     ap.add_argument("--reload",      action="store_true",
                     help="Enable uvicorn hot-reload (development only)")
+    ap.add_argument("--console-log", dest="console_log", action="store_true",
+                    help="Also write console output to LOG_DIR/console-<UTC date>.log")
     args = ap.parse_args()
+
+    if args.console_log:
+        print(f"[run_web] Console output is also written to {tee_console_to_log_file()}", flush=True)
 
     # ── Translate args → environment variables ────────────────────────────────
     # uvicorn.run() runs in-process, so app.py reads os.environ directly.
@@ -85,6 +125,8 @@ def main() -> None:
         port=args.port,
         reload=args.reload,
         env_file=None,
+        proxy_headers=False,
+        access_log=False,
     )
 
 

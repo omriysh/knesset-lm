@@ -209,3 +209,10 @@ AGENT_STEP_FULL_CHARS        = 8000
 
 # Sessions on disk (evidence overflow)
 SESSIONS_DIR = DATA_DIR / "sessions"
+
+# Server logs (src/api/request_log.py): requests.jsonl, questions.jsonl, errors.log, rotated at UTC midnight
+LOG_DIR                          = DATA_DIR / "logs"
+LOG_RETENTION_DAYS               = 14
+REQUEST_LOG_MAX_QUERY_CHARS      = 300
+REQUEST_LOG_MAX_USER_AGENT_CHARS = 200
+WEB_GENERIC_ERROR_MESSAGE        = "אירעה שגיאה בשרת. נסו שוב מאוחר יותר."

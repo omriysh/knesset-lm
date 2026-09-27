@@ -86,27 +86,34 @@ def key_error_response(error_code: str, message: str, status_code: int) -> JSONR
 
 
 def visitor_gemini_key_or_error(request: Request) -> tuple[str | None, JSONResponse | None]:
-    """Blocking (may call Google): run it in a worker thread from async routes."""
+    """Blocking (may call Google): run it in a worker thread from async routes. Records the check's
+    outcome as request.state.gemini_key_outcome for the request log."""
     key = gemini_key_from_request(request)
     if key is None:
+        request.state.gemini_key_outcome = "missing"
         if not config.WEB_REQUIRE_USER_GEMINI_KEY:
             return None, None
         return None, key_error_response("gemini_key_required",
                                         "נדרש מפתח Gemini API תקין (כותרת X-Gemini-Api-Key)", 401)
     is_valid = gemini_key_is_valid(key)
     if is_valid is False:
+        request.state.gemini_key_outcome = "invalid"
         return None, key_error_response("gemini_key_invalid", GEMINI_KEY_REJECTED_MESSAGE, 401)
     if is_valid is None:
+        request.state.gemini_key_outcome = "unverified"
         return None, key_error_response("gemini_key_unverified",
                                         "לא ניתן לאמת את מפתח ה-Gemini כרגע. נסו שוב בעוד רגע.", 503)
+    request.state.gemini_key_outcome = "ok"
     return key, None
 
 
-def stop_on_rejected_gemini_key(events):
-    """Relay runner events; when Gemini rejects the key mid-run, flag it and stop the run there."""
+def stop_on_rejected_gemini_key(events, on_key_rejected=None):
+    """Relay runner events; when Gemini rejects the key mid-run, flag it, call on_key_rejected and stop the run there."""
     for event in events:
         yield event
         if GEMINI_KEY_REJECTED_PATTERN.search(json.dumps(event, ensure_ascii=False, default=str)):
+            if on_key_rejected is not None:
+                on_key_rejected()
             yield ("gemini_key_invalid", {})
             yield ("error", GEMINI_KEY_REJECTED_MESSAGE)
             try:

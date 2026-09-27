@@ -157,8 +157,6 @@ def dispatch(registry: ToolRegistry, name: str, args: dict) -> ToolEnvelope:
     status = f"error={result.error}" if result.error else "ok"
     summary_preview = (result.summary or "")[:120]
     print(f"[tools] ← {name}  {status}  summary={summary_preview!r}", flush=True)
-    print(f"[tools] ← {name}  {status}  full:", flush=True)
-    print(result.full or "", flush=True)
     return result
 
 

@@ -39,7 +39,7 @@ import traceback
 import uuid
 from collections import OrderedDict
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from dataclasses import replace as dataclass_replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -58,6 +58,8 @@ import config
 from api import validation as valid
 from api.app import use_public_api_http_settings
 from api.rate_limit import RateLimitMiddleware, SlidingWindowRateLimiter
+from api.request_log import (RequestLogMiddleware, generic_error_message, log_question, log_server_error,
+                             request_id_of, setup_file_logging)
 from api.routes import router as api_router
 from api.validation import install_error_handlers
 from web.concurrency import ResearchRunSlots
@@ -156,8 +158,8 @@ def _enrich_citations(citations: list[dict], footnote_by_id: dict[str, dict]) ->
         if isinstance(quote, str):
             try:
                 quote = json.loads(quote)
-            except Exception:
-                pass  # keep as string
+            except Exception as exc:
+                print(f"[web] citation quote of {ev_id!r} is not JSON, kept as text: {exc}", flush=True)
 
         # Empty quote → substitute provenance so UI can show what was queried
         if quote is None or quote == "" or quote == [] or quote == {}:
@@ -356,6 +358,7 @@ def _meeting_title(meeting: dict, meeting_id: str) -> tuple[str, str, str]:
 async def lifespan(app: FastAPI):
     import web.settings as settings
 
+    setup_file_logging()
     forget_server_gemini_keys()
     use_public_api_http_settings()
     print("[web] Loading machine …", flush=True)
@@ -433,6 +436,7 @@ rate_limiter = SlidingWindowRateLimiter()
 app.add_middleware(RateLimitMiddleware, limiter=rate_limiter)
 app.add_middleware(RequestBodyLimitMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RequestLogMiddleware)
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 app.include_router(api_router)
 install_error_handlers(app)
@@ -659,6 +663,8 @@ class ResearchRun:
     emit: Callable[[object], None]
     stop_requested: threading.Event
     slots: ResearchRunSlots
+    request_id: str | None = None
+    request_state: dict = field(default_factory=dict)
 
 
 def run_research(run: ResearchRun) -> None:
@@ -706,7 +712,8 @@ def run_research(run: ResearchRun) -> None:
             gemini_api_key = run.gemini_api_key,
         )
         runner_events = runner.run_stream(question=run.question, resume=run.resume, user_response=run.user_response)
-        key_guarded_events = stop_on_rejected_gemini_key(runner_events)
+        key_guarded_events = stop_on_rejected_gemini_key(
+            runner_events, on_key_rejected=lambda: run.request_state.update(gemini_key_outcome="rejected_mid_run"))
         for event in key_guarded_events:
             if run.stop_requested.is_set():
                 print(f"[{run.log_prefix}] client of session {run.session_id} is gone; stopping the run", flush=True)
@@ -743,13 +750,15 @@ def run_research(run: ResearchRun) -> None:
                     event_log.append({"type": "subgraph_event", "data": _d})
             run.emit(event)
     except Exception as exc:
-        _err = str(exc) + "\n" + traceback.format_exc()
         print(f"[{run.log_prefix}] run of session {run.session_id} failed: {exc}", flush=True)
+        log_server_error(run.request_id, f"{run.log_prefix} run of session {run.session_id} failed",
+                         traceback.format_exc())
+        client_message = generic_error_message(run.request_id)
         try:
-            save_final_state("error", error=_err)
+            save_final_state("error", error=client_message)
         except Exception as save_exc:
             print(f"[{run.log_prefix}] saving the failed session failed: {save_exc}", flush=True)
-        run.emit(("error", _err))
+        run.emit(("error", client_message))
     finally:
         for events in (key_guarded_events, runner_events):
             if events is None:
@@ -776,6 +785,8 @@ def _start_research_thread(request: Request, queue: asyncio.Queue, **run_fields)
         emit           = _thread_safe_emitter(queue),
         stop_requested = threading.Event(),
         slots          = _RESEARCH_SLOTS,
+        request_id     = request_id_of(request),
+        request_state  = request.scope.setdefault("state", {}),
         **run_fields,
     )
     threading.Thread(target=run_research, args=(run,), daemon=True).start()
@@ -822,14 +833,23 @@ async def _research_sse_events(run: ResearchRun, queue: asyncio.Queue, announce_
                 return
 
             elif ev_type == "error":
-                yield _sse("error", {"error": ev_data})
+                yield _sse("error", {"error": ev_data, "request_id": run.request_id})
                 return
 
     except Exception as exc:
-        err = str(exc) + "\n" + traceback.format_exc()
-        yield _sse("error", {"error": err})
+        print(f"[research_sse] stream of session {run.session_id} failed: {exc}", flush=True)
+        log_server_error(run.request_id, f"research SSE stream of session {run.session_id} failed",
+                         traceback.format_exc())
+        yield _sse("error", {"error": generic_error_message(run.request_id), "request_id": run.request_id})
     finally:
         run.stop_requested.set()
+
+
+def _log_visitor_question(request: Request, session_id: str | None, question: Any) -> None:
+    try:
+        log_question(request, request.url.path, session_id, question)
+    except Exception as exc:
+        print(f"[web] logging the question of session {session_id} failed: {exc}", flush=True)
 
 
 def _save_new_running_session(session_id: str, question: str, created_at: str, sessions_dir: Path) -> None:
@@ -863,6 +883,8 @@ async def research_start(req: ResearchStartRequest, request: Request):
         return _busy_response()
 
     session_id = str(uuid.uuid4())
+    request.state.session_id = session_id
+    _log_visitor_question(request, session_id, question)
     created_at = _now_iso()
     await asyncio.to_thread(_save_new_running_session, session_id, question, created_at,
                             request.app.state.sessions_dir)
@@ -991,6 +1013,8 @@ async def research_respond(
     user_response, invalid_reason = _validated_user_response(pending_ui_event, req.output_var, req.value)
     if invalid_reason is not None:
         return JSONResponse({"error": invalid_reason}, status_code=400)
+    if isinstance(user_response["value"], str):
+        _log_visitor_question(request, session_id, user_response["value"])
     if not _RESEARCH_SLOTS.can_admit():
         return _busy_response()
 
@@ -1445,7 +1469,8 @@ def _workspace_context(session, meeting_id: str | None) -> str:
 
 
 def _stream_local_llm_answer(backend, prepared_messages: list[dict], emit: Callable[[object], None],
-                             stop_requested: threading.Event, slots: threading.BoundedSemaphore) -> None:
+                             stop_requested: threading.Event, slots: threading.BoundedSemaphore,
+                             request_id: str | None = None) -> None:
     """Relay the local model's events through emit until done or stop_requested; closing the backend
     stream drops the llama-server connection so generation stops too. Releases one of slots."""
     answer_events = None
@@ -1459,7 +1484,8 @@ def _stream_local_llm_answer(backend, prepared_messages: list[dict], emit: Calla
             emit(event)
     except Exception as exc:
         print(f"[workspace_ask] generation failed: {exc}", flush=True)
-        emit(("__error__", str(exc) + "\n" + traceback.format_exc()))
+        log_server_error(request_id, "workspace_ask generation failed", traceback.format_exc())
+        emit(("__error__", generic_error_message(request_id)))
     finally:
         if answer_events is not None:
             try:
@@ -1470,7 +1496,8 @@ def _stream_local_llm_answer(backend, prepared_messages: list[dict], emit: Calla
         emit(_SENTINEL)
 
 
-async def _workspace_answer_sse_events(queue: asyncio.Queue, stop_requested: threading.Event):
+async def _workspace_answer_sse_events(queue: asyncio.Queue, stop_requested: threading.Event,
+                                       request_id: str | None):
     from agent.llm.base import TokenEvent
     try:
         while True:
@@ -1482,12 +1509,14 @@ async def _workspace_answer_sse_events(queue: asyncio.Queue, stop_requested: thr
                 yield _sse("done", {})
                 break
             if isinstance(item, tuple) and len(item) == 2 and item[0] == "__error__":
-                yield _sse("error", {"error": item[1]})
+                yield _sse("error", {"error": item[1], "request_id": request_id})
                 break
             if isinstance(item, TokenEvent):
                 yield _sse("token", {"text": item.text})
     except Exception as exc:
-        yield _sse("error", {"error": str(exc) + "\n" + traceback.format_exc()})
+        print(f"[workspace_ask] answer stream failed: {exc}", flush=True)
+        log_server_error(request_id, "workspace_ask answer stream failed", traceback.format_exc())
+        yield _sse("error", {"error": generic_error_message(request_id), "request_id": request_id})
     finally:
         stop_requested.set()
 
@@ -1519,6 +1548,7 @@ async def workspace_ask(session_id: str, req: WorkspaceAskRequest, request: Requ
     session = await asyncio.to_thread(load_session, session_id, request.app.state.sessions_dir)
     if session is None:
         return JSONResponse({"error": "Session not found"}, status_code=404)
+    _log_visitor_question(request, session_id, question)
 
     context = await asyncio.to_thread(_workspace_context, session, req.meeting_id)
     system_prompt = (
@@ -1538,9 +1568,10 @@ async def workspace_ask(session_id: str, req: WorkspaceAskRequest, request: Requ
     queue: asyncio.Queue = asyncio.Queue()
     stop_requested = threading.Event()
     threading.Thread(target=_stream_local_llm_answer,
-                     args=(backend, prepared, _thread_safe_emitter(queue), stop_requested, slots),
+                     args=(backend, prepared, _thread_safe_emitter(queue), stop_requested, slots,
+                           request_id_of(request)),
                      daemon=True).start()
-    return _sse_response(_workspace_answer_sse_events(queue, stop_requested))
+    return _sse_response(_workspace_answer_sse_events(queue, stop_requested, request_id_of(request)))
 
 
 # ── SSE helper ────────────────────────────────────────────────────────────────
