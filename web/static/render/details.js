@@ -97,7 +97,7 @@ export function renderRetrievalHtml(r) {
       body += `<li class="chunk-item">` +
         `<span class="chunk-date">${esc(c.date)}</span>` +
         `<span class="chunk-topic">${esc(c.topic)}</span>` +
-        `<span class="chunk-sim">sim&nbsp;${c.p1_sim}</span>` +
+        `<span class="chunk-sim">sim&nbsp;${esc(String(c.p1_sim))}</span>` +
         `</li>`;
     }
     body += '</ul>';

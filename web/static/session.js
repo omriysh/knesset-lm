@@ -12,7 +12,7 @@
  */
 import { sseLines } from './sse.js';
 import { handleEvent } from './events/dispatch.js';
-import { GEMINI_KEY_HEADER, getGeminiKey, clearGeminiKey, openGeminiKeyDialog } from './gemini_key.js';
+import { geminiKeyHeaders, agentResponseError } from './gemini_key.js';
 
 export class ExecutorState {
   constructor() {
@@ -60,23 +60,11 @@ export class Session {
   async run(url, body) {
     const res = await fetch(url, {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json', [GEMINI_KEY_HEADER]: getGeminiKey() },
+      headers: { 'Content-Type': 'application/json', ...geminiKeyHeaders() },
       body:    JSON.stringify(body),
     });
-    if (res.status === 401) {
-      const rejection = await res.json().catch(exc => {
-        console.error('[session] unreadable 401 body:', exc);
-        return {};
-      });
-      clearGeminiKey();
-      openGeminiKeyDialog(rejection.error === 'gemini_key_invalid'
-        ? 'המפתח נדחה על ידי Google.'
-        : 'נדרש מפתח Gemini תקין כדי להריץ מחקר אוטומטי.');
-      throw new Error(rejection.message || 'נדרש מפתח Gemini');
-    }
-    if (res.status === 503) throw new Error('לא ניתן לאמת את מפתח ה-Gemini כרגע — נסו שוב בעוד רגע');
-    if (res.status === 429) throw new Error('יותר מדי בקשות — נסו שוב בעוד דקה');
-    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const rejection = await agentResponseError(res);
+    if (rejection) throw rejection;
     for await (const { event, data } of sseLines(res)) {
       handleEvent(event, data, this);
     }

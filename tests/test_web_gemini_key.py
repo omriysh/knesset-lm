@@ -80,7 +80,8 @@ def awaiting_session(web) -> str:
     sid = str(uuid.uuid4())
     save_session(ResearchSession(session_id=sid, status="awaiting_user", original_question="שאלה",
                                  created_at="2026-09-26T00:00:00.000Z", updated_at="2026-09-26T00:00:00.000Z",
-                                 machine_checkpoint={"question": "שאלה"}), web.sessions)
+                                 machine_checkpoint={"question": "שאלה", "pending_ui_event": {
+                                     "ui": "text_input", "output_var": "x"}}), web.sessions)
     return sid
 
 
@@ -105,7 +106,7 @@ class TestKeyRequired:
 
     def test_respond_requires_key(self, web):
         sid = awaiting_session(web)
-        r = web.client.post(f"/api/research/{sid}/respond", json={"output_var": "x", "value": "y"})
+        r = web.client.post(f"/api/research/{sid}/respond", json={"output_var": "x", "value": "כן"})
         assert r.status_code == 401
         assert FakeRunner.created == []
 
@@ -128,7 +129,7 @@ class TestKeyPassedNotStored:
 
     def test_respond_passes_key(self, web):
         sid = awaiting_session(web)
-        r = web.client.post(f"/api/research/{sid}/respond", json={"output_var": "x", "value": "y"}, headers=KEY_HEADER)
+        r = web.client.post(f"/api/research/{sid}/respond", json={"output_var": "x", "value": "כן"}, headers=KEY_HEADER)
         assert r.status_code == 200
         assert FakeRunner.created[-1].gemini_api_key == VISITOR_KEY
 
@@ -267,7 +268,7 @@ class TestAgentRateLimit:
         web.app.rate_limiter.reset()
         statuses = [web.client.post(AGENT_POSTS[0][0], json=AGENT_POSTS[0][1], headers=KEY_HEADER).status_code for _ in range(2)]
         sid = awaiting_session(web)
-        r = web.client.post(f"/api/research/{sid}/respond", json={"output_var": "x", "value": "y"}, headers=KEY_HEADER)
+        r = web.client.post(f"/api/research/{sid}/respond", json={"output_var": "x", "value": "כן"}, headers=KEY_HEADER)
         assert statuses == [200, 200]
         assert r.status_code == 429
         assert r.json()["error_code"] == "rate_limited"
@@ -278,7 +279,7 @@ class TestAgentRateLimit:
         assert route_bucket(f"/api/research/{uuid.uuid4()}/workspace/ask") == "agent"
         assert route_bucket(f"/api/research/{uuid.uuid4()}/respond") == "agent"
         assert route_bucket("/api/research/start") == "agent"
-        assert route_bucket("/api/query") is None
+        assert route_bucket("/api/query") == "web"
         assert route_bucket(f"/api/research/{uuid.uuid4()}/stream") is None
         assert route_bucket("/api/browse/search") == "db"
 

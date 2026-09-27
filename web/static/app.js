@@ -32,9 +32,6 @@ import { attachLazyToggleListener } from './render/lazy.js';
 import { attemptReconnect } from './reconnect.js';
 import { promptGeminiKeyIfMissing, refreshGeminiKeySettingsStatus } from './gemini_key.js';
 
-// ── marked config ──────────────────────────────────────────────────────
-marked.use({ breaks: true, gfm: true });
-
 // ── user_input → controller.submitResponse callback ────────────────────
 configureUserInput({ onSubmit: submitResponse });
 
@@ -84,7 +81,7 @@ async function openHelp() {
   if (_helpLoaded) return;
   try {
     const md = await fetch('/api/help').then(r => r.text());
-    document.getElementById('help-content').innerHTML = marked.parse(md);
+    document.getElementById('help-content').innerHTML = renderMarkdown(md);
     _helpLoaded = true;
   } catch (exc) {
     console.error('[app] help load failed:', exc);

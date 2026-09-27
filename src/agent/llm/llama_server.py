@@ -203,6 +203,7 @@ class LlamaServerBackend(LLMBackend):
                         print(f"[llama_server] malformed tool call chunk skipped ({exc})", flush=True)
                         continue
             finally:
+                resp.close()
                 if _dump_fh:
                     _dump_fh.close()
 

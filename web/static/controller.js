@@ -87,7 +87,7 @@ function finalize(session, statusEl) {
   if (session.agentEl && session.rawAnswer && !willReconnect) {
     const body = session.agentEl.querySelector('.prose-content');
     if (body) {
-      body.innerHTML = marked.parse(session.rawAnswer);
+      body.innerHTML = renderMarkdown(session.rawAnswer);
       const cursor = session.agentEl.querySelector('.stream-cursor');
       if (cursor) cursor.remove();
       if (session.pendingFootnotes.length > 0) {

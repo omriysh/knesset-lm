@@ -130,7 +130,7 @@ API_PROTOCOLS_DEFAULT_SCOPES  = ("topics", "opinions")
 API_FIND_MAX_TOP_K            = 5
 API_LIST_MAX_TOP_K            = 50
 API_MAX_RESPONSE_CHARS        = 90_000
-PUBLIC_API_RETRY_ATTEMPTS        = 2    # standalone api.app only: fail fast when the Knesset API is down
+PUBLIC_API_RETRY_ATTEMPTS        = 2    # api.app and web.app processes: fail fast when the Knesset API is down
 PUBLIC_API_RETRY_SLEEP           = 1
 PUBLIC_API_HTTP_TIMEOUT_SECONDS  = 10
 API_RATE_LIMIT_ENABLED              = True
@@ -151,6 +151,47 @@ API_MAX_LIST_ITEMS            = 20       # repeated / comma-separated list param
 API_MAX_ID_DIGITS             = 12
 API_MAX_OFFSET                = 5000
 API_KNESSET_NUM_RANGE         = (1, 26)
+API_RATE_LIMIT_WEB_PER_MINUTE = 300      # per client IP, every other web route (reading tab fires one request per meeting/speaker)
+
+# Public web server (web/app.py, exposed through a Cloudflare tunnel)
+WEB_MAX_REQUEST_BODY_BYTES           = 64 * 1024
+WEB_MAX_MK_PHOTO_NAME_CHARS          = 100
+WEB_MK_PHOTO_CACHE_MAX_ENTRIES       = 2000
+WEB_MAX_WORKSPACE_CHUNK_CHARS        = 8000
+WEB_MAX_WORKSPACE_SELECTED_CHUNKS    = 50
+WEB_MAX_DEEP_DIVE_MEETINGS           = 20
+WEB_MAX_OUTPUT_VAR_CHARS             = 100
+WEB_MAX_HITS_QUERY_CHARS             = 500    # the heatmap sends a whole summary topic as the query
+WEB_MAX_HITS_QUERY_WORDS             = 60
+WEB_SESSION_MAX_AGE_HOURS            = 2.0
+WEB_SESSION_CLEANUP_INTERVAL_SECONDS = 600
+WEB_RESEARCH_MAX_CONCURRENT_RUNS     = 5
+WEB_RESEARCH_MAX_QUEUED_RUNS         = 10
+WEB_RESEARCH_SLOT_WAIT_SECONDS       = 300
+WEB_LOCAL_LLM_MAX_CONCURRENT_ASKS    = 1      # workspace/ask on the owner's llama-server; more → 503 busy
+WEB_WORKSPACE_ASK_MAX_TOKENS         = 1024
+WEB_WORKSPACE_ASK_MAX_CONTEXT_CHARS  = 8000
+WEB_SSE_KEEPALIVE_SECONDS            = 15.0
+WEB_META_CACHE_SECONDS               = 3600
+WEB_CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com; "
+    "img-src 'self' data:; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'"
+)
+WEB_DOCS_CONTENT_SECURITY_POLICY = (   # /docs and /redoc: Swagger UI / ReDoc bundles from jsdelivr, inline bootstrap script
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
+    "font-src 'self' data: https://fonts.gstatic.com; "
+    "img-src 'self' data: https://fastapi.tiangolo.com https://validator.swagger.io; "
+    "worker-src 'self' blob:; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'"
+)
 
 # Bill text
 BILL_TEXT_DEFAULT_MAX_CHARS  = 1000

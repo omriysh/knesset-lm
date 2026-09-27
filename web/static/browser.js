@@ -296,7 +296,7 @@ function _groupedHtml(meetings) {
     const collapsed = _collapsedGroups.has(comm);
     const cards     = collapsed ? '' : groups[comm].map(m => _meetingCardHtml(m, true)).join('');
     return `<div class="sidebar-group">
-      <div class="sidebar-group-header" onclick="browserToggleCommGroup('${_esc(comm)}')">
+      <div class="sidebar-group-header" data-committee="${_esc(comm)}" onclick="browserToggleCommGroup(this.dataset.committee)">
         <span class="group-arrow">${collapsed ? '▶' : '▼'}</span>
         <span class="group-name">${_esc(comm)}</span>
         <span class="group-count">${groups[comm].length}</span>
@@ -316,7 +316,7 @@ function _meetingCardHtml(m, inGroup) {
   const commHtml  = inGroup ? '' :
     `<span class="sidebar-committee">${_esc((m.committee || '').replace(/_/g, ' '))}</span>`;
   return `<div class="sidebar-meeting ${active ? 'active' : ''} ${inGroup ? 'in-group' : ''}"
-               onclick="browserSwitchMeeting('${_esc(m.meeting_id)}')">
+               data-meeting-id="${_esc(m.meeting_id)}" onclick="browserSwitchMeeting(this.dataset.meetingId)">
     <div class="sidebar-meeting-title">${_esc(dateStr)}</div>
     <div class="sidebar-meeting-meta">
       ${commHtml}
@@ -523,7 +523,7 @@ function _bulletHtml(b, isTopic) {
   return `<li>
     <button class="summary-bullet-btn" ${bulletAttrs}>
       <span class="bullet-indicator"></span>
-      <span>${marked.parseInline(text)}</span>
+      <span>${renderMarkdownInline(text)}</span>
     </button>${quoteHtml}
   </li>`;
 }
@@ -723,7 +723,7 @@ function _updateHeatmapViewport() {
 /* ── Scroll transcript to chunk ──────────────────────────────────── */
 function browserScrollToChunk(chunkId, quote = '') {
   const col  = _panel?.querySelector('#browser-transcript-col');
-  const card = col?.querySelector(`.chunk-card[data-chunk-id="${chunkId}"]`);
+  const card = col?.querySelector(`.chunk-card[data-chunk-id="${CSS.escape(String(chunkId))}"]`);
   if (!col || !card) return;
 
   const mark = quote ? _markQuoteInCard(card, quote) : null;
@@ -930,11 +930,14 @@ async function _streamWorkspaceAsk(question, meetingId) {
   let curEvent = '';
 
   try {
+    if (!(await window.requireGeminiKey())) throw new Error('נדרש מפתח Gemini כדי לשאול על הפרוטוקול');
     const res = await fetch(`/api/research/${_sid}/workspace/ask`, {
       method:  'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: {'Content-Type': 'application/json', ...window.geminiKeyHeaders()},
       body:    JSON.stringify({ question, meeting_id: meetingId }),
     });
+    const rejection = await window.agentResponseError(res);
+    if (rejection) throw rejection;
 
     const reader  = res.body.getReader();
     const decoder = new TextDecoder();
@@ -955,7 +958,7 @@ async function _streamWorkspaceAsk(question, meetingId) {
             prose.innerHTML = _esc(raw) + '<span class="stream-cursor"></span>';
             chatColumn.scrollTop = chatColumn.scrollHeight;
           } else if (curEvent === 'done') {
-            prose.innerHTML = marked.parse(raw);
+            prose.innerHTML = renderMarkdown(raw);
           }
         }
       }
@@ -963,7 +966,7 @@ async function _streamWorkspaceAsk(question, meetingId) {
   } catch (err) {
     prose.innerHTML = `<span style="color:#b02500">שגיאה: ${_esc(err.message)}</span>`;
   }
-  if (raw) prose.innerHTML = marked.parse(raw);
+  if (raw) prose.innerHTML = renderMarkdown(raw);
   chatColumn.scrollTop = chatColumn.scrollHeight;
 }
 

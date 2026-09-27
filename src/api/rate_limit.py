@@ -2,7 +2,8 @@
 In-process per-client-IP sliding-window rate limits for the standalone public API.
 
 Routes that call the Knesset APIs share a low budget, knesset.db-only routes a higher one,
-web-UI routes that run an LLM the lowest; docs, health, meta and stream replays are not limited.
+web-UI routes that run an LLM the lowest, every other route a generous web budget; only the page,
+static files, docs, the llms texts and stream replays are not limited.
 Limits are read from config on every request.
 """
 
@@ -19,7 +20,12 @@ import config
 WINDOW_SECONDS = 60
 UPSTREAM_ROUTE_PREFIXES = ("/v1/mks", "/v1/committees", "/v1/parties", "/v1/bills", "/v1/votes")
 DB_ROUTE_PREFIXES = ("/v1/protocols", "/v1/meetings/", "/api/browse/search")
+DB_ROUTE_PATHS = ("/v1/meta", "/api/health")
 AGENT_ROUTE_PATTERN = re.compile(r"^/api/research/(start|[^/]+/(respond|workspace/ask))$")
+STREAM_REPLAY_PATTERN = re.compile(r"^/api/research/[^/]+/stream$")
+UNLIMITED_PATHS = ("/", "/favicon.ico", "/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json",
+                   "/llms.txt", "/llms-full.txt", "/agent-instructions")
+UNLIMITED_PREFIXES = ("/static/",)
 
 
 def route_bucket(path: str) -> str | None:
@@ -27,9 +33,11 @@ def route_bucket(path: str) -> str | None:
         return "agent"
     if path.startswith(UPSTREAM_ROUTE_PREFIXES):
         return "upstream"
-    if path.startswith(DB_ROUTE_PREFIXES):
+    if path.startswith(DB_ROUTE_PREFIXES) or path in DB_ROUTE_PATHS:
         return "db"
-    return None
+    if path in UNLIMITED_PATHS or path.startswith(UNLIMITED_PREFIXES) or STREAM_REPLAY_PATTERN.match(path):
+        return None
+    return "web"
 
 
 def bucket_limit(bucket: str) -> int:
@@ -37,6 +45,8 @@ def bucket_limit(bucket: str) -> int:
         return config.API_RATE_LIMIT_UPSTREAM_PER_MINUTE
     if bucket == "agent":
         return config.API_RATE_LIMIT_AGENT_PER_MINUTE
+    if bucket == "web":
+        return config.API_RATE_LIMIT_WEB_PER_MINUTE
     return config.API_RATE_LIMIT_DB_PER_MINUTE
 
 

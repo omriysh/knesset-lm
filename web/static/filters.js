@@ -147,7 +147,7 @@ function _rfRenderList(listId, items, type) {
   el.innerHTML = items.map(item => {
     const sel  = set.has(item) ? 'rfb-option--selected' : '';
     const safe = _rfEsc(item);
-    return `<button class="rfb-option ${sel}" onclick="rfToggleItem('${type}', this.dataset.value)" data-value="${safe}">
+    return `<button class="rfb-option ${sel}" data-type="${_rfEsc(type)}" data-value="${safe}" onclick="rfToggleItem(this.dataset.type, this.dataset.value)">
   <span class="rfb-option-check material-symbols-outlined">check</span>${safe}</button>`;
   }).join('');
 }

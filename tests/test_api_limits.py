@@ -62,10 +62,12 @@ class TestRateLimit:
             assert limited.get("/v1/protocols", params={"q": REAL_WORD}).status_code == 200
         assert limited.get("/v1/protocols", params={"q": REAL_WORD}).status_code == 429
 
-    def test_docs_and_health_are_not_limited(self, limited):
+    def test_docs_are_not_limited(self, limited, monkeypatch):
+        monkeypatch.setattr(config, "API_RATE_LIMIT_WEB_PER_MINUTE", 3)
         for _ in range(10):
             assert limited.get("/llms.txt").status_code == 200
-            assert limited.get("/health").status_code == 200
+            assert limited.get("/docs").status_code == 200
+        assert [limited.get("/health").status_code for _ in range(4)] == [200, 200, 200, 429]
 
     def test_cloudflare_client_ip_only_when_trusted(self, limited, monkeypatch):
         from api.app import rate_limiter

@@ -195,12 +195,12 @@ def _open_db():
 
 
 def _db_missing_envelope(target: str, knesset_num: int) -> ToolEnvelope:
+    print(f"[tools] {store.db_path()} missing; {target} lookup skipped", flush=True)
     return ToolEnvelope(
         summary="",
         full="",
         metadata={"kind": "error", "source": "knesset_db", "count": 0, "target": target},
-        provenance={"target": target, "knesset_num": knesset_num,
-                    "expected_path": str(store.db_path())},
+        provenance={"target": target, "knesset_num": knesset_num},
         error="knesset_db_missing",
     )
 

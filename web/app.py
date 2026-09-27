@@ -16,7 +16,6 @@ model or vector store is loaded.
 Routes (main)
 -------------
   GET  /                                            -> index.html
-  POST /api/query                                   -> SSE stream
   GET  /api/health                                  -> {"status", "machine", "db": {table: row count}}
   POST /api/browse/search                           -> reading-tab meeting search
   GET  /api/research/{sid}/meeting/{mid}/hits?q=... -> matching speeches for the heatmap
@@ -31,17 +30,20 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import re
 import sqlite3
 import sys
 import threading
+import time
 import traceback
 import uuid
-from datetime import datetime, timezone
+from collections import OrderedDict
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from dataclasses import replace as dataclass_replace
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 # Bootstrap sys.path before importing knesset-lm modules
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -50,13 +52,17 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import config
+from api import validation as valid
+from api.app import use_public_api_http_settings
 from api.rate_limit import RateLimitMiddleware, SlidingWindowRateLimiter
 from api.routes import router as api_router
 from api.validation import install_error_handlers
+from web.concurrency import ResearchRunSlots
 from web.gemini_keys import forget_server_gemini_keys, stop_on_rejected_gemini_key, visitor_gemini_key_or_error
+from web.middleware import RequestBodyLimitMiddleware, SecurityHeadersMiddleware
 from agent.llm.gemma import GemmaLlamaBackend
 
 # ── Tool-result lazy-load cache ───────────────────────────────────────────────
@@ -66,11 +72,12 @@ _TOOL_RESULT_CACHE: dict[str, str] = {}
 _TOOL_RESULT_LOCK = threading.Lock()
 _TOOL_RESULT_CAP  = 5000
 
-# ── Concurrency controls ──────────────────────────────────────────────────────
-# Limits simultaneous active research sessions so the llama-server queue does
-# not become saturated.  Clients that exceed this see a "queued" SSE
-# event and wait until a slot opens.
-_RESEARCH_SEM = threading.Semaphore(5)
+_RESEARCH_SLOTS = ResearchRunSlots(max_running=config.WEB_RESEARCH_MAX_CONCURRENT_RUNS)
+_LOCAL_LLM_ASK_SLOTS = threading.BoundedSemaphore(config.WEB_LOCAL_LLM_MAX_CONCURRENT_ASKS)
+_SENTINEL = object()
+_KEEP_ALIVE = object()
+BUSY_MESSAGE = "השרת עמוס כרגע. נסו שוב בעוד כמה דקות."
+STOPPED_MESSAGE = "הריצה הופסקה כי החיבור לדפדפן נותק."
 
 # ── Input validators ──────────────────────────────────────────────────────────
 _UUID_RE     = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
@@ -93,6 +100,15 @@ def _ok_ref_id(rid: str) -> bool:
     return bool(_REF_ID_RE.fullmatch(rid))
 
 
+def _ok_numeric_id(value: str) -> bool:
+    """ASCII digits only: str.isdigit() also accepts '²' and Arabic-Indic digits."""
+    return value.isascii() and value.isdigit() and len(value) <= config.API_MAX_ID_DIGITS
+
+
+def _busy_response() -> JSONResponse:
+    return JSONResponse({"error": "busy", "message": BUSY_MESSAGE}, status_code=503)
+
+
 # ── Meeting info cache (meeting_id → {date, committee}) ───────────────────────
 _MEETING_INFO_CACHE: dict[str, dict] = {}
 
@@ -105,7 +121,7 @@ def _get_meeting_info(meeting_id: str) -> dict:
     Result is cached in-process.  Returns {} if not found.
     """
     import glob as _glob
-    if not meeting_id.isdigit():
+    if not _ok_numeric_id(meeting_id):
         return {}
     if meeting_id in _MEETING_INFO_CACHE:
         return _MEETING_INFO_CACHE[meeting_id]
@@ -269,7 +285,7 @@ from retrieval import knesset_db_store as store
 from retrieval.lemmatize import lemmatize
 from utils.meeting import get_transcript_path_from_id
 from utils.speech import get_mk_speeches_in_committee
-from utils.tools import _expand_match, _quote_match
+from utils.tools import _connect_for_query, _expand_match, _quote_match
 
 
 # ── Summary helpers (knesset.db) ──────────────────────────────────────────────
@@ -282,7 +298,7 @@ def _load_meeting_summary(meeting_id: str) -> dict | None:
     if not store.exists():
         print(f"[web] {store.db_path()} not built; run scripts/build_knesset_db.py", flush=True)
         return None
-    conn = store.connect()
+    conn = _connect_for_query()
     try:
         meeting = store.get_meeting(conn, meeting_id)
         if meeting is None or meeting.get("is_protocol") is None:
@@ -341,6 +357,7 @@ async def lifespan(app: FastAPI):
     import web.settings as settings
 
     forget_server_gemini_keys()
+    use_public_api_http_settings()
     print("[web] Loading machine …", flush=True)
     machine = StateMachine(settings.MACHINE_PATH)
     print(f"[web]   Machine: '{machine.name}' (v{machine.version})", flush=True)
@@ -390,7 +407,7 @@ async def lifespan(app: FastAPI):
     # ── Sessions dir ─────────────────────────────────────────────────────────
     from web.session import cleanup_stale_sessions
     settings.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-    cleanup_stale_sessions(settings.SESSIONS_DIR)
+    cleanup_stale_sessions(settings.SESSIONS_DIR, max_age_hours=config.WEB_SESSION_MAX_AGE_HOURS)
 
     # ── Store all state on app ────────────────────────────────────────────────
     app.state.machine       = machine
@@ -414,12 +431,13 @@ _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 rate_limiter = SlidingWindowRateLimiter()
 app.add_middleware(RateLimitMiddleware, limiter=rate_limiter)
+app.add_middleware(RequestBodyLimitMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 app.include_router(api_router)
 install_error_handlers(app)
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
-_MK_PHOTOS_DIR = config.MK_PHOTOS_DIR
 _MK_PHOTO_EXTS = (".jpeg", ".jpg", ".png")
 
 # Honorific / role prefixes stripped before photo lookup. Mirrors browser.js
@@ -430,21 +448,24 @@ _HONORIFIC_RE = re.compile(
     r'^(ח"כ|ח\'כ|היו"ר|יו"ר|מ"מ\s+היו"ר|מ"מ|סגן\s+השר|סגנית\s+השרה|השרה|השר|שרה|שר|מנכ"ל|ד"ר|פרופ\'?)\s+'
 )
 
-# Lazy singleton fuzzy index over mks.db (label = canonical MK name, which
-# matches the photo filenames). Loading scans the whole table, so cache it —
-# the reading tab fires one /mk-photo request per distinct speaker.
+# Lazy singleton fuzzy index over the knesset.db mks (label = canonical MK name, which matches the
+# photo filenames). Loading scans the whole table, so it is built once per process.
 _mk_fuzzy_index = None
 _mk_fuzzy_loaded = False
-_mk_photo_cache: dict[str, "Path | None"] = {}
+_mk_fuzzy_lock = threading.Lock()
+
+_mk_photo_cache: "OrderedDict[str, Path | None]" = OrderedDict()
+_mk_photo_listing: tuple[Path | None, dict[str, Path]] = (None, {})
+_mk_photo_lock = threading.Lock()
 
 
 def _get_mk_fuzzy_index():
     global _mk_fuzzy_index, _mk_fuzzy_loaded
-    if _mk_fuzzy_loaded:
+    with _mk_fuzzy_lock:
+        if not _mk_fuzzy_loaded:
+            _mk_fuzzy_index = _load_mk_fuzzy_index(25)
+            _mk_fuzzy_loaded = True
         return _mk_fuzzy_index
-    _mk_fuzzy_loaded = True
-    _mk_fuzzy_index = _load_mk_fuzzy_index(25)
-    return _mk_fuzzy_index
 
 
 def _load_mk_fuzzy_index(knesset_num: int):
@@ -463,23 +484,47 @@ def _load_mk_fuzzy_index(knesset_num: int):
         return None
 
 
+def _mk_photo_paths_by_stem() -> dict[str, Path]:
+    """Allowlist of servable photos: file stem → path, listed from config.MK_PHOTOS_DIR (never built
+    from request text). Re-listed, and the resolution cache dropped, when the directory setting changes."""
+    global _mk_photo_listing
+    photos_dir = Path(config.MK_PHOTOS_DIR)
+    with _mk_photo_lock:
+        listed_dir, paths_by_stem = _mk_photo_listing
+        if listed_dir == photos_dir:
+            return paths_by_stem
+        paths_by_stem = {}
+        try:
+            for ext in reversed(_MK_PHOTO_EXTS):
+                for path in photos_dir.glob(f"*{ext}"):
+                    if path.is_file():
+                        paths_by_stem[path.stem] = path
+        except OSError as exc:
+            print(f"[mk_photo] cannot list {photos_dir}: {exc}", flush=True)
+        _mk_photo_listing = (photos_dir, paths_by_stem)
+        _mk_photo_cache.clear()
+        return paths_by_stem
+
+
 def _photo_file_for(stem: str) -> "Path | None":
-    stem = stem.strip()
-    if not stem:
-        return None
-    for ext in _MK_PHOTO_EXTS:
-        p = _MK_PHOTOS_DIR / f"{stem}{ext}"
-        if p.exists():
-            return p
-    return None
+    return _mk_photo_paths_by_stem().get(stem.strip())
+
+
+def _remember_photo(name: str, result: "Path | None") -> None:
+    with _mk_photo_lock:
+        _mk_photo_cache[name] = result
+        while len(_mk_photo_cache) > config.WEB_MK_PHOTO_CACHE_MAX_ENTRIES:
+            _mk_photo_cache.popitem(last=False)
 
 
 def _resolve_mk_photo(name: str) -> "Path | None":
     """Resolve a (possibly honorific-prefixed / variant) speaker name to a
     photo file: exact match → prefix-stripped exact match → fuzzy resolve to
     a canonical MK name. Returns None for non-MKs (guests, section headers)."""
-    if name in _mk_photo_cache:
-        return _mk_photo_cache[name]
+    _mk_photo_paths_by_stem()
+    with _mk_photo_lock:
+        if name in _mk_photo_cache:
+            return _mk_photo_cache[name]
 
     cleaned = _HONORIFIC_RE.sub("", name.strip()).strip()
     result = _photo_file_for(name) or _photo_file_for(cleaned)
@@ -497,26 +542,29 @@ def _resolve_mk_photo(name: str) -> "Path | None":
             if matches:
                 result = _photo_file_for(matches[0]["label"])
 
-    _mk_photo_cache[name] = result
+    _remember_photo(name, result)
     return result
 
 
 @app.get("/mk-photo/{name}")
-async def mk_photo(name: str):
+def mk_photo(name: str):
+    if len(name) > config.WEB_MAX_MK_PHOTO_NAME_CHARS:
+        return JSONResponse({}, status_code=404)
     p = _resolve_mk_photo(name)
     if p is not None:
-        return FileResponse(str(p), media_type=f"image/{p.suffix.lstrip('.')}")
+        return FileResponse(str(p), media_type=f"image/{p.suffix.lstrip('.').replace('jpg', 'jpeg')}",
+                            headers={"Cache-Control": "public, max-age=86400"})
     return JSONResponse({}, status_code=404)
 
 
 # ── Models ────────────────────────────────────────────────────────────────────
 
 class ResearchStartRequest(BaseModel):
-    question: str
+    question: str = Field(max_length=_MAX_QUESTION)
 
 
 class ResearchRespondRequest(BaseModel):
-    output_var: str
+    output_var: str = Field(max_length=config.WEB_MAX_OUTPUT_VAR_CHARS)
     value: Any
 
 
@@ -524,7 +572,7 @@ class ResearchRespondRequest(BaseModel):
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request, "index.html")
 
 
 @app.get("/favicon.ico", include_in_schema=False)
@@ -539,28 +587,259 @@ async def help_content():
 
 
 @app.get("/api/health")
-async def health(request: Request):
+def health(request: Request):
     db_row_counts: dict[str, int] = {}
     if store.exists():
-        def _count_rows():
-            conn = store.connect()
+        try:
+            conn = store.connect(interrupt_after_seconds=config.DB_QUERY_TIMEOUT_SECONDS)
             try:
-                return store.table_row_counts(conn)
+                db_row_counts = store.table_row_counts(conn)
             finally:
                 conn.close()
-        try:
-            db_row_counts = await asyncio.get_event_loop().run_in_executor(None, _count_rows)
         except Exception as exc:
-            print(f"[web] health: row count failed: {exc}", flush=True)
+            print(f"[web] health: row count failed for {store.db_path()}: {exc}", flush=True)
+    else:
+        print(f"[web] health: {store.db_path()} missing", flush=True)
     return {
         "status":  "ok",
         "machine": request.app.state.machine.name,
-        "db_path": str(store.db_path()),
         "db":      db_row_counts,
     }
 
 
 # ── Research session routes ───────────────────────────────────────────────────
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def _sse_response(events) -> StreamingResponse:
+    return StreamingResponse(
+        events,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control":     "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+async def _next_worker_item(queue: asyncio.Queue):
+    """Next item a worker thread emitted, or _KEEP_ALIVE after WEB_SSE_KEEPALIVE_SECONDS of silence."""
+    try:
+        return await asyncio.wait_for(queue.get(), timeout=config.WEB_SSE_KEEPALIVE_SECONDS)
+    except asyncio.TimeoutError:
+        return _KEEP_ALIVE
+
+
+def _thread_safe_emitter(queue: asyncio.Queue) -> Callable[[object], None]:
+    loop = asyncio.get_running_loop()
+    return lambda item: loop.call_soon_threadsafe(queue.put_nowait, item)
+
+
+# ── Research runs ─────────────────────────────────────────────────────────────
+
+@dataclass
+class ResearchRun:
+    """One MachineRunner run executed by run_research in a worker thread; the SSE generator sets
+    stop_requested when its client goes away."""
+    session_id: str
+    question: str
+    created_at: str
+    sessions_dir: Path
+    machine: Any
+    backend: Any
+    tool_registry: Any
+    gemini_api_key: str | None
+    resume: dict | None
+    user_response: dict | None
+    workspace_data: dict | None
+    install_llm_event_sink: bool
+    log_prefix: str
+    emit: Callable[[object], None]
+    stop_requested: threading.Event
+    slots: ResearchRunSlots
+
+
+def run_research(run: ResearchRun) -> None:
+    """Wait for a research slot, run the machine and relay its events through run.emit. The session
+    file is saved before the event that ends the run is emitted, so a client that reacts to
+    user_input_required / done finds it on disk; a run stopped without an outcome is saved as an error."""
+    from web.session import ResearchSession, save_session
+
+    final_state_saved = False
+
+    def save_final_state(status: str, **fields) -> None:
+        nonlocal final_state_saved
+        save_session(ResearchSession(
+            session_id=run.session_id, status=status, original_question=run.question,
+            created_at=run.created_at, updated_at=_now_iso(), **fields,
+        ), run.sessions_dir)
+        final_state_saved = True
+
+    if run.install_llm_event_sink:
+        from agent.subgraph.llm_bridge import set_thread_event_sink
+        set_thread_event_sink(
+            lambda ev: run.emit(("subgraph_event", {"kind": ev.kind, "name": ev.name, "payload": ev.payload}))
+        )
+
+    if not run.slots.acquire(run.stop_requested, on_queued=lambda: run.emit(("queued", {}))):
+        message = STOPPED_MESSAGE if run.stop_requested.is_set() else BUSY_MESSAGE
+        print(f"[{run.log_prefix}] session {run.session_id} got no research slot: {message}", flush=True)
+        try:
+            save_final_state("error", error=message)
+        except Exception as exc:
+            print(f"[{run.log_prefix}] saving the no-slot session failed: {exc}", flush=True)
+        run.emit(("error", message))
+        run.emit(_SENTINEL)
+        return
+
+    runner_events = None
+    key_guarded_events = None
+    final_token = ""
+    event_log: list[dict] = []  # selective event log for reconnect replay
+    try:
+        runner = MachineRunner(
+            machine        = run.machine,
+            backend        = run.backend,
+            tool_registry  = run.tool_registry,
+            gemini_api_key = run.gemini_api_key,
+        )
+        runner_events = runner.run_stream(question=run.question, resume=run.resume, user_response=run.user_response)
+        key_guarded_events = stop_on_rejected_gemini_key(runner_events)
+        for event in key_guarded_events:
+            if run.stop_requested.is_set():
+                print(f"[{run.log_prefix}] client of session {run.session_id} is gone; stopping the run", flush=True)
+                break
+            _t, _d = event
+            if _t == "token":
+                final_token += _d
+            elif _t == "done":
+                save_final_state("done", final_answer=final_token, event_log=list(event_log) or None)
+            elif _t == "error":
+                save_final_state("error", error=str(_d))
+            elif _t == "user_input_required":
+                save_final_state("awaiting_user", machine_checkpoint=_d.get("checkpoint", {}),
+                                 workspace_data=run.workspace_data)
+            elif _t == "node_start":
+                if isinstance(_d, dict) and _d.get("subgraph"):
+                    event_log.append({"type": "node_start", "data": _d})
+            elif _t == "node_result":
+                _d = _strip_footnote_fulls(_d, registry=run.tool_registry)
+                event = (_t, _d)
+                if isinstance(_d, dict) and _d.get("subgraph"):
+                    event_log.append({"type": "node_result", "data": _d})
+            elif _t == "subgraph_event":
+                _stripped = _strip_tool_result_fulls(_d)
+                _d = {
+                    "type":    "subgraph_event",
+                    "kind":    _stripped.get("kind"),
+                    "name":    _stripped.get("name"),
+                    "payload": _stripped.get("payload", {}),
+                }
+                event = (_t, _d)
+                _k, _n = _d["kind"], _d["name"]
+                if _k == "done" or (_k == "hook" and _n in ("step_completed", "synthesizer_completed")):
+                    event_log.append({"type": "subgraph_event", "data": _d})
+            run.emit(event)
+    except Exception as exc:
+        _err = str(exc) + "\n" + traceback.format_exc()
+        print(f"[{run.log_prefix}] run of session {run.session_id} failed: {exc}", flush=True)
+        try:
+            save_final_state("error", error=_err)
+        except Exception as save_exc:
+            print(f"[{run.log_prefix}] saving the failed session failed: {save_exc}", flush=True)
+        run.emit(("error", _err))
+    finally:
+        for events in (key_guarded_events, runner_events):
+            if events is None:
+                continue
+            try:
+                events.close()
+            except Exception as exc:
+                print(f"[{run.log_prefix}] closing the run's event stream failed: {exc}", flush=True)
+        run.slots.release()
+        if not final_state_saved:
+            try:
+                save_final_state("error", error=STOPPED_MESSAGE)
+            except Exception as exc:
+                print(f"[{run.log_prefix}] saving the stopped session failed: {exc}", flush=True)
+        run.emit(_SENTINEL)
+
+
+def _start_research_thread(request: Request, queue: asyncio.Queue, **run_fields) -> ResearchRun:
+    run = ResearchRun(
+        sessions_dir   = request.app.state.sessions_dir,
+        machine        = request.app.state.machine,
+        backend        = request.app.state.backend,
+        tool_registry  = request.app.state.tool_registry,
+        emit           = _thread_safe_emitter(queue),
+        stop_requested = threading.Event(),
+        slots          = _RESEARCH_SLOTS,
+        **run_fields,
+    )
+    threading.Thread(target=run_research, args=(run,), daemon=True).start()
+    return run
+
+
+async def _research_sse_events(run: ResearchRun, queue: asyncio.Queue, announce_session_id: bool):
+    try:
+        if announce_session_id:
+            yield _sse("session_id", {"session_id": run.session_id})
+        while True:
+            item = await _next_worker_item(queue)
+            if item is _KEEP_ALIVE:
+                yield ": keep-alive\n\n"
+                continue
+            if item is _SENTINEL:
+                break
+            ev_type, ev_data = item
+
+            if ev_type == "token":
+                yield _sse("token", {"text": ev_data})
+
+            elif ev_type == "status":
+                yield _sse("status", {"msg": ev_data})
+
+            elif ev_type in ("node_start", "node_result", "subgraph_event"):
+                yield _sse(ev_type, ev_data)
+
+            elif ev_type == "thinking_token":
+                yield _sse("thinking_token", {"text": ev_data})
+
+            elif ev_type in ("queued", "gemini_key_invalid"):
+                yield _sse(ev_type, {})
+
+            elif ev_type == "user_input_required":
+                ui_event = {k: v for k, v in ev_data.items() if k != "checkpoint"}
+                ui_event["session_id"] = run.session_id
+                yield _sse("user_input_required", ui_event)
+                yield _sse("user_paused", {"session_id": run.session_id})
+                return
+
+            elif ev_type == "done":
+                yield _sse("done", {})
+                return
+
+            elif ev_type == "error":
+                yield _sse("error", {"error": ev_data})
+                return
+
+    except Exception as exc:
+        err = str(exc) + "\n" + traceback.format_exc()
+        yield _sse("error", {"error": err})
+    finally:
+        run.stop_requested.set()
+
+
+def _save_new_running_session(session_id: str, question: str, created_at: str, sessions_dir: Path) -> None:
+    from web.session import ResearchSession, maybe_cleanup_stale_sessions, save_session
+    maybe_cleanup_stale_sessions(sessions_dir)
+    save_session(ResearchSession(
+        session_id=session_id, status="running",
+        original_question=question, created_at=created_at, updated_at=created_at,
+    ), sessions_dir)
+
 
 @app.post("/api/research/start")
 async def research_start(req: ResearchStartRequest, request: Request):
@@ -571,8 +850,6 @@ async def research_start(req: ResearchStartRequest, request: Request):
     If the machine pauses at a ``user_input`` node, emits ``user_input_required``
     followed by ``user_paused`` and then closes the stream.
     """
-    from web.session import ResearchSession, save_session
-
     question = req.question.strip()
     if not question:
         return JSONResponse({"error": "שאלה ריקה"}, status_code=400)
@@ -582,241 +859,21 @@ async def research_start(req: ResearchStartRequest, request: Request):
     gemini_api_key, gemini_key_error = await asyncio.to_thread(visitor_gemini_key_or_error, request)
     if gemini_key_error is not None:
         return gemini_key_error
-
-    machine       = request.app.state.machine
-    backend       = request.app.state.backend
-    tool_registry = request.app.state.tool_registry
-    sessions_dir  = request.app.state.sessions_dir
+    if not _RESEARCH_SLOTS.can_admit():
+        return _busy_response()
 
     session_id = str(uuid.uuid4())
-
-    async def generate():
-        from datetime import datetime, timezone
-
-        def _now():
-            return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-
-        # First event: session_id
-        yield _sse("session_id", {"session_id": session_id})
-
-        # Persist "running" status immediately — reconnect endpoint uses this
-        # to signal still-in-progress to clients that reconnect mid-execution.
-        _run_ts = _now()
-        save_session(ResearchSession(
-            session_id=session_id, status="running",
-            original_question=question, created_at=_run_ts, updated_at=_run_ts,
-        ), sessions_dir)
-
-        loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
-        queue: asyncio.Queue = asyncio.Queue()
-        _SENTINEL = object()
-        _event_log: list[dict] = []  # selective event log for reconnect replay
-
-        def _run_sync():
-            from agent.subgraph.llm_bridge import set_thread_event_sink
-            set_thread_event_sink(
-                lambda ev: loop.call_soon_threadsafe(
-                    queue.put_nowait,
-                    ("subgraph_event", {"kind": ev.kind, "name": ev.name, "payload": ev.payload}),
-                )
-            )
-            if not _RESEARCH_SEM.acquire(blocking=False):
-                loop.call_soon_threadsafe(queue.put_nowait, ("queued", {}))
-                _RESEARCH_SEM.acquire()
-            _final_token = ""
-            _outcome: tuple | None = None  # ('done', answer) | ('error', msg) | ('user_paused',)
-            try:
-                runner = MachineRunner(
-                    machine        = machine,
-                    backend        = backend,
-                    tool_registry  = tool_registry,
-                    gemini_api_key = gemini_api_key,
-                )
-                for event in stop_on_rejected_gemini_key(runner.run_stream(question)):
-                    _t, _d = event
-                    if _t == "token":
-                        _final_token += _d
-                    elif _t == "done":
-                        _outcome = ("done", _final_token)
-                    elif _t == "error":
-                        _outcome = ("error", _d)
-                    elif _t == "user_input_required":
-                        _outcome = ("user_paused", _d)  # store checkpoint so finally can save it
-                    elif _t == "node_start":
-                        if isinstance(_d, dict) and _d.get("subgraph"):
-                            _event_log.append({"type": "node_start", "data": _d})
-                    elif _t == "node_result":
-                        _d = _strip_footnote_fulls(_d, registry=tool_registry)
-                        event = (_t, _d)
-                        if isinstance(_d, dict) and _d.get("subgraph"):
-                            _event_log.append({"type": "node_result", "data": _d})
-                    elif _t == "subgraph_event":
-                        _stripped = _strip_tool_result_fulls(_d)
-                        _d = {
-                            "type":    "subgraph_event",
-                            "kind":    _stripped.get("kind"),
-                            "name":    _stripped.get("name"),
-                            "payload": _stripped.get("payload", {}),
-                        }
-                        event = (_t, _d)
-                        _k, _n = _d["kind"], _d["name"]
-                        if _k == "done" or (_k == "hook" and _n in ("step_completed", "synthesizer_completed")):
-                            _event_log.append({"type": "subgraph_event", "data": _d})
-                    loop.call_soon_threadsafe(queue.put_nowait, event)
-            except Exception as exc:
-                _err = str(exc) + "\n" + traceback.format_exc()
-                loop.call_soon_threadsafe(queue.put_nowait, ("error", _err))
-                _outcome = ("error", _err)
-            finally:
-                _RESEARCH_SEM.release()
-                loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
-                # Safety net: generate() may be cancelled by client disconnect.
-                # _event_log is complete here (built above), so the saved session
-                # has full footnotes/citations for reconnect replay.
-                if not _outcome:
-                    pass
-                elif _outcome[0] == "user_paused":
-                    # Client disconnected while agent reached a user-input node.
-                    # Save awaiting_user so the session can be resumed on reconnect.
-                    try:
-                        _ts = _now()
-                        save_session(ResearchSession(
-                            session_id=session_id, status="awaiting_user",
-                            original_question=question,
-                            created_at=_run_ts, updated_at=_ts,
-                            machine_checkpoint=_outcome[1],
-                        ), sessions_dir)
-                    except Exception as exc:
-                        print(f"[research_start] safety-net save failed: {exc}", flush=True)
-                else:
-                    try:
-                        _ts = _now()
-                        if _outcome[0] == "done":
-                            save_session(ResearchSession(
-                                session_id=session_id, status="done",
-                                original_question=question,
-                                created_at=_run_ts, updated_at=_ts,
-                                final_answer=_outcome[1],
-                                event_log=list(_event_log) or None,
-                            ), sessions_dir)
-                        else:
-                            save_session(ResearchSession(
-                                session_id=session_id, status="error",
-                                original_question=question,
-                                created_at=_run_ts, updated_at=_ts,
-                                error=str(_outcome[1]),
-                            ), sessions_dir)
-                    except Exception as exc:
-                        print(f"[research_start] safety-net save failed: {exc}", flush=True)
-
-        thread = threading.Thread(target=_run_sync, daemon=True)
-        thread.start()
-
-        created_at  = _now()
-        final_token = ""
-
-        try:
-            while True:
-                try:
-                    item = await asyncio.wait_for(queue.get(), timeout=15.0)
-                except asyncio.TimeoutError:
-                    yield ": keep-alive\n\n"
-                    continue
-                if item is _SENTINEL:
-                    break
-                ev_type, ev_data = item
-
-                if ev_type == "token":
-                    final_token += ev_data
-                    yield _sse("token", {"text": ev_data})
-
-                elif ev_type == "status":
-                    yield _sse("status", {"msg": ev_data})
-
-                elif ev_type == "node_start":
-                    yield _sse("node_start", ev_data)
-
-                elif ev_type == "thinking_token":
-                    yield _sse("thinking_token", {"text": ev_data})
-
-                elif ev_type == "node_result":
-                    yield _sse("node_result", ev_data)
-
-                elif ev_type == "subgraph_event":
-                    yield _sse("subgraph_event", ev_data)
-
-                elif ev_type == "queued":
-                    yield _sse("queued", {})
-                elif ev_type == "gemini_key_invalid":
-                    yield _sse("gemini_key_invalid", {})
-
-                elif ev_type == "user_input_required":
-                    # ev_data contains the full payload including "checkpoint"
-                    checkpoint   = ev_data.get("checkpoint", {})
-                    pending_ui   = checkpoint.get("pending_ui_event", {})
-
-                    session = ResearchSession(
-                        session_id          = session_id,
-                        status              = "awaiting_user",
-                        original_question   = question,
-                        created_at          = created_at,
-                        updated_at          = _now(),
-                        machine_checkpoint  = checkpoint,
-                        final_answer        = None,
-                        error               = None,
-                    )
-                    save_session(session, sessions_dir)
-
-                    # Emit ui event without the internal "checkpoint" key
-                    ui_event = {k: v for k, v in ev_data.items() if k != "checkpoint"}
-                    ui_event["session_id"] = session_id
-                    yield _sse("user_input_required", ui_event)
-                    yield _sse("user_paused", {"session_id": session_id})
-                    return  # close stream
-
-                elif ev_type == "done":
-                    session = ResearchSession(
-                        session_id          = session_id,
-                        status              = "done",
-                        original_question   = question,
-                        created_at          = created_at,
-                        updated_at          = _now(),
-                        machine_checkpoint  = None,
-                        final_answer        = final_token,
-                        error               = None,
-                        event_log           = _event_log or None,
-                    )
-                    save_session(session, sessions_dir)
-                    yield _sse("done", {})
-                    return
-
-                elif ev_type == "error":
-                    session = ResearchSession(
-                        session_id          = session_id,
-                        status              = "error",
-                        original_question   = question,
-                        created_at          = created_at,
-                        updated_at          = _now(),
-                        machine_checkpoint  = None,
-                        final_answer        = None,
-                        error               = ev_data,
-                    )
-                    save_session(session, sessions_dir)
-                    yield _sse("error", {"error": ev_data})
-                    return
-
-        except Exception as exc:
-            err = str(exc) + "\n" + traceback.format_exc()
-            yield _sse("error", {"error": err})
-
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control":     "no-cache",
-            "X-Accel-Buffering": "no",
-        },
+    created_at = _now_iso()
+    await asyncio.to_thread(_save_new_running_session, session_id, question, created_at,
+                            request.app.state.sessions_dir)
+    queue: asyncio.Queue = asyncio.Queue()
+    run = _start_research_thread(
+        request, queue,
+        session_id=session_id, question=question, created_at=created_at, gemini_api_key=gemini_api_key,
+        resume=None, user_response=None, workspace_data=None,
+        install_llm_event_sink=True, log_prefix="research_start",
     )
+    return _sse_response(_research_sse_events(run, queue, announce_session_id=True))
 
 
 @app.get("/api/research/{session_id}/stream")
@@ -834,8 +891,7 @@ async def research_stream(session_id: str, request: Request):
 
     from web.session import load_session
 
-    sessions_dir = request.app.state.sessions_dir
-    session = load_session(session_id, sessions_dir)
+    session = await asyncio.to_thread(load_session, session_id, request.app.state.sessions_dir)
 
     if session is None:
         return JSONResponse({"error": "Session not found"}, status_code=404)
@@ -861,14 +917,46 @@ async def research_stream(session_id: str, request: Request):
         elif session.status == "error":
             yield _sse("error", {"error": session.error or "Unknown error"})
 
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control":     "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return _sse_response(generate())
+
+
+def _same_json_value(a: Any, b: Any) -> bool:
+    """Equality that keeps JSON types apart (in Python True == 1)."""
+    return type(a) is type(b) and a == b
+
+
+def _is_offered_option(pending_ui_event: dict, value: Any) -> bool:
+    offered = [opt.get("value") if isinstance(opt, dict) else opt for opt in pending_ui_event.get("options") or []]
+
+    def is_offered(candidate: Any) -> bool:
+        return any(_same_json_value(candidate, option) for option in offered)
+
+    if pending_ui_event.get("multi_select"):
+        return isinstance(value, list) and 0 < len(value) <= len(offered) and all(is_offered(v) for v in value)
+    return is_offered(value)
+
+
+def _validated_user_response(pending_ui_event: Any, output_var: str, value: Any) -> tuple[dict | None, str | None]:
+    """({"output_var", "value"}, None) for an answer that fits the input the session paused at, else (None, reason).
+    output_var must be the paused node's; value must fit its ui type: an offered option, meeting ids, or a question."""
+    if not isinstance(pending_ui_event, dict):
+        return None, "the session is not waiting for a known input"
+    if output_var != pending_ui_event.get("output_var"):
+        return None, "output_var does not match the input the session is waiting for"
+    ui_type = pending_ui_event.get("ui", "text_input")
+    if ui_type == "option_select":
+        value_is_valid = _is_offered_option(pending_ui_event, value)
+    elif ui_type == "deep_dive":
+        value_is_valid = (isinstance(value, list) and len(value) <= config.WEB_MAX_DEEP_DIVE_MEETINGS
+                          and all(isinstance(v, str) and _ok_numeric_id(v) for v in value))
+    elif ui_type == "text_input":
+        value = value.strip() if isinstance(value, str) else value
+        value_is_valid = isinstance(value, str) and _ok_question(value)
+    else:
+        return None, f"unsupported input type: {str(ui_type)[:40]}"
+    if not value_is_valid:
+        return None, f"value is not valid for this {ui_type} input"
+    return {"output_var": output_var, "value": value}, None
 
 
 @app.post("/api/research/{session_id}/respond")
@@ -888,11 +976,10 @@ async def research_respond(
     if gemini_key_error is not None:
         return gemini_key_error
 
-    from web.session import load_session, save_session, ResearchSession
+    from web.session import load_session, mark_running_if_awaiting_user
 
-    sessions_dir  = request.app.state.sessions_dir
-    session       = load_session(session_id, sessions_dir)
-
+    sessions_dir = request.app.state.sessions_dir
+    session = await asyncio.to_thread(load_session, session_id, sessions_dir)
     if session is None:
         return JSONResponse({"error": "Session not found"}, status_code=404)
     if session.status != "awaiting_user":
@@ -900,226 +987,29 @@ async def research_respond(
             {"error": f"Session is not awaiting user input (status: {session.status})"},
             status_code=409,
         )
+    pending_ui_event = (session.machine_checkpoint or {}).get("pending_ui_event")
+    user_response, invalid_reason = _validated_user_response(pending_ui_event, req.output_var, req.value)
+    if invalid_reason is not None:
+        return JSONResponse({"error": invalid_reason}, status_code=400)
+    if not _RESEARCH_SLOTS.can_admit():
+        return _busy_response()
 
-    machine       = request.app.state.machine
-    backend       = request.app.state.backend
-    tool_registry = request.app.state.tool_registry
+    claimed = await asyncio.to_thread(mark_running_if_awaiting_user, session_id, sessions_dir)
+    if claimed is None:
+        return JSONResponse({"error": "Session is not awaiting user input (already resumed)"}, status_code=409)
 
-    checkpoint = session.machine_checkpoint or {}
-
-    question       = session.original_question
-    user_response  = {"output_var": req.output_var, "value": req.value}
-
-    async def generate():
-        from datetime import datetime, timezone
-
-        def _now():
-            return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-
-        loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
-        queue: asyncio.Queue = asyncio.Queue()
-        _SENTINEL = object()
-        _event_log: list[dict] = []  # selective event log for reconnect replay
-
-        def _run_sync():
-            if not _RESEARCH_SEM.acquire(blocking=False):
-                loop.call_soon_threadsafe(queue.put_nowait, ("queued", {}))
-                _RESEARCH_SEM.acquire()
-            _final_token = ""
-            _outcome: tuple | None = None
-            try:
-                runner = MachineRunner(
-                    machine        = machine,
-                    backend        = backend,
-                    tool_registry  = tool_registry,
-                    gemini_api_key = gemini_api_key,
-                )
-                for event in stop_on_rejected_gemini_key(runner.run_stream(
-                    question      = question,
-                    resume        = checkpoint,
-                    user_response = user_response,
-                )):
-                    _t, _d = event
-                    if _t == "token":
-                        _final_token += _d
-                    elif _t == "done":
-                        _outcome = ("done", _final_token)
-                    elif _t == "error":
-                        _outcome = ("error", _d)
-                    elif _t == "user_input_required":
-                        _outcome = ("user_paused", _d)  # store checkpoint so finally can save it
-                    elif _t == "node_start":
-                        if isinstance(_d, dict) and _d.get("subgraph"):
-                            _event_log.append({"type": "node_start", "data": _d})
-                    elif _t == "node_result":
-                        _d = _strip_footnote_fulls(_d, registry=tool_registry)
-                        event = (_t, _d)
-                        if isinstance(_d, dict) and _d.get("subgraph"):
-                            _event_log.append({"type": "node_result", "data": _d})
-                    elif _t == "subgraph_event":
-                        _stripped = _strip_tool_result_fulls(_d)
-                        _d = {
-                            "type":    "subgraph_event",
-                            "kind":    _stripped.get("kind"),
-                            "name":    _stripped.get("name"),
-                            "payload": _stripped.get("payload", {}),
-                        }
-                        event = (_t, _d)
-                        _k, _n = _d["kind"], _d["name"]
-                        if _k == "done" or (_k == "hook" and _n in ("step_completed", "synthesizer_completed")):
-                            _event_log.append({"type": "subgraph_event", "data": _d})
-                    loop.call_soon_threadsafe(queue.put_nowait, event)
-            except Exception as exc:
-                _err = str(exc) + "\n" + traceback.format_exc()
-                loop.call_soon_threadsafe(queue.put_nowait, ("error", _err))
-                _outcome = ("error", _err)
-            finally:
-                _RESEARCH_SEM.release()
-                loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
-                if not _outcome:
-                    pass
-                elif _outcome[0] == "user_paused":
-                    try:
-                        _ts = _now()
-                        save_session(ResearchSession(
-                            session_id=session_id, status="awaiting_user",
-                            original_question=question,
-                            created_at=session.created_at, updated_at=_ts,
-                            machine_checkpoint=_outcome[1],
-                            workspace_data=session.workspace_data,
-                        ), sessions_dir)
-                    except Exception as exc:
-                        print(f"[research_respond] safety-net save failed: {exc}", flush=True)
-                else:
-                    try:
-                        _ts = _now()
-                        if _outcome[0] == "done":
-                            save_session(ResearchSession(
-                                session_id=session_id, status="done",
-                                original_question=question,
-                                created_at=session.created_at, updated_at=_ts,
-                                final_answer=_outcome[1],
-                                event_log=list(_event_log) or None,
-                            ), sessions_dir)
-                        else:
-                            save_session(ResearchSession(
-                                session_id=session_id, status="error",
-                                original_question=question,
-                                created_at=session.created_at, updated_at=_ts,
-                                error=str(_outcome[1]),
-                            ), sessions_dir)
-                    except Exception as exc:
-                        print(f"[research_respond] safety-net save failed: {exc}", flush=True)
-
-        thread = threading.Thread(target=_run_sync, daemon=True)
-        thread.start()
-
-        final_token = ""
-
-        try:
-            while True:
-                try:
-                    item = await asyncio.wait_for(queue.get(), timeout=15.0)
-                except asyncio.TimeoutError:
-                    yield ": keep-alive\n\n"
-                    continue
-                if item is _SENTINEL:
-                    break
-                ev_type, ev_data = item
-
-                if ev_type == "token":
-                    final_token += ev_data
-                    yield _sse("token", {"text": ev_data})
-
-                elif ev_type == "status":
-                    yield _sse("status", {"msg": ev_data})
-
-                elif ev_type == "node_start":
-                    yield _sse("node_start", ev_data)
-
-                elif ev_type == "thinking_token":
-                    yield _sse("thinking_token", {"text": ev_data})
-
-                elif ev_type == "node_result":
-                    yield _sse("node_result", ev_data)
-
-                elif ev_type == "subgraph_event":
-                    yield _sse("subgraph_event", ev_data)
-
-                elif ev_type == "queued":
-                    yield _sse("queued", {})
-                elif ev_type == "gemini_key_invalid":
-                    yield _sse("gemini_key_invalid", {})
-
-                elif ev_type == "user_input_required":
-                    new_checkpoint = ev_data.get("checkpoint", {})
-
-                    updated = ResearchSession(
-                        session_id          = session_id,
-                        status              = "awaiting_user",
-                        original_question   = question,
-                        created_at          = session.created_at,
-                        updated_at          = _now(),
-                        machine_checkpoint  = new_checkpoint,
-                        workspace_data      = session.workspace_data,
-                        final_answer        = None,
-                        error               = None,
-                    )
-                    save_session(updated, sessions_dir)
-
-                    ui_event = {k: v for k, v in ev_data.items() if k != "checkpoint"}
-                    ui_event["session_id"] = session_id
-                    yield _sse("user_input_required", ui_event)
-                    yield _sse("user_paused", {"session_id": session_id})
-                    return
-
-                elif ev_type == "done":
-                    updated = ResearchSession(
-                        session_id          = session_id,
-                        status              = "done",
-                        original_question   = question,
-                        created_at          = session.created_at,
-                        updated_at          = _now(),
-                        machine_checkpoint  = None,
-                        final_answer        = final_token,
-                        error               = None,
-                        event_log           = _event_log or None,
-                    )
-                    save_session(updated, sessions_dir)
-                    yield _sse("done", {})
-                    return
-
-                elif ev_type == "error":
-                    updated = ResearchSession(
-                        session_id          = session_id,
-                        status              = "error",
-                        original_question   = question,
-                        created_at          = session.created_at,
-                        updated_at          = _now(),
-                        machine_checkpoint  = None,
-                        final_answer        = None,
-                        error               = ev_data,
-                    )
-                    save_session(updated, sessions_dir)
-                    yield _sse("error", {"error": ev_data})
-                    return
-
-        except Exception as exc:
-            err = str(exc) + "\n" + traceback.format_exc()
-            yield _sse("error", {"error": err})
-
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control":     "no-cache",
-            "X-Accel-Buffering": "no",
-        },
+    queue: asyncio.Queue = asyncio.Queue()
+    run = _start_research_thread(
+        request, queue,
+        session_id=session_id, question=claimed.original_question, created_at=claimed.created_at,
+        gemini_api_key=gemini_api_key, resume=claimed.machine_checkpoint or {}, user_response=user_response,
+        workspace_data=claimed.workspace_data, install_llm_event_sink=False, log_prefix="research_respond",
     )
+    return _sse_response(_research_sse_events(run, queue, announce_session_id=False))
 
 
 @app.get("/api/research/{session_id}/tool_result/{ref_id}")
-async def get_tool_result(session_id: str, ref_id: str):
+def get_tool_result(session_id: str, ref_id: str):
     """Return the full text for a lazily-loaded tool result panel."""
     if not _ok_session_id(session_id) or not _ok_ref_id(ref_id):
         return JSONResponse({"error": "Invalid parameters"}, status_code=400)
@@ -1130,6 +1020,12 @@ async def get_tool_result(session_id: str, ref_id: str):
 
 
 # ── Browse (reading tab) ──────────────────────────────────────────────────────
+
+BROWSE_SORTS = ("relevance", "date")
+DB_UNAVAILABLE_MESSAGE = "מסד הנתונים אינו זמין כרגע"
+QUERY_TIMEOUT_MESSAGE = "החיפוש ארך זמן רב מדי: נסו מילות מפתח ממוקדות יותר או הוסיפו סינון (ועדה, תאריכים, חברי כנסת)"
+META_UNAVAILABLE_MESSAGE = "רשימות הסינון אינן זמינות כרגע. נסו שוב בעוד רגע."
+
 
 class BrowseFilterRequest(BaseModel):
     committees: list[str] = []
@@ -1147,26 +1043,71 @@ class BrowseSearchRequest(BaseModel):
     filters: BrowseFilterRequest | None = None
 
 
-@app.get("/api/meta")
-async def get_meta():
-    """Return committees, MKs, and parties for filter dropdowns."""
-    from utils.knesset_db import get_all_committees, get_all_mks, get_all_parties
-    loop = asyncio.get_event_loop()
-    committees, mks, parties = await asyncio.gather(
-        loop.run_in_executor(None, lambda: get_all_committees(25)),
-        loop.run_in_executor(None, lambda: get_all_mks(25)),
-        loop.run_in_executor(None, lambda: get_all_parties(25)),
-    )
-    def _mk_name(m: dict) -> str:
-        first = (m.get("mk_individual_first_name") or "").strip()
-        last  = (m.get("mk_individual_name")       or "").strip()
-        return f"{first} {last}".strip() or last or first
+class _QueryTimedOut(Exception):
+    pass
 
-    return {
-        "committees": [c["Name"] for c in committees],
-        "mks":        sorted({_mk_name(m) for m in mks if _mk_name(m)}),
-        "parties":    [p["party"] for p in parties],
-    }
+
+def _validated_browse_filters(filters: BrowseFilterRequest | None) -> BrowseFilterRequest:
+    """The /v1 caps on list sizes, name lengths and date formats; raises ApiInputError (→ 400)."""
+    filters = filters or BrowseFilterRequest()
+
+    def names(values: list[str], field_name: str) -> list[str]:
+        cleaned = (valid.name_filter(v, field_name) for v in valid.list_param(values, field_name))
+        return [name for name in cleaned if name]
+
+    return BrowseFilterRequest(
+        committees=names(filters.committees, "committees"),
+        mks=names(filters.mks, "mks"),
+        parties=names(filters.parties, "parties"),
+        guest=valid.name_filter(filters.guest, "guest"),
+        date_from=valid.iso_date(filters.date_from, "date_from"),
+        date_to=valid.iso_date(filters.date_to, "date_to"),
+    )
+
+
+_meta_cache: dict[str, Any] = {}
+_meta_lock = threading.Lock()
+
+
+def forget_meta_cache() -> None:
+    with _meta_lock:
+        _meta_cache.clear()
+
+
+def _meta_payload() -> dict:
+    """Committees, MKs and parties for the filter dropdowns, cached per process for WEB_META_CACHE_SECONDS
+    (only successful answers are cached)."""
+    from utils import knesset_db
+
+    with _meta_lock:
+        if _meta_cache and _meta_cache["expires_monotonic"] > time.monotonic():
+            return _meta_cache["payload"]
+        committees = knesset_db.get_all_committees(25)
+        mks = knesset_db.get_all_mks(25)
+        parties = knesset_db.get_all_parties(25)
+
+        def _mk_name(m: dict) -> str:
+            first = (m.get("mk_individual_first_name") or "").strip()
+            last  = (m.get("mk_individual_name")       or "").strip()
+            return f"{first} {last}".strip() or last or first
+
+        payload = {
+            "committees": [c["Name"] for c in committees],
+            "mks":        sorted({_mk_name(m) for m in mks if _mk_name(m)}),
+            "parties":    [p["party"] for p in parties],
+        }
+        _meta_cache.update(payload=payload, expires_monotonic=time.monotonic() + config.WEB_META_CACHE_SECONDS)
+        return payload
+
+
+@app.get("/api/meta")
+def get_meta():
+    """Return committees, MKs, and parties for filter dropdowns."""
+    try:
+        return _meta_payload()
+    except Exception as exc:
+        print(f"[meta] loading filter lists failed: {type(exc).__name__}: {exc}", flush=True)
+        return JSONResponse({"error": META_UNAVAILABLE_MESSAGE}, status_code=503)
 
 
 def _speech_match_expression(query: str) -> str:
@@ -1187,7 +1128,7 @@ def _speech_word_matches(query: str) -> list[str]:
     return [m for m in (_expand_match(w, "speeches_fts") or _quote_match(w) for w in content_words) if m.strip()]
 
 
-def _resolve_participant_filters(filters: BrowseFilterRequest, knesset_num: int) -> tuple[list[str], str | None]:
+def _resolve_participant_filters(filters: BrowseFilterRequest) -> tuple[list[str], str | None]:
     """
     (mk_ids, guest_name) for the MK-name and guest filters. The guest is a
     free-text name: when it does not resolve to an MK it is matched as a
@@ -1196,7 +1137,7 @@ def _resolve_participant_filters(filters: BrowseFilterRequest, knesset_num: int)
     names = list(filters.mks or []) + ([filters.guest] if filters.guest else [])
     if not names:
         return [], None
-    fuzzy_mk_index = _load_mk_fuzzy_index(knesset_num)
+    fuzzy_mk_index = _get_mk_fuzzy_index()
     if fuzzy_mk_index is None:
         print(f"[browse_search] cannot resolve MK/guest names to mk_id; participant filter skipped for {names}",
               flush=True)
@@ -1217,17 +1158,16 @@ def _resolve_participant_filters(filters: BrowseFilterRequest, knesset_num: int)
     return mk_ids, guest_name
 
 
-def _browse_search_meetings(req: BrowseSearchRequest, top_k: int, knesset_num: int) -> list[dict]:
+def _browse_search_meetings(query: str, sort: str, filters: BrowseFilterRequest, top_k: int,
+                            knesset_num: int) -> list[dict]:
     """
     Candidate meetings from the structural filters, then either FTS over their
     speeches (query given; one row per meeting, best speech as excerpt, score
     normalized so the best meeting is 1.0) or the newest candidates (empty query;
-    first summary topic as excerpt, score 0).
+    first summary topic as excerpt, score 0). Raises _QueryTimedOut past DB_QUERY_TIMEOUT_SECONDS.
     """
-    query = req.query.strip()
-    filters = req.filters or BrowseFilterRequest()
-    mk_ids, guest_name = _resolve_participant_filters(filters, knesset_num)
-    conn = store.connect()
+    mk_ids, guest_name = _resolve_participant_filters(filters)
+    conn = _connect_for_query()
     try:
         candidate_meeting_ids = store.query_candidate_meeting_ids(
             conn, knesset_num,
@@ -1247,15 +1187,22 @@ def _browse_search_meetings(req: BrowseSearchRequest, top_k: int, knesset_num: i
             if not match:
                 return []
             try:
-                rows = store.meetings_by_best_speech(conn, match, knesset_num, limit=top_k, sort=req.sort,
+                rows = store.meetings_by_best_speech(conn, match, knesset_num, limit=top_k, sort=sort,
                                                      candidate_meeting_ids=candidate_meeting_ids)
             except sqlite3.Error as exc:
+                if store.deadline_passed(conn):
+                    raise
                 print(f"[browse_search] FTS query failed for {match!r}: {exc}", flush=True)
                 return []
             best_score = min((r["score"] for r in rows), default=0.0)
             for r in rows:
                 r["excerpt"] = store.speech_snippet(conn, match, r["best_speech_rowid"])
                 r["score"] = round(r["score"] / best_score, 4) if best_score < 0 else 1.0
+    except sqlite3.OperationalError as exc:
+        if store.deadline_passed(conn):
+            print(f"[browse_search] query timed out for {query!r}: {exc}", flush=True)
+            raise _QueryTimedOut() from exc
+        raise
     finally:
         conn.close()
     meetings_out = []
@@ -1267,7 +1214,7 @@ def _browse_search_meetings(req: BrowseSearchRequest, top_k: int, knesset_num: i
 
 
 @app.post("/api/browse/search")
-async def browse_search(req: BrowseSearchRequest, request: Request):
+def browse_search(req: BrowseSearchRequest, request: Request):
     """
     Session-less entry point for the reading tab: keyword search over speeches
     (or newest meetings for an empty query) within the structural filters.
@@ -1275,66 +1222,67 @@ async def browse_search(req: BrowseSearchRequest, request: Request):
     Creates a fresh ResearchSession so the /api/research/{sid}/meeting/... routes
     work against the returned session_id.
     """
-    from web.session import ResearchSession, save_session
+    from web.session import ResearchSession, maybe_cleanup_stale_sessions, save_session
 
-    query = req.query.strip()
-    if len(query) > _MAX_QUESTION:
-        return JSONResponse({"error": "שאילתה ארוכה מדי"}, status_code=400)
-    if req.sort not in ("relevance", "date"):
-        return JSONResponse({"error": f"sort לא חוקי: {req.sort}"}, status_code=400)
+    query = valid.keyword_query(req.query)
+    sort = valid.one_of(req.sort, BROWSE_SORTS, "sort")
+    filters = _validated_browse_filters(req.filters)
     if not store.exists():
-        print(f"[browse_search] {store.db_path()} missing", flush=True)
-        return JSONResponse({"error": "מסד הנתונים לא נבנה עדיין. יש להריץ scripts/build_knesset_db.py"},
-                            status_code=503)
+        print(f"[browse_search] {store.db_path()} missing; run scripts/build_knesset_db.py", flush=True)
+        return JSONResponse({"error": DB_UNAVAILABLE_MESSAGE}, status_code=503)
 
     settings = request.app.state.settings
     top_k = max(1, min(req.top_k or settings.TOP_K_BROWSE, _MAX_TOP_K))
-    knesset_num = 25
+    try:
+        meetings_out = _browse_search_meetings(query, sort, filters, top_k, knesset_num=25)
+    except _QueryTimedOut:
+        return JSONResponse({"error": QUERY_TIMEOUT_MESSAGE}, status_code=503)
 
-    meetings_out = await asyncio.get_event_loop().run_in_executor(
-        None, _browse_search_meetings, req, top_k, knesset_num)
-
+    sessions_dir = request.app.state.sessions_dir
+    maybe_cleanup_stale_sessions(sessions_dir)
     session_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    now = _now_iso()
     save_session(ResearchSession(
         session_id=session_id, status="done", original_question=query,
         created_at=now, updated_at=now, workspace_data={"selected_chunks": []},
-    ), request.app.state.sessions_dir)
+    ), sessions_dir)
     return {"session_id": session_id, "meetings": meetings_out, "query_used": query}
 
 
 # ── Workspace models ──────────────────────────────────────────────────────────
 
 class WorkspaceSelectRequest(BaseModel):
-    chunk_id: str
-    text: str
-    source_meeting_id: str
+    chunk_id: str = Field(min_length=1, max_length=config.API_MAX_ID_DIGITS, pattern=r"^[0-9]+$")
+    text: str = Field(min_length=1, max_length=config.WEB_MAX_WORKSPACE_CHUNK_CHARS)
+    source_meeting_id: str = Field(min_length=1, max_length=config.API_MAX_ID_DIGITS, pattern=r"^[0-9]+$")
 
 
 class WorkspaceAskRequest(BaseModel):
-    question: str
-    meeting_id: str | None = None
+    question: str = Field(max_length=_MAX_QUESTION)
+    meeting_id: str | None = Field(default=None, max_length=config.API_MAX_ID_DIGITS)
 
 
-# ── Workspace routes ──────────────────────────────────────────────────────────
+# ── Meeting routes (reading tab) ──────────────────────────────────────────────
 
+def _invalid_meeting_route(session_id: str, meeting_id: str) -> JSONResponse | None:
+    if not _ok_session_id(session_id) or not _ok_numeric_id(meeting_id):
+        return JSONResponse({"error": "Invalid parameters"}, status_code=400)
+    return None
 
 
 @app.get("/api/research/{session_id}/meeting/{meeting_id}/summary")
-async def research_meeting_summary(session_id: str, meeting_id: str, request: Request):
+def research_meeting_summary(session_id: str, meeting_id: str, request: Request):
     """
     Return a meeting's summary as sections (attendance, topics, opinions) for the reading tab.
     """
-    if not _ok_session_id(session_id) or not meeting_id.isdigit():
-        return JSONResponse({"error": "Invalid parameters"}, status_code=400)
+    if (invalid := _invalid_meeting_route(session_id, meeting_id)) is not None:
+        return invalid
 
     from web.session import load_session
 
-    sessions_dir = request.app.state.sessions_dir
-    session = load_session(session_id, sessions_dir)
-    if session is None:
+    if load_session(session_id, request.app.state.sessions_dir) is None:
         return JSONResponse({"error": "Session not found"}, status_code=404)
-    data = await asyncio.get_event_loop().run_in_executor(None, _load_meeting_summary, meeting_id)
+    data = _load_meeting_summary(meeting_id)
     if data is None:
         return JSONResponse({"error": f"No summary for meeting '{meeting_id}'"}, status_code=404)
     date, committee, title = _meeting_title(data["meeting"], meeting_id)
@@ -1349,38 +1297,27 @@ async def research_meeting_summary(session_id: str, meeting_id: str, request: Re
 
 
 @app.get("/api/research/{session_id}/meeting/{meeting_id}/transcript")
-async def research_meeting_transcript(session_id: str, meeting_id: str, request: Request):
+def research_meeting_transcript(session_id: str, meeting_id: str, request: Request):
     """
     Return the transcript of a retrieved meeting as a list of chunks.
     """
-    if not _ok_session_id(session_id) or not meeting_id.isdigit():
-        return JSONResponse({"error": "Invalid parameters"}, status_code=400)
+    if (invalid := _invalid_meeting_route(session_id, meeting_id)) is not None:
+        return invalid
 
     from web.session import load_session
 
-    sessions_dir = request.app.state.sessions_dir
-    session = load_session(session_id, sessions_dir)
-    if session is None:
+    if load_session(session_id, request.app.state.sessions_dir) is None:
         return JSONResponse({"error": "Session not found"}, status_code=404)
 
     from utils.meeting import load_meeting, format_meeting_chunks
     transcript_path = get_transcript_path_from_id(meeting_id)
-    if not transcript_path:
-        return JSONResponse(
-            {"error": f"No transcript for meeting '{meeting_id}'."},
-            status_code=404,
-        )
-    if not transcript_path.exists():
-        return JSONResponse(
-            {"error": f"Transcript file not found: {transcript_path}"},
-            status_code=404,
-        )
+    if not transcript_path or not transcript_path.exists():
+        print(f"[transcript] no transcript file for meeting {meeting_id}: {transcript_path}", flush=True)
+        return JSONResponse({"error": f"No transcript for meeting '{meeting_id}'."}, status_code=404)
 
     meeting = load_meeting(transcript_path)
 
-    # Derive date and committee from filename
-    name = transcript_path.stem
-    parts = name.split("_")
+    parts = transcript_path.stem.split("_")
     date = f"{parts[0]}/{parts[1]}/{parts[2]}" if len(parts) >= 4 else ""
     committee = transcript_path.parent.name
 
@@ -1393,30 +1330,27 @@ async def research_meeting_transcript(session_id: str, meeting_id: str, request:
 
 
 @app.get("/api/research/{session_id}/meeting/{meeting_id}/hits")
-async def research_meeting_hits(session_id: str, meeting_id: str, request: Request, q: str = ""):
+def research_meeting_hits(session_id: str, meeting_id: str, q: str = ""):
     """Speeches of the meeting matching q (keyword FTS) with score in (0, 1], 1 = best. Feeds the heatmap."""
-    if not _ok_session_id(session_id) or not meeting_id.isdigit():
-        return JSONResponse({"error": "Invalid parameters"}, status_code=400)
-    query = q.strip()
+    if (invalid := _invalid_meeting_route(session_id, meeting_id)) is not None:
+        return invalid
+    query = valid.keyword_query(q, config.WEB_MAX_HITS_QUERY_CHARS, config.WEB_MAX_HITS_QUERY_WORDS)
     if not query:
         return {"hits": []}
-    if len(query) > _MAX_QUESTION:
-        return JSONResponse({"error": "שאילתה ארוכה מדי"}, status_code=400)
     word_matches = _speech_word_matches(query)
     if not word_matches or not store.exists():
         return {"hits": []}
 
-    def _hits():
-        conn = store.connect()
-        try:
-            return store.meeting_speech_hits(conn, word_matches, meeting_id)
-        except sqlite3.Error as exc:
-            print(f"[hits] FTS query failed for meeting {meeting_id}, {word_matches!r}: {exc}", flush=True)
-            return []
-        finally:
-            conn.close()
-
-    rows = await asyncio.get_event_loop().run_in_executor(None, _hits)
+    conn = _connect_for_query()
+    try:
+        rows = store.meeting_speech_hits(conn, word_matches, meeting_id)
+    except sqlite3.Error as exc:
+        print(f"[hits] FTS query failed for meeting {meeting_id}, {word_matches!r}: {exc}", flush=True)
+        if store.deadline_passed(conn):
+            return JSONResponse({"error": QUERY_TIMEOUT_MESSAGE}, status_code=503)
+        rows = []
+    finally:
+        conn.close()
     # Rank by matched word count; bm25 relevance only breaks ties within the same count.
     best_relevance = max((r["relevance"] for r in rows), default=0.0) or 1.0
     rank_keys = {r["speech_idx"]: r["matched_words"] + 0.5 * max(r["relevance"], 0.0) / best_relevance for r in rows}
@@ -1425,16 +1359,14 @@ async def research_meeting_hits(session_id: str, meeting_id: str, request: Reque
 
 
 @app.get("/api/research/{session_id}/meeting/{meeting_id}/participants")
-async def research_meeting_participants(session_id: str, meeting_id: str, request: Request):
+def research_meeting_participants(session_id: str, meeting_id: str, request: Request):
     """Return the list of speakers / attendees for a meeting."""
-    if not _ok_session_id(session_id) or not meeting_id.isdigit():
-        return JSONResponse({"error": "Invalid parameters"}, status_code=400)
+    if (invalid := _invalid_meeting_route(session_id, meeting_id)) is not None:
+        return invalid
 
     from web.session import load_session
 
-    sessions_dir = request.app.state.sessions_dir
-    session = load_session(session_id, sessions_dir)
-    if session is None:
+    if load_session(session_id, request.app.state.sessions_dir) is None:
         return JSONResponse({"error": "Session not found"}, status_code=404)
 
     from utils.meeting import load_meeting, extract_attendance
@@ -1448,158 +1380,167 @@ async def research_meeting_participants(session_id: str, meeting_id: str, reques
     return {"meeting_id": meeting_id, "participants": participants}
 
 
+# ── Workspace routes ──────────────────────────────────────────────────────────
+
+_workspace_lock = threading.Lock()
+
+
 @app.post("/api/research/{session_id}/workspace/select")
-async def workspace_select(
-    session_id: str,
-    req: WorkspaceSelectRequest,
-    request: Request,
-):
+def workspace_select(session_id: str, req: WorkspaceSelectRequest, request: Request):
     """Append a transcript chunk to the session workspace for later querying."""
     if not _ok_session_id(session_id):
         return JSONResponse({"error": "Invalid session ID"}, status_code=400)
 
     from web.session import load_session, save_session
-    from datetime import datetime, timezone
-    from dataclasses import replace as _dc_replace
 
     sessions_dir = request.app.state.sessions_dir
-    session = load_session(session_id, sessions_dir)
-    if session is None:
-        return JSONResponse({"error": "Session not found"}, status_code=404)
+    with _workspace_lock:
+        session = load_session(session_id, sessions_dir)
+        if session is None:
+            return JSONResponse({"error": "Session not found"}, status_code=404)
 
-    workspace = session.workspace_data or {}
-    selected: list[dict] = workspace.setdefault("selected_chunks", [])
+        workspace = session.workspace_data or {}
+        selected: list[dict] = workspace.setdefault("selected_chunks", [])
+        if len(selected) >= config.WEB_MAX_WORKSPACE_SELECTED_CHUNKS:
+            return JSONResponse(
+                {"error": f"at most {config.WEB_MAX_WORKSPACE_SELECTED_CHUNKS} selected chunks per session"},
+                status_code=400)
 
-    selected.append({
-        "chunk_id":         req.chunk_id,
-        "text":             req.text,
-        "source_meeting_id": req.source_meeting_id,
-    })
-
-    updated = _dc_replace(
-        session,
-        workspace_data=workspace,
-        updated_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
-    )
-    save_session(updated, sessions_dir)
+        selected.append({
+            "chunk_id":          req.chunk_id,
+            "text":              req.text,
+            "source_meeting_id": req.source_meeting_id,
+        })
+        save_session(dataclass_replace(session, workspace_data=workspace, updated_at=_now_iso()), sessions_dir)
 
     return {"ok": True, "total_selected": len(selected)}
 
 
+def _workspace_context(session, meeting_id: str | None) -> str:
+    """Selected chunks (+ the meeting's summary first when it fits), capped at WEB_WORKSPACE_ASK_MAX_CONTEXT_CHARS."""
+    max_context_chars = config.WEB_WORKSPACE_ASK_MAX_CONTEXT_CHARS
+    workspace = session.workspace_data or {}
+    context_parts: list[str] = []
+    used_chars = 0
+    for chunk in workspace.get("selected_chunks", []):
+        text = str(chunk.get("text", "")).strip()
+        if not text:
+            continue
+        piece = f"[ישיבה {chunk.get('source_meeting_id', '')}]\n{text}"
+        if used_chars + len(piece) > max_context_chars:
+            break
+        context_parts.append(piece)
+        used_chars += len(piece)
+
+    if meeting_id and used_chars < max_context_chars:
+        data = _load_meeting_summary(meeting_id)
+        if data:
+            from summarization.summary_io import render_summary_text
+            summary_block = "סיכום ישיבה:\n" + render_summary_text(
+                data["topics"], data["opinions"][:30], data["attendance"])
+            if used_chars + len(summary_block) <= max_context_chars:
+                context_parts.insert(0, summary_block)
+
+    return "\n\n---\n\n".join(context_parts) if context_parts else "(אין מידע נבחר)"
+
+
+def _stream_local_llm_answer(backend, prepared_messages: list[dict], emit: Callable[[object], None],
+                             stop_requested: threading.Event, slots: threading.BoundedSemaphore) -> None:
+    """Relay the local model's events through emit until done or stop_requested; closing the backend
+    stream drops the llama-server connection so generation stops too. Releases one of slots."""
+    answer_events = None
+    try:
+        answer_events = backend.stream(prepared_messages, tools=None, temperature=0.7,
+                                       max_tokens=config.WEB_WORKSPACE_ASK_MAX_TOKENS)
+        for event in answer_events:
+            if stop_requested.is_set():
+                print("[workspace_ask] client is gone; stopping generation", flush=True)
+                break
+            emit(event)
+    except Exception as exc:
+        print(f"[workspace_ask] generation failed: {exc}", flush=True)
+        emit(("__error__", str(exc) + "\n" + traceback.format_exc()))
+    finally:
+        if answer_events is not None:
+            try:
+                answer_events.close()
+            except Exception as exc:
+                print(f"[workspace_ask] closing the model stream failed: {exc}", flush=True)
+        slots.release()
+        emit(_SENTINEL)
+
+
+async def _workspace_answer_sse_events(queue: asyncio.Queue, stop_requested: threading.Event):
+    from agent.llm.base import TokenEvent
+    try:
+        while True:
+            item = await _next_worker_item(queue)
+            if item is _KEEP_ALIVE:
+                yield ": keep-alive\n\n"
+                continue
+            if item is _SENTINEL:
+                yield _sse("done", {})
+                break
+            if isinstance(item, tuple) and len(item) == 2 and item[0] == "__error__":
+                yield _sse("error", {"error": item[1]})
+                break
+            if isinstance(item, TokenEvent):
+                yield _sse("token", {"text": item.text})
+    except Exception as exc:
+        yield _sse("error", {"error": str(exc) + "\n" + traceback.format_exc()})
+    finally:
+        stop_requested.set()
+
+
 @app.post("/api/research/{session_id}/workspace/ask")
-async def workspace_ask(
-    session_id: str,
-    req: WorkspaceAskRequest,
-    request: Request,
-):
+async def workspace_ask(session_id: str, req: WorkspaceAskRequest, request: Request):
     """
-    Ask the LLM a question grounded in the session's selected workspace chunks.
+    Ask the local LLM a question grounded in the session's selected workspace chunks.
+    Needs a valid visitor Gemini key (the abuse gate, although the answer runs on llama-server).
 
     Streams SSE token/done/error events.
     """
     if not _ok_session_id(session_id):
         return JSONResponse({"error": "Invalid session ID"}, status_code=400)
-
-    from web.session import load_session
-    from agent.llm.base import TokenEvent
-
-    sessions_dir = request.app.state.sessions_dir
-    session = load_session(session_id, sessions_dir)
-    if session is None:
-        return JSONResponse({"error": "Session not found"}, status_code=404)
-
-    backend  = request.app.state.backend
     question = req.question.strip()
     if not question:
         return JSONResponse({"error": "שאלה ריקה"}, status_code=400)
     if not _ok_question(question):
         return JSONResponse({"error": "שאלה מכילה תווים לא חוקיים או ארוכה מדי"}, status_code=400)
+    if req.meeting_id is not None and not _ok_numeric_id(req.meeting_id):
+        return JSONResponse({"error": "Invalid meeting ID"}, status_code=400)
 
-    workspace = session.workspace_data or {}
-    selected_chunks: list[dict] = workspace.get("selected_chunks", [])
+    _gemini_api_key, gemini_key_error = await asyncio.to_thread(visitor_gemini_key_or_error, request)
+    if gemini_key_error is not None:
+        return gemini_key_error
 
-    # Build context from selected chunks (capped at ~8000 chars)
-    MAX_CTX_CHARS = 8000
-    context_parts: list[str] = []
-    used_chars = 0
-    for chunk in selected_chunks:
-        text = chunk.get("text", "").strip()
-        if not text:
-            continue
-        mid   = chunk.get("source_meeting_id", "")
-        piece = f"[ישיבה {mid}]\n{text}"
-        if used_chars + len(piece) > MAX_CTX_CHARS:
-            break
-        context_parts.append(piece)
-        used_chars += len(piece)
+    from web.session import load_session
 
-    # Optionally append meeting summary for the requested meeting_id
-    if req.meeting_id and used_chars < MAX_CTX_CHARS:
-        data = _load_meeting_summary(req.meeting_id)
-        if data:
-            from summarization.summary_io import render_summary_text
-            summary_block = "סיכום ישיבה:\n" + render_summary_text(
-                data["topics"], data["opinions"][:30], data["attendance"])
-            if used_chars + len(summary_block) <= MAX_CTX_CHARS:
-                context_parts.insert(0, summary_block)
+    session = await asyncio.to_thread(load_session, session_id, request.app.state.sessions_dir)
+    if session is None:
+        return JSONResponse({"error": "Session not found"}, status_code=404)
 
-    context = "\n\n---\n\n".join(context_parts) if context_parts else "(אין מידע נבחר)"
-
+    context = await asyncio.to_thread(_workspace_context, session, req.meeting_id)
     system_prompt = (
         "אתה עוזר לניתוח פרוטוקולים של ועדות הכנסת. "
         "ענה בעברית בהתבסס על המידע שניתן לך בלבד."
     )
-    user_content = f"הקשר:\n{context}\n\n---\n\nשאלה: {question}"
-
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user",   "content": user_content},
+        {"role": "user",   "content": f"הקשר:\n{context}\n\n---\n\nשאלה: {question}"},
     ]
-    prepared = backend.prepare_messages(messages, suppress_thinking=False)
+    backend = request.app.state.backend
+    prepared = backend.prepare_messages(messages, suppress_thinking=True)
 
-    async def generate():
-        loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
-        queue: asyncio.Queue = asyncio.Queue()
-        _SENTINEL = object()
-
-        def _run_sync():
-            try:
-                for event in backend.stream(prepared, tools=None, temperature=0.7, max_tokens=4096):
-                    loop.call_soon_threadsafe(queue.put_nowait, event)
-            except Exception as exc:
-                loop.call_soon_threadsafe(
-                    queue.put_nowait,
-                    ("__error__", str(exc) + "\n" + traceback.format_exc()),
-                )
-            finally:
-                loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
-
-        thread = threading.Thread(target=_run_sync, daemon=True)
-        thread.start()
-
-        try:
-            while True:
-                item = await queue.get()
-                if item is _SENTINEL:
-                    yield _sse("done", {})
-                    break
-                # Handle error sentinel tuple
-                if isinstance(item, tuple) and len(item) == 2 and item[0] == "__error__":
-                    yield _sse("error", {"error": item[1]})
-                    break
-                if isinstance(item, TokenEvent):
-                    yield _sse("token", {"text": item.text})
-        except Exception as exc:
-            yield _sse("error", {"error": str(exc) + "\n" + traceback.format_exc()})
-
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control":     "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    slots = _LOCAL_LLM_ASK_SLOTS
+    if not slots.acquire(blocking=False):
+        return _busy_response()
+    queue: asyncio.Queue = asyncio.Queue()
+    stop_requested = threading.Event()
+    threading.Thread(target=_stream_local_llm_answer,
+                     args=(backend, prepared, _thread_safe_emitter(queue), stop_requested, slots),
+                     daemon=True).start()
+    return _sse_response(_workspace_answer_sse_events(queue, stop_requested))
 
 
 # ── SSE helper ────────────────────────────────────────────────────────────────

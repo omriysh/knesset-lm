@@ -8,7 +8,6 @@ import unicodedata
 from datetime import date
 
 from fastapi import FastAPI, Request
-from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -36,19 +35,20 @@ def clean_text(value: str | None, name: str, max_chars: int) -> str:
     return cleaned
 
 
-def search_text(value: str | None) -> str:
-    return clean_text(value, "query", config.API_MAX_QUERY_CHARS)
+def search_text(value: str | None, max_chars: int | None = None) -> str:
+    return clean_text(value, "query", max_chars or config.API_MAX_QUERY_CHARS)
 
 
-def keyword_query(value: str | None) -> str:
+def keyword_query(value: str | None, max_chars: int | None = None, max_words: int | None = None) -> str:
     """Free text for FTS5: capped in length and word count, and must contain a letter or digit."""
-    query = search_text(value)
+    query = search_text(value, max_chars)
     if not query:
         return query
     if not any(ch.isalnum() for ch in query):
         raise ApiInputError("invalid_query", "q has no searchable words (letters or digits)")
-    if len(query.split()) > config.API_MAX_QUERY_WORDS:
-        raise ApiInputError("invalid_query", f"q has more than {config.API_MAX_QUERY_WORDS} words")
+    max_words = max_words or config.API_MAX_QUERY_WORDS
+    if len(query.split()) > max_words:
+        raise ApiInputError("invalid_query", f"q has more than {max_words} words")
     return query
 
 
@@ -96,10 +96,14 @@ def list_param(values: list[str], name: str) -> list[str]:
     return values
 
 
-def response_format(value: str) -> str:
-    if value not in RESPONSE_FORMATS:
-        raise ApiInputError("invalid_format", f"format must be one of {', '.join(RESPONSE_FORMATS)}")
+def one_of(value: str, allowed_values: tuple[str, ...], name: str) -> str:
+    if value not in allowed_values:
+        raise ApiInputError(f"invalid_{name}", f"{name} must be one of {', '.join(allowed_values)}")
     return value
+
+
+def response_format(value: str) -> str:
+    return one_of(value, RESPONSE_FORMATS, "format")
 
 
 def _is_api_path(request: Request) -> bool:
@@ -107,15 +111,21 @@ def _is_api_path(request: Request) -> bool:
 
 
 async def _api_input_error(request: Request, exc: ApiInputError) -> JSONResponse:
-    return JSONResponse({"error_code": exc.error_code, "message": exc.message}, status_code=400)
-
-
-async def _request_validation_error(request: Request, exc: RequestValidationError):
+    body = {"error_code": exc.error_code, "message": exc.message}
     if not _is_api_path(request):
-        return await request_validation_exception_handler(request, exc)
+        body["error"] = exc.message
+    return JSONResponse(body, status_code=400)
+
+
+async def _request_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """400 without echoing the rejected input back; web routes also get the {"error": ...} key the UI reads."""
     problems = [f"{'.'.join(str(part) for part in error.get('loc', ())[1:])}: {error.get('msg', '')}"
                 for error in exc.errors()]
-    return JSONResponse({"error_code": "invalid_parameter", "message": "; ".join(problems)[:500]}, status_code=400)
+    message = "; ".join(problems)[:500]
+    body = {"error_code": "invalid_parameter", "message": message}
+    if not _is_api_path(request):
+        body["error"] = message
+    return JSONResponse(body, status_code=400)
 
 
 def install_error_handlers(app: FastAPI) -> None:

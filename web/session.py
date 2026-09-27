@@ -11,11 +11,17 @@ from __future__ import annotations
 
 import json
 import os
+import sys
+import threading
 import time
 import uuid
-from dataclasses import asdict, dataclass, field, fields as dc_fields
+from dataclasses import asdict, dataclass, field, fields as dc_fields, replace
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+import config
 
 
 # ── Dataclass ─────────────────────────────────────────────────────────────────
@@ -23,7 +29,7 @@ from pathlib import Path
 @dataclass
 class ResearchSession:
     session_id: str
-    status: str                         # "awaiting_user" | "done" | "error"
+    status: str                         # "running" | "awaiting_user" | "done" | "error"
     original_question: str
     created_at: str                     # ISO timestamp (UTC, ends with "Z")
     updated_at: str                     # ISO timestamp (UTC, ends with "Z")
@@ -68,8 +74,8 @@ def save_session(session: ResearchSession, sessions_dir: Path) -> None:
     except Exception:
         try:
             tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
+        except OSError as exc:
+            print(f"[session] could not remove temp file {tmp.name}: {exc}", flush=True)
         raise
 
 
@@ -85,6 +91,39 @@ def load_session(session_id: str, sessions_dir: Path) -> ResearchSession | None:
     except Exception as exc:
         print(f"[session] load_session failed for {session_id!r}: {exc}", flush=True)
         return None
+
+
+_status_transition_lock = threading.Lock()
+
+
+def mark_running_if_awaiting_user(session_id: str, sessions_dir: Path) -> ResearchSession | None:
+    """Move an awaiting_user session to running and return it as it was; None when it is not awaiting
+    the user (so of two parallel responses only the first resumes the run)."""
+    with _status_transition_lock:
+        session = load_session(session_id, sessions_dir)
+        if session is None or session.status != "awaiting_user":
+            return None
+        save_session(replace(session, status="running", updated_at=_now_iso()), sessions_dir)
+        return session
+
+
+_last_cleanup_monotonic: float | None = None
+_cleanup_lock = threading.Lock()
+
+
+def maybe_cleanup_stale_sessions(sessions_dir: Path) -> None:
+    """Run cleanup_stale_sessions at most once per WEB_SESSION_CLEANUP_INTERVAL_SECONDS while serving."""
+    global _last_cleanup_monotonic
+    now = time.monotonic()
+    with _cleanup_lock:
+        if (_last_cleanup_monotonic is not None
+                and now - _last_cleanup_monotonic < config.WEB_SESSION_CLEANUP_INTERVAL_SECONDS):
+            return
+        _last_cleanup_monotonic = now
+    try:
+        cleanup_stale_sessions(sessions_dir, max_age_hours=config.WEB_SESSION_MAX_AGE_HOURS)
+    except Exception as exc:
+        print(f"[session] periodic cleanup of {sessions_dir} failed: {exc}", flush=True)
 
 
 def cleanup_stale_sessions(sessions_dir: Path, max_age_hours: float = 2.0) -> int:
@@ -105,8 +144,8 @@ def cleanup_stale_sessions(sessions_dir: Path, max_age_hours: float = 2.0) -> in
             if age > cutoff_seconds:
                 path.unlink()
                 removed += 1
-        except OSError:
-            pass  # file may have been removed concurrently
+        except OSError as exc:
+            print(f"[session] could not remove stale session {path.name}: {exc}", flush=True)
 
     if removed:
         print(f"[session] Cleaned up {removed} stale session(s).", flush=True)

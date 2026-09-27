@@ -101,6 +101,36 @@ export function refreshGeminiKeySettingsStatus() {
   if (statusEl) statusEl.textContent = getGeminiKey() ? 'שמור בדפדפן הזה בלבד' : 'לא הוגדר';
 }
 
+export function geminiKeyHeaders() {
+  return { [GEMINI_KEY_HEADER]: getGeminiKey() };
+}
+
+/**
+ * Error to show for a rejected agent request (null when res is OK). A 401 means the key is
+ * missing or rejected: the stored key is dropped and the key dialog reopens.
+ */
+export async function agentResponseError(res) {
+  if (res.ok) return null;
+  const body = await res.json().catch(exc => {
+    console.error('[gemini_key] unreadable error body:', exc);
+    return {};
+  });
+  if (res.status === 401) {
+    clearGeminiKey();
+    openGeminiKeyDialog(body.error === 'gemini_key_invalid'
+      ? 'המפתח נדחה על ידי Google.'
+      : 'נדרש מפתח Gemini תקין כדי להריץ מחקר אוטומטי.');
+    return new Error(body.message || 'נדרש מפתח Gemini');
+  }
+  if (res.status === 503) {
+    return new Error(body.error === 'gemini_key_unverified'
+      ? 'לא ניתן לאמת את מפתח ה-Gemini כרגע — נסו שוב בעוד רגע'
+      : (body.message || 'השרת עמוס כרגע — נסו שוב בעוד כמה דקות'));
+  }
+  if (res.status === 429) return new Error('יותר מדי בקשות — נסו שוב בעוד דקה');
+  return new Error(body.error || body.message || ('HTTP ' + res.status));
+}
+
 function replaceGeminiKeyFromSettings() {
   openGeminiKeyDialog();
 }
@@ -114,3 +144,6 @@ window.cancelGeminiKeyDialog       = cancelGeminiKeyDialog;
 window.replaceGeminiKeyFromSettings = replaceGeminiKeyFromSettings;
 window.deleteGeminiKeyFromSettings = deleteGeminiKeyFromSettings;
 window.promptGeminiKeyIfMissing    = promptGeminiKeyIfMissing;
+window.requireGeminiKey            = requireGeminiKey;
+window.geminiKeyHeaders            = geminiKeyHeaders;
+window.agentResponseError          = agentResponseError;

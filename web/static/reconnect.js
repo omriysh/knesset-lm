@@ -202,7 +202,7 @@ function replayDone(data, replay) {
   if (replay.agentEl) {
     const body = replay.agentEl.querySelector('.prose-content');
     if (body) {
-      body.innerHTML = replay.rawAnswer ? marked.parse(replay.rawAnswer) : '';
+      body.innerHTML = replay.rawAnswer ? renderMarkdown(replay.rawAnswer) : '';
       const cursor = replay.agentEl.querySelector('.stream-cursor');
       if (cursor) cursor.remove();
       if (replay.pendingFootnotes.length) {

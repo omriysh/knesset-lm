@@ -125,7 +125,7 @@ export function addCompletedStageCard(stagesEl, data) {
 
   const uniqueTools = [...new Set(tools)];
   const toolsHtml   = uniqueTools.length > 0
-    ? `<span class="stage-tools-badge">${uniqueTools.join(' · ')}</span>`
+    ? `<span class="stage-tools-badge">${uniqueTools.map(esc).join(' · ')}</span>`
     : '';
 
   const promptHtml      = prompt     ? renderPromptHtml(prompt)            : '';
@@ -139,7 +139,7 @@ export function addCompletedStageCard(stagesEl, data) {
     buildHeaderHtml({ label, stage, loop, live: false, timeHtml, toolsHtml }) +
     `<div class="stage-body">` +
       promptHtml + thinkingHtml + toolResultsHtml + retrievalHtml +
-      (content ? `<div class="prose-content" style="margin-top:8px">${marked.parse(content)}</div>` : '') +
+      (content ? `<div class="prose-content" style="margin-top:8px">${renderMarkdown(content)}</div>` : '') +
     `</div>`;
 
   wireHeader(card);

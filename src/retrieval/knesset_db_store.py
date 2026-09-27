@@ -181,6 +181,15 @@ def connect(path: Path | None = None, *, interrupt_after_seconds: float | None =
     return conn
 
 
+LIKE_ESCAPE_CHAR = "!"
+
+
+def like_substring_pattern(text: str) -> str:
+    """LIKE pattern for text as a literal substring; use it with `LIKE ? ESCAPE '{LIKE_ESCAPE_CHAR}'`."""
+    escaped = "".join(LIKE_ESCAPE_CHAR + ch if ch in "%_" + LIKE_ESCAPE_CHAR else ch for ch in text)
+    return f"%{escaped}%"
+
+
 def exists(path: Path | None = None) -> bool:
     return Path(path or db_path()).exists()
 
@@ -421,8 +430,8 @@ def search_speeches(conn, match: str, knesset_num: int, *, top_k: int,
         where.append(f"s.meeting_id IN ({','.join('?' * len(meeting_ids))})")
         params.extend(str(m) for m in meeting_ids)
     if speaker_tokens:
-        where.append("(" + " OR ".join("s.speaker LIKE ?" for _ in speaker_tokens) + ")")
-        params.extend(f"%{t}%" for t in speaker_tokens)
+        where.append("(" + " OR ".join(f"s.speaker LIKE ? ESCAPE '{LIKE_ESCAPE_CHAR}'" for _ in speaker_tokens) + ")")
+        params.extend(like_substring_pattern(t) for t in speaker_tokens)
     _meeting_filters(where, params, "m", committees, None, None)
     sql = (f"SELECT s.id, s.meeting_id, s.idx AS speech_idx, s.speaker, s.mk_id, s.text, "
            f"m.committee, m.date, bm25(speeches_fts) AS score "
@@ -478,8 +487,8 @@ def query_candidate_meeting_ids(
         attendance_parts.append(f"a.party IN ({','.join('?' * len(parties))})")
         attendance_params.extend(parties)
     if guest_name:
-        attendance_parts.append("a.name LIKE ?")
-        attendance_params.append(f"%{guest_name}%")
+        attendance_parts.append(f"a.name LIKE ? ESCAPE '{LIKE_ESCAPE_CHAR}'")
+        attendance_params.append(like_substring_pattern(guest_name))
     if attendance_parts:
         where.append("m.meeting_id IN (SELECT a.meeting_id FROM attendance a WHERE "
                      + " OR ".join(attendance_parts) + ")")
