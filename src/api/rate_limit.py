@@ -25,7 +25,7 @@ AGENT_ROUTE_PATTERN = re.compile(r"^/api/research/(start|[^/]+/(respond|workspac
 STREAM_REPLAY_PATTERN = re.compile(r"^/api/research/[^/]+/stream$")
 UNLIMITED_PATHS = ("/", "/favicon.ico", "/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json",
                    "/llms.txt", "/llms-full.txt", "/agent-instructions")
-UNLIMITED_PREFIXES = ("/static/",)
+UNLIMITED_PREFIXES = ("/static/", "/docs-assets/")
 
 
 def route_bucket(path: str) -> str | None:

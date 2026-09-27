@@ -182,12 +182,12 @@ WEB_CONTENT_SECURITY_POLICY = (
     "connect-src 'self'; "
     "frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'"
 )
-WEB_DOCS_CONTENT_SECURITY_POLICY = (   # /docs and /redoc: Swagger UI / ReDoc bundles from jsdelivr, inline bootstrap script
+WEB_DOCS_CONTENT_SECURITY_POLICY = (   # /docs, /redoc: self-hosted bundles (they use new Function), inline bootstrap script
     "default-src 'self'; "
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; "
-    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
-    "font-src 'self' data: https://fonts.gstatic.com; "
-    "img-src 'self' data: https://fastapi.tiangolo.com https://validator.swagger.io; "
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "font-src 'self' data:; "
+    "img-src 'self' data:; "
     "worker-src 'self' blob:; "
     "connect-src 'self'; "
     "frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'"

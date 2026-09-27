@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 import config
+from api.docs import install_public_docs
 from api.rate_limit import RateLimitMiddleware, SlidingWindowRateLimiter
 from api.request_log import RequestLogMiddleware, setup_file_logging
 from api.routes import router
@@ -37,13 +38,12 @@ async def lifespan(app: FastAPI):
 
 
 rate_limiter = SlidingWindowRateLimiter()
+PUBLIC_API_TITLE = "KnessetLM public API"
 
-app = FastAPI(title="KnessetLM public API",
-              description="Read-only access to Knesset committee protocols, MKs, bills and votes. "
-                          "Start with /agent-instructions.",
-              lifespan=lifespan)
+app = FastAPI(title=PUBLIC_API_TITLE, lifespan=lifespan, docs_url=None, redoc_url=None)
 app.add_middleware(RateLimitMiddleware, limiter=rate_limiter)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET"], allow_headers=["*"])
 app.add_middleware(RequestLogMiddleware)
 app.include_router(router)
+install_public_docs(app, PUBLIC_API_TITLE)
 install_error_handlers(app)

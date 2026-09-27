@@ -61,6 +61,7 @@ from api.rate_limit import RateLimitMiddleware, SlidingWindowRateLimiter
 from api.request_log import (RequestLogMiddleware, generic_error_message, log_question, log_server_error,
                              request_id_of, setup_file_logging)
 from api.routes import router as api_router
+from api.docs import install_public_docs
 from api.validation import install_error_handlers
 from web.concurrency import ResearchRunSlots
 from web.gemini_keys import forget_server_gemini_keys, stop_on_rejected_gemini_key, visitor_gemini_key_or_error
@@ -427,7 +428,9 @@ async def lifespan(app: FastAPI):
 
 # ── App ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="KnessetLM", lifespan=lifespan)
+WEB_API_TITLE = "KnessetLM (מעורב ירושלמי)"
+
+app = FastAPI(title=WEB_API_TITLE, lifespan=lifespan, docs_url=None, redoc_url=None)
 
 _STATIC_DIR    = Path(__file__).parent / "static"
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -439,6 +442,7 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(RequestLogMiddleware)
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 app.include_router(api_router)
+install_public_docs(app, WEB_API_TITLE)
 install_error_handlers(app)
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
@@ -552,6 +556,7 @@ def _resolve_mk_photo(name: str) -> "Path | None":
 
 @app.get("/mk-photo/{name}")
 def mk_photo(name: str):
+    """An MK's portrait by name (fuzzy-matched against the MK roster); 404 when none."""
     if len(name) > config.WEB_MAX_MK_PHOTO_NAME_CHARS:
         return JSONResponse({}, status_code=404)
     p = _resolve_mk_photo(name)
@@ -574,7 +579,7 @@ class ResearchRespondRequest(BaseModel):
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def index(request: Request):
     return templates.TemplateResponse(request, "index.html")
 
@@ -586,12 +591,14 @@ async def favicon():
 
 @app.get("/api/help", response_class=PlainTextResponse)
 async def help_content():
+    """The site's help page (Hebrew markdown)."""
     path = Path(__file__).parent / "templates" / "user-help.md"
     return path.read_text(encoding="utf-8")
 
 
 @app.get("/api/health")
 def health(request: Request):
+    """Web server health: loaded state machine and protocol database row counts."""
     db_row_counts: dict[str, int] = {}
     if store.exists():
         try:

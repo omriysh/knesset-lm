@@ -268,11 +268,13 @@ def tool_listing() -> list[dict]:
 
 @router.get("/v1/tools")
 def list_tools():
+    """Every tool with its endpoint, description and JSON-schema parameters."""
     return {"tools": tool_listing()}
 
 
 @router.get("/v1/meta")
 def meta():
+    """Data coverage: row counts per table, indexed Knesset numbers, meeting date range and build times."""
     if not store.exists():
         return JSONResponse({"error_code": "knesset_db_missing", "message": _PUBLIC_5XX_MESSAGES[503]},
                             status_code=503)
@@ -291,6 +293,7 @@ def meta():
 
 @router.get("/health")
 def health():
+    """Liveness check; reports whether the protocol database is available."""
     return {"status": "ok", "db": store.exists()}
 
 
@@ -301,11 +304,13 @@ def _instructions_text() -> str:
 @router.get("/llms.txt", response_class=PlainTextResponse)
 @router.get("/agent-instructions", response_class=PlainTextResponse)
 def agent_instructions():
+    """Plain-text usage rules, endpoints, search tips and recipes for AI agents (llms.txt convention). Read this before calling the tools."""
     return PlainTextResponse(_instructions_text(), media_type="text/markdown; charset=utf-8")
 
 
 @router.get("/llms-full.txt", response_class=PlainTextResponse)
 def agent_instructions_full():
+    """The agent instructions followed by every tool's full description and parameters, in one plain-text document."""
     parts = [_instructions_text(), "\n# Tool reference\n"]
     for tool in tool_listing():
         parts.append(f"## {tool['name']} — GET {tool['endpoint']}\n\n{tool['description']}\n\n"
