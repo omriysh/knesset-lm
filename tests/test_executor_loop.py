@@ -328,3 +328,34 @@ class TestExecuteStepLLMErrorHandling:
 
         assert isinstance(result, ToolEnvelope)
         assert result.error is not None
+
+
+# ── Tool-result truncation for the executor LLM ─────────────────────────────
+
+class TestTruncateToolResultKeepsOversizeItems:
+    def test_real_find_mk_result_keeps_the_mk_id(self):
+        import config
+        from agent.plan_execute.executor import _truncate_tool_result
+        from agent.research_agent.tools import RESEARCH_TOOL_REGISTRY
+        from utils.tools import dispatch
+        envelope = dispatch(RESEARCH_TOOL_REGISTRY, "find_mk", {"query": "שמחה רוטמן"})
+        if envelope.error:
+            pytest.skip(f"find_mk unavailable: {envelope.error}")
+        truncated = _truncate_tool_result(envelope.full, config.EXECUTOR_TOOL_RESULT_CHARS)
+        assert len(truncated) <= config.EXECUTOR_TOOL_RESULT_CHARS
+        rows = [row for row in json.loads(truncated) if "mk_id" in row]
+        assert rows and rows[0]["mk_id"] == "30812"
+        assert rows[0]["full_name"] == "שמחה רוטמן"
+
+    def test_oversize_item_is_shrunk_not_dropped(self):
+        from agent.plan_execute.executor import _truncate_tool_result
+        item = {"id": "1", "name": "x", "profile": {"positions": [{"text": "p" * 200} for _ in range(100)]}}
+        truncated = _truncate_tool_result(json.dumps([item, item]), 1000)
+        assert len(truncated) <= 1000
+        parsed = json.loads(truncated)
+        assert parsed[0]["id"] == "1" and parsed[0]["name"] == "x"
+
+    def test_small_lists_are_unchanged(self):
+        from agent.plan_execute.executor import _truncate_tool_result
+        text = json.dumps([{"a": 1}, {"b": 2}])
+        assert _truncate_tool_result(text, 1000) == text

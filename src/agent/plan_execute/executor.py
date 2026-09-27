@@ -47,8 +47,9 @@ def _truncate_tool_result(text: str, max_chars: int) -> str:
     """Truncate a tool result string without corrupting JSON.
 
     If the text fits, returns it unchanged.
-    If it's a JSON array, keeps as many items as fit within max_chars and
-    appends a truncation sentinel so the result stays valid JSON.
+    If it's a JSON array, keeps as many items as fit within max_chars (an item
+    too big on its own is shrunk by capping its nested lists and long strings)
+    and appends a truncation sentinel so the result stays valid JSON.
     Otherwise truncates the string and appends a [TRUNCATED] marker.
     """
     if len(text) <= max_chars:
@@ -64,13 +65,12 @@ def _truncate_tool_result(text: str, max_chars: int) -> str:
         budget = max_chars - 2 - sentinel_len  # reserve for [] and sentinel
         running = 0
         for item in parsed:
-            s = json.dumps(item, ensure_ascii=False)
             comma = 2 if kept else 0  # ", " between items
-            if running + comma + len(s) <= budget:
-                kept.append(item)
-                running += comma + len(s)
-            else:
+            fitting_item = _shrink_json_to_fit(item, budget - running - comma)
+            if fitting_item is None:
                 break
+            kept.append(fitting_item)
+            running += comma + len(json.dumps(fitting_item, ensure_ascii=False))
         removed = len(parsed) - len(kept)
         if removed > 0:
             kept.append({"_truncated": True, "items_removed": removed})
@@ -79,6 +79,35 @@ def _truncate_tool_result(text: str, max_chars: int) -> str:
     # Non-list JSON or plain text: safe string truncation
     marker = " [TRUNCATED]"
     return text[: max_chars - len(marker)] + marker
+
+
+SHRUNK_ITEM_LIST_CAPS = (5, 3, 1, 0)
+SHRUNK_ITEM_STRING_CHARS = 200
+
+
+def _cap_nested_json(value, list_cap: int):
+    if isinstance(value, dict):
+        return {key: _cap_nested_json(inner, list_cap) for key, inner in value.items()}
+    if isinstance(value, list):
+        capped = [_cap_nested_json(inner, list_cap) for inner in value[:list_cap]]
+        if len(value) > list_cap:
+            capped.append({"_items_removed": len(value) - list_cap})
+        return capped
+    if isinstance(value, str) and len(value) > SHRUNK_ITEM_STRING_CHARS:
+        return value[:SHRUNK_ITEM_STRING_CHARS] + "…"
+    return value
+
+
+def _shrink_json_to_fit(item, max_chars: int):
+    """The item itself when it fits, else a copy with nested lists and long strings capped; None when nothing fits."""
+    candidates = [item] + [_cap_nested_json(item, cap) for cap in SHRUNK_ITEM_LIST_CAPS]
+    if isinstance(item, dict):
+        candidates.append({key: value for key, value in _cap_nested_json(item, 0).items()
+                           if not isinstance(value, (dict, list))})
+    for candidate in candidates:
+        if len(json.dumps(candidate, ensure_ascii=False)) <= max_chars:
+            return candidate
+    return None
 
 
 # ---------------------------------------------------------------------------
