@@ -39,6 +39,7 @@ from typing import Any, Callable, Generator
 
 import config
 from agent.plan_execute.budget import BudgetExceeded, BudgetTracker, estimate_plan_seconds
+from agent.plan_execute.citation_backfill import backfill_protocol_citations
 from agent.plan_execute.concurrency import DAGExecutor
 from agent.plan_execute.critics import CriticResult, critic_post, critic_pre, critic_post_gen, critic_pre_gen
 from agent.plan_execute.executor import execute_step
@@ -499,6 +500,11 @@ class PlanExecuteAgent(SubgraphAgent):
             payload={"plan_version": plan.version},
         )
         final_answer, citations = yield from self._synthesize_gen(query, plan, self._store)
+        try:
+            backfill_protocol_citations(citations, self._store)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[agent] citation backfill failed, citations left as written: {type(exc).__name__}: {exc}",
+                  flush=True)
 
         footnotes = self._collect_footnotes()
 

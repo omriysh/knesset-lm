@@ -36,6 +36,36 @@ function findQuoteAnchor(obj) {
   return null;
 }
 
+const PROTOCOL_SOURCE_NOTES = {
+  opinion: 'עמדה מפרוטוקול ועדה: ניסוח העמדה הוא סיכום AI, הציטוט מילה במילה מהפרוטוקול',
+  topic:   'נושא דיון מתוך סיכום AI של פרוטוקול ועדה',
+  speech:  'ציטוט מילה במילה מפרוטוקול ועדה',
+};
+
+function protocolSourceKind(node) {
+  if (node.source_kind) return node.source_kind;
+  if (node.opinion) return 'opinion';
+  if (node.topic) return 'topic';
+  if (node.text && node.speech_idx != null) return 'speech';
+  return null;
+}
+
+/** One note per distinct kind of protocol row in the quote (opinion / topic / speech), '' when none. */
+function protocolSourceNote(obj) {
+  const kinds = new Set();
+  const visit = (node) => {
+    if (node == null || typeof node !== 'object') return;
+    if (Array.isArray(node)) { node.forEach(visit); return; }
+    if (node.meeting_id != null) {
+      const kind = protocolSourceKind(node);
+      if (kind) kinds.add(kind);
+    }
+    if (Array.isArray(node.chunks)) node.chunks.forEach(visit);
+  };
+  visit(obj);
+  return ['opinion', 'topic', 'speech'].filter(k => kinds.has(k)).map(k => PROTOCOL_SOURCE_NOTES[k]).join(' · ');
+}
+
 const OPEN_ICON = '<span class="material-symbols-outlined ev-open-icon">library_books</span>';
 
 /** Build the "לפרוטוקול המלא →" link markup for a resolved anchor. */
@@ -145,7 +175,8 @@ function showCitationPopup(supEl, quoteRaw, uiMeta) {
     ? renderQuoteObj(quoteObj)
     : `<div class="ev-citation-quote">${esc(quoteRaw || '')}</div>`;
 
-  const metaNote = (uiMeta && uiMeta.meta_note) ? uiMeta.meta_note : (uiMeta && uiMeta.tool_name) || '';
+  const toolNote = (uiMeta && uiMeta.meta_note) ? uiMeta.meta_note : (uiMeta && uiMeta.tool_name) || '';
+  const metaNote = (quoteObj != null && protocolSourceNote(quoteObj)) || toolNote;
   const anchor   = quoteObj != null ? findQuoteAnchor(quoteObj) : null;
   const noteHtml = metaNote ? `<div class="ev-citation-popup-source">${esc(metaNote)}</div>` : '';
   const linkHtml = openProtocolLinkHtml(_citeSid, anchor);

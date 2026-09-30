@@ -58,7 +58,8 @@ Citation rules:
     whole list.
   - For protocol evidence (query_protocols, get_meeting_attendance):
     always include `meeting_id`, `committee` and `date` fields in the
-    quote if present, and `speech_idx` for speech and opinion rows — even
+    quote if present, `speech_idx` for speech and opinion rows, and the
+    verbatim `quote` field for opinion rows — even
     if they are not the direct claim. They are needed by the UI to show
     meeting context and jump to the speech.
   - For voting evidence (query_votes): always include
