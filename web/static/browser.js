@@ -149,7 +149,7 @@ function _shellHtml(postCompletion) {
       תמצת עבורי
     </button>`;
   const closeBtn = _standalone ? '' :
-    `<button class="browser-close-btn" onclick="closeProtocolBrowser()" title="סגור">✕</button>`;
+    `<button class="browser-close-btn" data-click="closeProtocolBrowser" title="סגור">✕</button>`;
   const chatBar = _standalone ? '' : `
   <div class="browser-chat-bar">
     <textarea id="browser-chat-input" placeholder="שאל שאלה על הישיבה הזו… (Ctrl+Enter)" rows="1"></textarea>
@@ -160,16 +160,16 @@ function _shellHtml(postCompletion) {
 <div class="browser-panel">
   <div class="browser-header">
     <!-- Mobile: always-visible sidebar toggle icon -->
-    <button class="sidebar-mob-btn" onclick="browserToggleSidebar()" title="ישיבות">
+    <button class="sidebar-mob-btn" data-click="browserToggleSidebar" title="ישיבות">
       <span class="material-symbols-outlined" style="font-size:20px">format_list_bulleted</span>
     </button>
     <!-- Desktop: appears when sidebar is collapsed -->
     <button class="sidebar-expand-btn" id="sidebar-expand-btn"
-            onclick="browserToggleSidebar()" title="הצג ישיבות" style="display:none">
+            data-click="browserToggleSidebar" title="הצג ישיבות" style="display:none">
       <span class="material-symbols-outlined" style="font-size:15px">format_list_bulleted</span>
       <span>ישיבות</span>
     </button>
-    <button class="browser-summary-btn" id="browser-summary-btn" onclick="browserToggleSummary()" title="סיכום" style="display:none">
+    <button class="browser-summary-btn" id="browser-summary-btn" data-click="browserToggleSummary" title="סיכום" style="display:none">
       <span class="material-symbols-outlined" style="font-size:16px;font-variation-settings:'FILL' 1">auto_awesome</span>
       <span>סיכום</span>
     </button>
@@ -194,7 +194,7 @@ function _shellHtml(postCompletion) {
       <!-- Desktop: collapse button above meeting list -->
       <div class="sidebar-top-header">
         <span class="sidebar-top-title">ישיבות</span>
-        <button class="sidebar-top-close" onclick="browserToggleSidebar()" title="הסתר">
+        <button class="sidebar-top-close" data-click="browserToggleSidebar" title="הסתר">
           <span class="material-symbols-outlined" id="sidebar-top-arrow" style="font-size:18px">chevron_right</span>
         </button>
       </div>
@@ -202,26 +202,26 @@ function _shellHtml(postCompletion) {
         <div class="sidebar-controls">
           <div class="sidebar-sort-row">
             <label class="sort-label">מיין:</label>
-            <select id="sort-select" class="sort-select" onchange="browserSetSort(this.value)">
+            <select id="sort-select" class="sort-select" data-change="browserSetSort">
               <option value="relevance">רלוונטיות</option>
               <option value="date_desc">תאריך ↓</option>
               <option value="date_asc">תאריך ↑</option>
             </select>
-            <button id="sort-grp" class="sort-btn" onclick="browserToggleGroup()">קבץ לפי ועדה</button>
+            <button id="sort-grp" class="sort-btn" data-click="browserToggleGroup">קבץ לפי ועדה</button>
           </div>
           <div class="sidebar-filter-row">
             <input id="sidebar-part-input" class="sidebar-part-input"
                    placeholder="טוען משתתפים…"
-                   oninput="browserFilterParticipant(this.value)"
+                   data-input="browserFilterParticipant"
                    disabled />
           </div>
         </div>
         <div class="sidebar-list" id="sidebar-list"></div>
-        <button class="sidebar-load-more" onclick="browserLoadMore()">טען עוד ישיבות</button>
+        <button class="sidebar-load-more" data-click="browserLoadMore">טען עוד ישיבות</button>
       </div>
     </div>
   </div>
-  <button class="sidebar-side-tab" id="sidebar-side-tab" onclick="browserToggleSidebar()" title="פתח רשימת ישיבות" style="display:none">
+  <button class="sidebar-side-tab" id="sidebar-side-tab" data-click="browserToggleSidebar" title="פתח רשימת ישיבות" style="display:none">
     <span class="material-symbols-outlined" id="sidebar-side-tab-icon" style="font-size:18px">format_list_bulleted</span>
   </button>
   ${chatBar}
@@ -296,7 +296,7 @@ function _groupedHtml(meetings) {
     const collapsed = _collapsedGroups.has(comm);
     const cards     = collapsed ? '' : groups[comm].map(m => _meetingCardHtml(m, true)).join('');
     return `<div class="sidebar-group">
-      <div class="sidebar-group-header" data-committee="${_esc(comm)}" onclick="browserToggleCommGroup(this.dataset.committee)">
+      <div class="sidebar-group-header" data-committee="${_esc(comm)}" data-click="browserToggleCommGroup">
         <span class="group-arrow">${collapsed ? '▶' : '▼'}</span>
         <span class="group-name">${_esc(comm)}</span>
         <span class="group-count">${groups[comm].length}</span>
@@ -316,7 +316,7 @@ function _meetingCardHtml(m, inGroup) {
   const commHtml  = inGroup ? '' :
     `<span class="sidebar-committee">${_esc((m.committee || '').replace(/_/g, ' '))}</span>`;
   return `<div class="sidebar-meeting ${active ? 'active' : ''} ${inGroup ? 'in-group' : ''}"
-               data-meeting-id="${_esc(m.meeting_id)}" onclick="browserSwitchMeeting(this.dataset.meetingId)">
+               data-meeting-id="${_esc(m.meeting_id)}" data-click="browserSwitchMeeting">
     <div class="sidebar-meeting-title">${_esc(dateStr)}</div>
     <div class="sidebar-meeting-meta">
       ${commHtml}
@@ -498,7 +498,7 @@ function _bulletHtml(b, isTopic) {
   const quote     = typeof b === 'string' ? '' : (b.quote || '');
   const verified  = typeof b !== 'string' && !!b.quote_verified;
   const quoteAttrs = speechIdx != null
-    ? `data-speech-idx="${speechIdx}" data-quote="${_esc(quote)}"`
+    ? `data-speech-idx="${_esc(speechIdx)}" data-quote="${_esc(quote)}"`
     : (quote ? `data-approx-quote="${_esc(quote)}"` : '');
   const bulletAttrs = isTopic
     ? `data-hits-query="${_esc(text)}" title="הדגש במפת החום נאומים התואמים לנושא"`
@@ -612,11 +612,11 @@ function _transcriptHtml(data) {
     const initials = _initials(c.speaker);
     const photoName = encodeURIComponent(_speakerPhotoKey(c.speaker));
     return `
-<div class="chunk-card" data-chunk-id="${_esc(c.chunk_id)}" data-topic-idx="${c.topic_index ?? ''}">
+<div class="chunk-card" data-chunk-id="${_esc(c.chunk_id)}" data-topic-idx="${_esc(c.topic_index ?? '')}">
   <div class="chunk-left">
     <div class="chunk-avatar" style="background:${color}20;color:${color}">
       <span class="chunk-avatar-initials">${_esc(initials)}</span>
-      <img class="chunk-avatar-img" src="/mk-photo/${photoName}" alt="" loading="lazy" onerror="this.style.display='none'">
+      <img class="chunk-avatar-img" src="/mk-photo/${photoName}" alt="" loading="lazy" data-hide-on-error>
     </div>
   </div>
   <div class="chunk-body" style="border-right-color:${color}">

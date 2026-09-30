@@ -75,7 +75,7 @@ function openProtocolLinkHtml(sid, anchor) {
   return (
     `<button type="button" class="ev-open-protocol" data-sid="${esc(sid)}" ` +
     `data-meeting-id="${esc(anchor.meetingId)}" data-speech-idx="${esc(sidx)}" data-quote="${esc(anchor.quote || '')}" ` +
-    `onclick="openProtocolFromCitationButton(this)">` +
+    `data-click="openProtocolFromCitation">` +
     `${OPEN_ICON}<span>לפרוטוקול המלא ←</span></button>`
   );
 }
@@ -201,6 +201,39 @@ function showCitationPopup(supEl, quoteRaw, uiMeta) {
   popup.style.setProperty('--tail-left', tailLeft + 'px');
 }
 
+function citationSup(evId, displayN) {
+  const sup = document.createElement('sup');
+  sup.className = 'ev-cite';
+  sup.dataset.evId = evId || '';
+  sup.title = evId || '';
+  sup.textContent = `[${displayN}]`;
+  return sup;
+}
+
+/**
+ * Replace every regex match inside bodyEl's text nodes with the element buildElement(match) returns
+ * (null keeps the text). Works on text nodes only, so a marker can never land inside markup or an attribute.
+ */
+function replaceTextMarkers(bodyEl, pattern, buildElement) {
+  const walker = document.createTreeWalker(bodyEl, NodeFilter.SHOW_TEXT);
+  const textNodes = [];
+  while (walker.nextNode()) textNodes.push(walker.currentNode);
+  for (const node of textNodes) {
+    const text = node.nodeValue;
+    const fragment = document.createDocumentFragment();
+    let copiedUpTo = 0;
+    for (const match of text.matchAll(pattern)) {
+      const element = buildElement(match);
+      if (!element) continue;
+      fragment.append(text.slice(copiedUpTo, match.index), element);
+      copiedUpTo = match.index + match[0].length;
+    }
+    if (copiedUpTo === 0) continue;
+    fragment.append(text.slice(copiedUpTo));
+    node.replaceWith(fragment);
+  }
+}
+
 export function applyEvidenceCitations(bodyEl, footnotes, citations, sid) {
   _citeSid = sid || '';
   // Stash this answer's cited meetings so the viewer sidebar can be seeded with
@@ -216,28 +249,24 @@ export function applyEvidenceCitations(bodyEl, footnotes, citations, sid) {
 
   const hasCitations = Object.keys(citMap).length > 0;
   if (hasCitations) {
-    bodyEl.innerHTML = bodyEl.innerHTML.replace(/\[(\d+)\]/g, (match, numStr) => {
-      const n   = parseInt(numStr, 10);
+    replaceTextMarkers(bodyEl, /\[(\d+)\]/g, (match) => {
+      const n   = parseInt(match[1], 10);
       const cit = citMap[n];
-      if (!cit) return match;
-      const displayN = evIdToIdx[cit.ev_id] || n;
+      if (!cit) return null;
       const quoteStr = (typeof cit.quote === 'object' && cit.quote !== null)
         ? JSON.stringify(cit.quote)
         : (cit.quote || '');
-      return (
-        `<sup class="ev-cite" data-cite-n="${n}" ` +
-        `data-ev-id="${esc(cit.ev_id)}" ` +
-        `data-quote="${esc(quoteStr)}" ` +
-        `title="${esc(cit.ev_id)}">[${displayN}]</sup>`
-      );
+      const sup = citationSup(cit.ev_id, evIdToIdx[cit.ev_id] || n);
+      sup.dataset.citeN = String(n);
+      sup.dataset.quote = quoteStr;
+      return sup;
     });
   } else {
     // Fallback: old [ev_xxx] format
-    bodyEl.innerHTML = bodyEl.innerHTML.replace(/\[ev_([0-9a-f]+)\]/g, (match, hex) => {
-      const evId = 'ev_' + hex;
+    replaceTextMarkers(bodyEl, /\[ev_([0-9a-f]+)\]/g, (match) => {
+      const evId = 'ev_' + match[1];
       const n = evIdToIdx[evId];
-      if (!n) return match;
-      return `<sup class="ev-cite" data-ev-id="${esc(evId)}" title="${esc(evId)}">[${n}]</sup>`;
+      return n ? citationSup(evId, n) : null;
     });
   }
 
@@ -310,7 +339,7 @@ export function renderEvidenceFull(text, toolName, sid) {
     const truncItem = data.find(x => x && x._truncated);
     const cards     = real.map(item => renderEvidenceCard(item, sid)).join('');
     const notice    = truncItem
-      ? `<div class="ev-truncated-notice">עוד ${truncItem.items_removed} פריטים לא הוצגו</div>`
+      ? `<div class="ev-truncated-notice">עוד ${esc(String(truncItem.items_removed))} פריטים לא הוצגו</div>`
       : '';
     return `<div class="ev-full-cards">${cards}${notice}</div>`;
   }

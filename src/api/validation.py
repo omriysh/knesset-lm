@@ -27,12 +27,35 @@ class ApiInputError(Exception):
 
 
 def clean_text(value: str | None, name: str, max_chars: int) -> str:
-    """Control characters (incl. NUL) become spaces, whitespace runs collapse; longer than max_chars → 400."""
-    without_controls = "".join(" " if unicodedata.category(ch) == "Cc" else ch for ch in value or "")
-    cleaned = " ".join(without_controls.split())
+    """Lone surrogates → 400; NFKC; format characters (bidi marks and overrides, zero-width, BOM) are
+    dropped; control characters (incl. NUL) become spaces; whitespace runs collapse; longer than
+    max_chars → 400. Combining marks (Hebrew niqqud) are kept."""
+    text = value or ""
+    if any(unicodedata.category(ch) == "Cs" for ch in text):
+        raise ApiInputError(f"invalid_{name}", f"{name} is not valid Unicode text (lone surrogate)")
+    normalized = unicodedata.normalize("NFKC", text)
+    without_invisible = "".join(" " if unicodedata.category(ch) == "Cc" else ch for ch in normalized
+                                if unicodedata.category(ch) != "Cf")
+    cleaned = " ".join(without_invisible.split())
     if len(cleaned) > max_chars:
         raise ApiInputError(f"invalid_{name}", f"{name} is longer than {max_chars} characters")
     return cleaned
+
+
+_VERBATIM_KEPT_CONTROLS = frozenset("\n\t")
+
+
+def verbatim_text(value: str | None, name: str, max_chars: int) -> str:
+    """For text that must still match its source (a transcript excerpt): lone surrogates → 400; format
+    characters and control characters other than newline and tab are dropped; no NFKC, whitespace kept
+    as is; longer than max_chars → 400."""
+    text = value or ""
+    if any(unicodedata.category(ch) == "Cs" for ch in text):
+        raise ApiInputError(f"invalid_{name}", f"{name} is not valid Unicode text (lone surrogate)")
+    kept = "".join(ch for ch in text if ch in _VERBATIM_KEPT_CONTROLS or unicodedata.category(ch) not in ("Cc", "Cf"))
+    if len(kept) > max_chars:
+        raise ApiInputError(f"invalid_{name}", f"{name} is longer than {max_chars} characters")
+    return kept
 
 
 def search_text(value: str | None, max_chars: int | None = None) -> str:
@@ -52,8 +75,8 @@ def keyword_query(value: str | None, max_chars: int | None = None, max_words: in
     return query
 
 
-def name_filter(value: str | None, name: str) -> str | None:
-    return clean_text(value, name, config.API_MAX_NAME_CHARS) or None
+def name_filter(value: str | None, name: str, max_chars: int | None = None) -> str | None:
+    return clean_text(value, name, max_chars or config.API_MAX_NAME_CHARS) or None
 
 
 def numeric_id(value: str | None, name: str) -> str | None:
@@ -84,15 +107,17 @@ def knesset_num(value: int) -> int:
     return value
 
 
-def offset(value: int) -> int:
-    if not 0 <= value <= config.API_MAX_OFFSET:
-        raise ApiInputError("invalid_offset", f"offset must be between 0 and {config.API_MAX_OFFSET}")
+def offset(value: int, maximum: int | None = None) -> int:
+    maximum = maximum or config.API_MAX_OFFSET
+    if not 0 <= value <= maximum:
+        raise ApiInputError("invalid_offset", f"offset must be between 0 and {maximum}")
     return value
 
 
-def list_param(values: list[str], name: str) -> list[str]:
-    if len(values) > config.API_MAX_LIST_ITEMS:
-        raise ApiInputError(f"invalid_{name}", f"at most {config.API_MAX_LIST_ITEMS} {name} values")
+def list_param(values: list[str], name: str, max_items: int | None = None) -> list[str]:
+    max_items = max_items or config.API_MAX_LIST_ITEMS
+    if len(values) > max_items:
+        raise ApiInputError(f"invalid_{name}", f"at most {max_items} {name} values")
     return values
 
 
@@ -140,14 +165,14 @@ def as_bool(value, name: str) -> bool:
     raise ApiInputError(f"invalid_{name}", f"{name} must be true or false")
 
 
-def as_text_list(value, name: str, split_commas: bool) -> list[str]:
+def as_text_list(value, name: str, split_commas: bool, max_items: int | None = None) -> list[str]:
     """A list or a single value; with split_commas, 'a,b' items become ['a', 'b']."""
     if value is None:
         return []
     items = [as_text(item, name) for item in (value if isinstance(value, list) else [value])]
     if split_commas:
         items = [part for item in items for part in item.split(",")]
-    return list_param([item.strip() for item in items if item.strip()], name)
+    return list_param([item.strip() for item in items if item.strip()], name, max_items)
 
 
 def _is_api_path(request: Request) -> bool:

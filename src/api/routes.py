@@ -3,7 +3,7 @@ Public read-only HTTP surface over the research tools (RESEARCH_TOOL_REGISTRY).
 
 Every /v1 route maps query-string params to tool args, runs the same `dispatch` the research
 agent uses, and unwraps the ToolEnvelope. No query logic lives here: only API-side limits
-(input validation in api.validation, smaller top_k, response size cap), hints for the calling
+(input validation in api.tool_arguments with PUBLIC_API_LIMITS, response size cap), hints for the calling
 agent, and error → status mapping. 5xx bodies carry a generic message; the real exception is
 printed server-side and logged to errors.log with the request id.
 """
@@ -19,6 +19,7 @@ from agent.research_agent.tools import RESEARCH_TOOL_REGISTRY
 from api import validation as valid
 from api.markdown import render_markdown
 from api.request_log import current_request_id, log_server_error
+from api.tool_arguments import validated_tool_args
 from retrieval import knesset_db_store as store
 from utils.tools import dispatch
 
@@ -69,10 +70,6 @@ def _error_status(error_code: str) -> int:
     if error_code.startswith(("missing_", "invalid_")):
         return 400
     return 500
-
-
-def _clamp(value: int | None, maximum: int) -> int | None:
-    return None if value is None else max(1, min(value, maximum))
 
 
 def _drop_last_row(results) -> bool:
@@ -140,89 +137,10 @@ def _error_status_and_body(tool: str, envelope, provenance: dict) -> tuple[int, 
     return status, {"error_code": envelope.error, "message": message, "tool": tool, "args": provenance}
 
 
-# ── tool arguments: one set of limits for the /v1 routes and the MCP tools ──
-
-def _knesset_num_arg(args: dict) -> int:
-    requested = valid.as_int(args.get("knesset_num"), "knesset_num")
-    return valid.knesset_num(DEFAULT_KNESSET_NUM if requested is None else requested)
-
-
-def _top_k_arg(args: dict, maximum: int, default: int | None = None) -> int | None:
-    return _clamp(valid.as_int(args.get("top_k"), "top_k") or default, maximum)
-
-
-def _find_args(args: dict) -> dict:
-    return {"query": valid.search_text(valid.as_text(args.get("query"), "query")),
-            "knesset_num": _knesset_num_arg(args), "top_k": _top_k_arg(args, config.API_FIND_MAX_TOP_K)}
-
-
-def _query_protocols_args(args: dict) -> dict:
-    scopes = valid.as_text_list(args.get("search_in"), "search_in", split_commas=True)
-    committees = [valid.name_filter(c, "committee")
-                  for c in valid.as_text_list(args.get("committees"), "committee", split_commas=False)]
-    meeting_ids = [valid.numeric_id(m, "meeting_id")
-                   for m in valid.as_text_list(args.get("meeting_ids"), "meeting_id", split_commas=True)]
-    return {
-        "query":       valid.keyword_query(valid.as_text(args.get("query"), "query")),
-        "search_in":   list(dict.fromkeys(scopes)) or list(config.API_PROTOCOLS_DEFAULT_SCOPES),
-        "mk_id":       valid.numeric_id(valid.as_text(args.get("mk_id"), "mk_id"), "mk_id"),
-        "party":       valid.name_filter(valid.as_text(args.get("party"), "party"), "party"),
-        "committees":  [c for c in committees if c] or None,
-        "meeting_ids": meeting_ids or None,
-        "date_from":   valid.iso_date(valid.as_text(args.get("date_from"), "date_from"), "date_from"),
-        "date_to":     valid.iso_date(valid.as_text(args.get("date_to"), "date_to"), "date_to"),
-        "sort":        valid.name_filter(valid.as_text(args.get("sort"), "sort"), "sort"),
-        "top_k":       _top_k_arg(args, config.API_PROTOCOLS_MAX_TOP_K, config.API_PROTOCOLS_DEFAULT_TOP_K),
-        "offset":      valid.offset(valid.as_int(args.get("offset"), "offset") or 0),
-        "knesset_num": _knesset_num_arg(args),
-    }
-
-
-def _meeting_attendance_args(args: dict) -> dict:
-    return {"meeting_id": valid.numeric_id(valid.as_text(args.get("meeting_id"), "meeting_id"), "meeting_id")}
-
-
-def _query_bills_args(args: dict) -> dict:
-    return {"query": valid.search_text(valid.as_text(args.get("query"), "query")),
-            "knesset_num": _knesset_num_arg(args), "top_k": _top_k_arg(args, config.API_LIST_MAX_TOP_K)}
-
-
-def _get_bill_args(args: dict) -> dict:
-    return {"bill_id": valid.numeric_id(valid.as_text(args.get("bill_id"), "bill_id"), "bill_id"),
-            "include_text": valid.as_bool(args.get("include_text"), "include_text"),
-            "max_chars": _clamp(valid.as_int(args.get("max_chars"), "max_chars"), config.BILL_TEXT_MAX_MAX_CHARS),
-            "knesset_num": _knesset_num_arg(args)}
-
-
-def _query_votes_args(args: dict) -> dict:
-    return {"query": valid.search_text(valid.as_text(args.get("query"), "query")),
-            "mk_id": valid.numeric_id(valid.as_text(args.get("mk_id"), "mk_id"), "mk_id"),
-            "knesset_num": _knesset_num_arg(args), "top_k": _top_k_arg(args, config.API_LIST_MAX_TOP_K)}
-
-
-DEFAULT_KNESSET_NUM = 25
-TOOL_ARGUMENT_VALIDATORS = {
-    "find_mk":                _find_args,
-    "find_committee":         _find_args,
-    "find_party":             _find_args,
-    "query_protocols":        _query_protocols_args,
-    "get_meeting_attendance": _meeting_attendance_args,
-    "query_bills":            _query_bills_args,
-    "get_bill":               _get_bill_args,
-    "query_votes":            _query_votes_args,
-}
-
-
-def validated_tool_args(tool: str, args: dict) -> dict:
-    """Raises valid.ApiInputError (invalid_<arg>, or unknown_tool) on input the public API refuses."""
-    if tool not in TOOL_ARGUMENT_VALIDATORS:
-        raise valid.ApiInputError("unknown_tool", f"no tool named {tool!r}; list the tools to see their names")
-    return TOOL_ARGUMENT_VALIDATORS[tool](args)
-
-
 def tool_call_outcome(tool: str, args: dict) -> tuple[int, dict]:
     """(200, body) or (error status, error body) for already validated args."""
-    envelope = dispatch(RESEARCH_TOOL_REGISTRY, tool, {k: v for k, v in args.items() if v is not None})
+    envelope = dispatch(RESEARCH_TOOL_REGISTRY, tool, {k: v for k, v in args.items() if v is not None},
+                        args_already_validated=True)
     provenance = {k: v for k, v in (envelope.provenance or {}).items() if k not in _INTERNAL_PROVENANCE_KEYS}
     if envelope.error:
         return _error_status_and_body(tool, envelope, provenance)

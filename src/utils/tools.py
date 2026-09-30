@@ -31,6 +31,7 @@ from typing import Callable
 
 import config
 from agent.subgraph.evidence import ToolEnvelope
+from api.validation import ApiInputError
 from retrieval import knesset_db_store as store
 from retrieval.ktiv import expand_token
 from retrieval.lemmatize import lemmatize
@@ -78,6 +79,7 @@ class ToolSpec:
     cost_hint: str = "cheap"
     ui: dict = field(default_factory=dict)
     compact_spec: dict = field(default_factory=dict)
+    validate_args: Callable[[dict], dict] | None = None
 
     def to_dict(self) -> dict:
         """Serialise the registry-visible fields. Handler is omitted."""
@@ -99,12 +101,15 @@ ToolRegistry = list[ToolSpec]
 # ---------------------------------------------------------------------------
 
 
-def dispatch(registry: ToolRegistry, name: str, args: dict) -> ToolEnvelope:
+def dispatch(registry: ToolRegistry, name: str, args: dict, args_already_validated: bool = False) -> ToolEnvelope:
     """Look up a tool by name in ``registry`` and invoke its handler.
 
-    Never raises. Unknown names → ``error="unknown_tool"``. Handler
-    exceptions → ``error="dispatch_exception"`` with the traceback in
-    metadata.
+    Never raises. Unknown names → ``error="unknown_tool"``. Arguments the
+    spec's ``validate_args`` refuses (ApiInputError) → its ``error_code``
+    (e.g. ``invalid_offset``) with the message as summary; callers that
+    validated with their own limits (the /v1 routes, MCP) pass
+    ``args_already_validated``. Handler or validator exceptions →
+    ``error="dispatch_exception"`` with the traceback in metadata.
     """
     spec = _find_spec(registry, name)
     if spec is None:
@@ -118,10 +123,14 @@ def dispatch(registry: ToolRegistry, name: str, args: dict) -> ToolEnvelope:
         )
 
     args_safe = _safe_args(args)
-    args_preview = json.dumps(args_safe, ensure_ascii=False)[:300]
-    print(f"[tools] → {name}  args={args_preview}", flush=True)
-
     try:
+        args_preview = _printable(json.dumps(args_safe, ensure_ascii=False)[:300])
+        print(f"[tools] → {name}  args={args_preview}", flush=True)
+        if spec.validate_args is not None and not args_already_validated:
+            try:
+                args = spec.validate_args(args or {})
+            except ApiInputError as exc:
+                return _invalid_args_envelope(name, args_safe, exc)
         result = spec.handler(args or {})
     except Exception as exc:  # noqa: BLE001 — surface to envelope
         print(
@@ -158,6 +167,22 @@ def dispatch(registry: ToolRegistry, name: str, args: dict) -> ToolEnvelope:
     summary_preview = (result.summary or "")[:120]
     print(f"[tools] ← {name}  {status}  summary={summary_preview!r}", flush=True)
     return result
+
+
+def _printable(text: str) -> str:
+    """Lone surrogates (from LLM or visitor JSON) become backslash escapes, so printing never raises."""
+    return text.encode("utf-8", "backslashreplace").decode("utf-8")
+
+
+def _invalid_args_envelope(name: str, args_safe: dict, exc: ApiInputError) -> ToolEnvelope:
+    print(f"[tools] ✗ {name} refused arguments: {exc.error_code}: {exc}", flush=True)
+    return ToolEnvelope(
+        summary=f"{name}: invalid arguments: {exc.message}",
+        full="",
+        metadata={"kind": "error", "source": "dispatch", "count": 0, "message": exc.message},
+        provenance={"tool_name": name, "args": args_safe},
+        error=exc.error_code,
+    )
 
 
 def _find_spec(registry: ToolRegistry, name: str) -> ToolSpec | None:

@@ -153,6 +153,16 @@ API_MAX_OFFSET                = 5000
 API_KNESSET_NUM_RANGE         = (1, 26)
 API_RATE_LIMIT_WEB_PER_MINUTE = 300      # per client IP, every other web route (reading tab fires one request per meeting/speaker)
 
+# Research agent tool arguments: validated like the public API (api.tool_arguments) but with room for
+# what the agent legitimately sends (whole-meeting transcripts paged by offset, many meeting_ids)
+AGENT_MAX_QUERY_CHARS         = 500
+AGENT_MAX_QUERY_WORDS         = 60
+AGENT_MAX_NAME_CHARS          = 200
+AGENT_MAX_LIST_ITEMS          = 500      # meeting_ids from earlier steps; SQLite caps bound variables at 32766
+AGENT_MAX_OFFSET              = 100_000
+AGENT_FIND_MAX_TOP_K          = 20
+AGENT_LIST_MAX_TOP_K          = 100      # bills / votes; the OData service caps $top at 100
+
 # MCP endpoint (src/api/mcp_server.py): POST /mcp on both servers, and the whole of MCP_SUBDOMAIN_HOSTS
 MCP_ENABLED                   = True
 MCP_PATH                      = "/mcp"
@@ -189,9 +199,14 @@ WEB_WORKSPACE_ASK_MAX_TOKENS         = 1024
 WEB_WORKSPACE_ASK_MAX_CONTEXT_CHARS  = 8000
 WEB_SSE_KEEPALIVE_SECONDS            = 15.0
 WEB_META_CACHE_SECONDS               = 3600
+# script-src names the exact CDN files index.html loads. The Tailwind play CDN sends no CORS headers, so it
+# cannot carry SRI: it is pinned to one version URL instead (the unversioned URL redirects, and CSP ignores
+# the path after a redirect). It injects its generated CSS as <style>, hence style-src 'unsafe-inline'.
 WEB_CONTENT_SECURITY_POLICY = (
     "default-src 'self'; "
-    "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdn.jsdelivr.net; "
+    "script-src 'self' https://cdn.tailwindcss.com/3.4.17 "
+    "https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js "
+    "https://cdn.jsdelivr.net/npm/dompurify@3.4.16/dist/purify.min.js; "
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
     "font-src 'self' https://fonts.gstatic.com; "
     "img-src 'self' data:; "

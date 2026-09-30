@@ -100,6 +100,11 @@ def _ok_question(q: str) -> bool:
     return bool(q) and len(q) <= _MAX_QUESTION and bool(_QUESTION_RE.fullmatch(q))
 
 
+def _clean_question(question: str) -> str:
+    """valid.clean_text for a visitor question: ApiInputError (→ 400) on lone surrogates or over the length cap."""
+    return valid.clean_text(question, "question", _MAX_QUESTION)
+
+
 def _ok_ref_id(rid: str) -> bool:
     return bool(_REF_ID_RE.fullmatch(rid))
 
@@ -113,33 +118,25 @@ def _busy_response() -> JSONResponse:
     return JSONResponse({"error": "busy", "message": BUSY_MESSAGE}, status_code=503)
 
 
-# ── Meeting info cache (meeting_id → {date, committee}) ───────────────────────
-_MEETING_INFO_CACHE: dict[str, dict] = {}
-
+# ── Cited meeting info (meeting_id → {date, committee}) ──────────────────────
 
 def _get_meeting_info(meeting_id: str) -> dict:
-    """Resolve a meeting_id to {date: DD/MM/YYYY, committee: Hebrew name}.
-
-    Scans raw_transcriptions across all Knesset numbers; filenames are
-    DD_MM_YYYY_<session_id>.json, stored under <knesset_num>/<committee>/.
-    Result is cached in-process.  Returns {} if not found.
-    """
-    import glob as _glob
-    if not _ok_numeric_id(meeting_id):
+    """{date: DD/MM/YYYY, committee} of a knesset.db meeting; {} for a malformed or unknown meeting_id
+    (the id comes from LLM / tool output, so it is checked before the lookup)."""
+    if not _ok_numeric_id(meeting_id) or not store.exists():
         return {}
-    if meeting_id in _MEETING_INFO_CACHE:
-        return _MEETING_INFO_CACHE[meeting_id]
-    base = config.transcriptions_dir(25).parent  # Data/raw_transcriptions/
-    matches = _glob.glob(str(base / "**" / f"*_{meeting_id}.json"), recursive=True)
-    info: dict = {}
-    if matches:
-        p = Path(matches[0])
-        parts = p.stem.split("_")            # DD_MM_YYYY_session_id
-        if len(parts) >= 4:
-            info["date"] = f"{parts[0]}/{parts[1]}/{parts[2]}"
-        info["committee"] = p.parent.name.replace("_", " ")
-    _MEETING_INFO_CACHE[meeting_id] = info
-    return info
+    conn = _connect_for_query()
+    try:
+        meeting = store.get_meeting(conn, meeting_id)
+    except sqlite3.Error as exc:
+        print(f"[web] meeting info lookup failed for {meeting_id}: {exc}", flush=True)
+        return {}
+    finally:
+        conn.close()
+    if meeting is None:
+        return {}
+    date, committee, _title = _meeting_title(meeting, meeting_id)
+    return {key: value for key, value in (("date", date), ("committee", committee)) if value}
 
 
 def _enrich_citations(citations: list[dict], footnote_by_id: dict[str, dict]) -> list[dict]:
@@ -881,7 +878,7 @@ async def research_start(req: ResearchStartRequest, request: Request):
     If the machine pauses at a ``user_input`` node, emits ``user_input_required``
     followed by ``user_paused`` and then closes the stream.
     """
-    question = req.question.strip()
+    question = _clean_question(req.question)
     if not question:
         return JSONResponse({"error": "שאלה ריקה"}, status_code=400)
     if not _ok_question(question):
@@ -983,7 +980,7 @@ def _validated_user_response(pending_ui_event: Any, output_var: str, value: Any)
         value_is_valid = (isinstance(value, list) and len(value) <= config.WEB_MAX_DEEP_DIVE_MEETINGS
                           and all(isinstance(v, str) and _ok_numeric_id(v) for v in value))
     elif ui_type == "text_input":
-        value = value.strip() if isinstance(value, str) else value
+        value = _clean_question(value) if isinstance(value, str) else value
         value_is_valid = isinstance(value, str) and _ok_question(value)
     else:
         return None, f"unsupported input type: {str(ui_type)[:40]}"
@@ -1425,6 +1422,9 @@ def workspace_select(session_id: str, req: WorkspaceSelectRequest, request: Requ
     """Append a transcript chunk to the session workspace for later querying."""
     if not _ok_session_id(session_id):
         return JSONResponse({"error": "Invalid session ID"}, status_code=400)
+    chunk_text = valid.verbatim_text(req.text, "text", config.WEB_MAX_WORKSPACE_CHUNK_CHARS)
+    if not chunk_text.strip():
+        return JSONResponse({"error": "empty text"}, status_code=400)
 
     from web.session import load_session, save_session
 
@@ -1443,7 +1443,7 @@ def workspace_select(session_id: str, req: WorkspaceSelectRequest, request: Requ
 
         selected.append({
             "chunk_id":          req.chunk_id,
-            "text":              req.text,
+            "text":              chunk_text,
             "source_meeting_id": req.source_meeting_id,
         })
         save_session(dataclass_replace(session, workspace_data=workspace, updated_at=_now_iso()), sessions_dir)
@@ -1542,7 +1542,7 @@ async def workspace_ask(session_id: str, req: WorkspaceAskRequest, request: Requ
     """
     if not _ok_session_id(session_id):
         return JSONResponse({"error": "Invalid session ID"}, status_code=400)
-    question = req.question.strip()
+    question = _clean_question(req.question)
     if not question:
         return JSONResponse({"error": "שאלה ריקה"}, status_code=400)
     if not _ok_question(question):

@@ -10,11 +10,19 @@ the plan-execute graph itself, not via :func:`utils.tools.dispatch`.
 
 Numeric defaults / minima / maxima are sourced from :mod:`config` so the
 schema is never a second source of truth.
+
+Every call's arguments are validated before the handler runs (dispatch →
+``validate_args``) with the same validators as the public API but the
+agent's limits (:data:`api.tool_arguments.AGENT_LIMITS`), so LLM-generated
+arguments cannot reach SQLite or OData unchecked.
 """
 
 from __future__ import annotations
 
+from functools import partial
+
 import config
+from api.tool_arguments import agent_tool_args
 from retrieval.knesset_db_store import PROTOCOL_SCOPES
 from utils.tools import (
     ToolSpec,
@@ -318,6 +326,10 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         },
     ),
 ]
+
+
+for _research_tool in RESEARCH_TOOL_REGISTRY:
+    _research_tool.validate_args = partial(agent_tool_args, _research_tool.name)
 
 
 __all__ = ["RESEARCH_TOOL_REGISTRY"]

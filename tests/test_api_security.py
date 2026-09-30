@@ -313,6 +313,11 @@ class TestLimits:
         body = ok(client.get(f"/v1/bills/{BILL_ID}", params={"include_text": "true", "max_chars": str(10**30)}))
         assert body["args"]["max_chars"] == config.BILL_TEXT_MAX_MAX_CHARS
 
+    @pytest.mark.parametrize("max_chars", ["0", "-5"])
+    def test_non_positive_max_chars_is_the_default(self, client, max_chars):
+        body = ok(client.get(f"/v1/bills/{BILL_ID}", params={"include_text": "true", "max_chars": max_chars}))
+        assert body["args"]["max_chars"] == config.BILL_TEXT_DEFAULT_MAX_CHARS
+
     @pytest.mark.parametrize("params", [{"top_k": "abc"}, {"offset": "1.5"}, {"knesset_num": "x"},
                                         {"include_text": "maybe"}])
     def test_type_errors_are_400_in_api_shape(self, client, params):

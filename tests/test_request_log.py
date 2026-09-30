@@ -240,7 +240,7 @@ class TestErrorsStayServerSide:
         from api.app import app as public_api
         from utils.tools import ToolEnvelope
 
-        def failing_dispatch(registry, name, args):
+        def failing_dispatch(registry, name, args, args_already_validated=False):
             return ToolEnvelope(summary="", full="", error="dispatch_exception",
                                 metadata={"exception": "db exploded", "traceback": "Traceback (most recent call last):\n  x"},
                                 provenance={"tool_name": name})

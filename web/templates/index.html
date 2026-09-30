@@ -9,80 +9,8 @@
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
   <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Assistant:wght@300;400;600;700&family=Heebo:wght@300;400;500;700;800&display=swap" rel="stylesheet"/>
   <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
-  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
-  <script id="tailwind-config">
-    tailwind.config = {
-      darkMode: "class",
-      theme: {
-        extend: {
-          "colors": {
-            "on-surface": "#2e2f2d",
-            "tertiary-fixed": "#fec330",
-            "on-secondary-fixed": "#00375b",
-            "on-background": "#2e2f2d",
-            "background": "#f7f6f3",
-            "on-primary": "#d1ffc8",
-            "on-tertiary": "#fff1db",
-            "tertiary-fixed-dim": "#efb520",
-            "surface-container": "#e8e8e5",
-            "on-secondary-fixed-variant": "#005488",
-            "primary-container": "#b2faa9",
-            "on-surface-variant": "#5b5c5a",
-            "on-primary-fixed-variant": "#2a6c2c",
-            "primary-fixed": "#b2faa9",
-            "surface-container-high": "#e2e3df",
-            "on-tertiary-fixed": "#402d00",
-            "surface-variant": "#ddddda",
-            "surface-container-highest": "#ddddda",
-            "on-secondary-container": "#004a79",
-            "on-error": "#ffefec",
-            "tertiary-dim": "#674b00",
-            "error": "#b02500",
-            "on-primary-fixed": "#054e12",
-            "on-tertiary-fixed-variant": "#634900",
-            "on-tertiary-container": "#584000",
-            "secondary-fixed-dim": "#93c8ff",
-            "on-primary-container": "#1f6223",
-            "error-dim": "#b92902",
-            "on-secondary": "#ecf3ff",
-            "on-error-container": "#520c00",
-            "secondary-fixed": "#afd5ff",
-            "inverse-primary": "#b2faa9",
-            "secondary": "#005f99",
-            "inverse-surface": "#0d0f0d",
-            "error-container": "#f95630",
-            "outline-variant": "#adadab",
-            "primary": "#266829",
-            "surface-container-low": "#f1f1ee",
-            "inverse-on-surface": "#9d9d9b",
-            "tertiary-container": "#fec330",
-            "primary-fixed-dim": "#a4eb9c",
-            "secondary-container": "#afd5ff",
-            "surface": "#f7f6f3",
-            "surface-dim": "#d4d5d1",
-            "primary-dim": "#185c1e",
-            "outline": "#767775",
-            "surface-container-lowest": "#ffffff",
-            "secondary-dim": "#005386",
-            "tertiary": "#765600",
-            "surface-tint": "#266829",
-            "surface-bright": "#f7f6f3"
-          },
-          "borderRadius": {
-            "DEFAULT": "0.25rem",
-            "lg": "0.5rem",
-            "xl": "0.75rem",
-            "full": "9999px"
-          },
-          "fontFamily": {
-            "headline": ["Be Vietnam Pro"],
-            "body": ["Plus Jakarta Sans"],
-            "label": ["Plus Jakarta Sans"]
-          }
-        }
-      }
-    }
-  </script>
+  <script src="https://cdn.tailwindcss.com/3.4.17?plugins=forms@0.5.10,container-queries@0.1.1"></script>
+  <script src="/static/tailwind_config.js"></script>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body class="bg-surface text-on-surface h-[100dvh] flex flex-col overflow-hidden show-welcome">
@@ -104,11 +32,11 @@
 
       <!-- Desktop tab navigation (center) -->
       <nav class="hidden md:flex items-center gap-1 bg-surface-container-low p-1.5 rounded-lg">
-        <button onclick="switchTab('research')" id="dt-tab-research"
+        <button data-click="switchTab" data-arg="research" id="dt-tab-research"
           class="app-tab-btn px-5 py-1.5 rounded-md text-sm font-semibold transition-all duration-200">
           מחקר אוטומטי
         </button>
-        <button onclick="switchTab('reading')" id="dt-tab-reading"
+        <button data-click="switchTab" data-arg="reading" id="dt-tab-reading"
           class="app-tab-btn active px-5 py-1.5 rounded-md text-sm font-semibold transition-all duration-200">
           קריאה עצמית
         </button>
@@ -116,10 +44,10 @@
 
       <!-- Header actions -->
       <div class="flex items-center gap-1">
-        <button class="p-2 rounded-full text-on-surface-variant hover:bg-surface-container-high hover:text-primary transition-colors" title="עזרה" onclick="openHelp()">
+        <button class="p-2 rounded-full text-on-surface-variant hover:bg-surface-container-high hover:text-primary transition-colors" title="עזרה" data-click="openHelp">
           <span class="material-symbols-outlined" style="font-size:20px">help</span>
         </button>
-        <button class="p-2 rounded-full text-on-surface-variant hover:bg-surface-container-high hover:text-primary transition-colors" title="הגדרות" onclick="openSettings()">
+        <button class="p-2 rounded-full text-on-surface-variant hover:bg-surface-container-high hover:text-primary transition-colors" title="הגדרות" data-click="openSettings">
           <span class="material-symbols-outlined" style="font-size:20px">settings</span>
         </button>
       </div>
@@ -179,7 +107,7 @@
     <div class="rfb flex-shrink-0">
       <!-- Collapsed state (shown after search) -->
       <div class="rfb-collapsed-bar" id="rfb-collapsed-bar">
-        <button class="rfb-expand-btn" onclick="rfbExpand()">
+        <button class="rfb-expand-btn" data-click="rfbExpand">
           <span class="material-symbols-outlined" style="font-size:16px">tune</span>
           חיפוש
         </button>
@@ -187,7 +115,7 @@
       </div>
       <div class="rfb-inner">
         <div class="rfb-inner-header">
-          <button class="rfb-collapse-btn" onclick="rfbCollapse()" title="קפל">
+          <button class="rfb-collapse-btn" data-click="rfbCollapse" title="קפל">
             <span class="material-symbols-outlined" style="font-size:15px">keyboard_arrow_up</span>
             סגור
           </button>
@@ -207,7 +135,7 @@
                 <input id="reading-search-input" type="text"
                        class="w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-4 py-2.5 text-sm text-on-surface placeholder-on-surface-variant/60 outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all font-inherit"
                        placeholder="מילות מפתח בפרוטוקולים (ריק = ישיבות אחרונות)…"
-                       onkeydown="if(event.key==='Enter')browseSearch()" />
+                       data-enter="browseSearch" />
               </div>
             </div>
 
@@ -217,7 +145,7 @@
 
               <!-- Committee -->
               <div class="rfb-filter-item" id="fitem-committee">
-                <button class="rfb-filter-btn" onclick="rfToggle('committee')">
+                <button class="rfb-filter-btn" data-click="rfToggle" data-arg="committee">
                   <span class="material-symbols-outlined rfb-filter-icon">account_balance</span>
                   ועדה
                   <span class="material-symbols-outlined rfb-chevron" id="rfchev-committee">expand_more</span>
@@ -226,7 +154,7 @@
                   <div class="rfb-dropdown-search">
                     <input type="text" placeholder="חפש ועדה…"
                            class="w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-3 py-2 text-sm text-on-surface placeholder-on-surface-variant/60 outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all font-inherit"
-                           oninput="rfFilterList(this,'rf-committee-list')" />
+                           data-input="rfFilterList" data-arg="rf-committee-list" />
                   </div>
                   <div class="rfb-option-list" id="rf-committee-list"></div>
                 </div>
@@ -234,7 +162,7 @@
 
               <!-- Participants: MKs + Parties + Guests -->
               <div class="rfb-filter-item" id="fitem-participants">
-                <button class="rfb-filter-btn" onclick="rfToggle('participants')">
+                <button class="rfb-filter-btn" data-click="rfToggle" data-arg="participants">
                   <span class="material-symbols-outlined rfb-filter-icon">groups</span>
                   משתתפים
                   <span class="material-symbols-outlined rfb-chevron" id="rfchev-participants">expand_more</span>
@@ -245,7 +173,7 @@
                     <div class="rfb-dropdown-search">
                       <input type="text" placeholder='חפש ח"כ…'
                              class="w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-3 py-2 text-sm text-on-surface placeholder-on-surface-variant/60 outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all font-inherit"
-                             oninput="rfFilterList(this,'rf-mk-list')" />
+                             data-input="rfFilterList" data-arg="rf-mk-list" />
                     </div>
                     <div class="rfb-option-list" id="rf-mk-list"></div>
                   </div>
@@ -254,7 +182,7 @@
                     <div class="rfb-dropdown-search">
                       <input type="text" placeholder="חפש מפלגה…"
                              class="w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-3 py-2 text-sm text-on-surface placeholder-on-surface-variant/60 outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all font-inherit"
-                             oninput="rfFilterList(this,'rf-party-list')" />
+                             data-input="rfFilterList" data-arg="rf-party-list" />
                     </div>
                     <div class="rfb-option-list" id="rf-party-list"></div>
                   </div>
@@ -263,14 +191,14 @@
                     <input id="rf-guest-input" type="text"
                            placeholder="טקסט חופשי: אורחים שאינם חברי כנסת"
                            class="w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-3 py-2 text-sm text-on-surface placeholder-on-surface-variant/60 outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all font-inherit"
-                           oninput="rfSetGuest(this.value)" />
+                           data-input="rfSetGuest" />
                   </div>
                 </div>
               </div>
 
               <!-- Date range -->
               <div class="rfb-filter-item" id="fitem-date">
-                <button class="rfb-filter-btn" onclick="rfToggle('date')">
+                <button class="rfb-filter-btn" data-click="rfToggle" data-arg="date">
                   <span class="material-symbols-outlined rfb-filter-icon">calendar_month</span>
                   תאריך
                   <span class="material-symbols-outlined rfb-chevron" id="rfchev-date">expand_more</span>
@@ -279,21 +207,21 @@
                   <div class="rfb-date-row">
                     <div class="rfb-date-field">
                       <label>מתאריך</label>
-                      <input id="rf-date-from" type="date" onchange="rfSetDate()"
+                      <input id="rf-date-from" type="date" data-change="rfSetDate"
                              class="w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-3 py-2 text-sm text-on-surface outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all font-inherit" />
                     </div>
                     <div class="rfb-date-field">
                       <label>עד תאריך</label>
-                      <input id="rf-date-to" type="date" onchange="rfSetDate()"
+                      <input id="rf-date-to" type="date" data-change="rfSetDate"
                              class="w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-3 py-2 text-sm text-on-surface outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all font-inherit" />
                     </div>
                   </div>
-                  <button class="rfb-date-apply" onclick="rfApplyDate()">החל</button>
+                  <button class="rfb-date-apply" data-click="rfApplyDate">החל</button>
                 </div>
               </div>
 
               <!-- Clear all -->
-              <button id="rf-clear-btn" class="rfb-clear-btn hidden" onclick="rfClearAll()">
+              <button id="rf-clear-btn" class="rfb-clear-btn hidden" data-click="rfClearAll">
                 <span class="material-symbols-outlined" style="font-size:14px">close</span>
                 נקה הכל
               </button>
@@ -305,7 +233,7 @@
 
           <!-- ── Search button (left, vertically centered) ── -->
           <div class="rfb-btn-area">
-            <button id="reading-search-btn" class="rfb-search-btn" onclick="browseSearch()">
+            <button id="reading-search-btn" class="rfb-search-btn" data-click="browseSearch">
               <span class="material-symbols-outlined" style="font-size:24px;font-variation-settings:'FILL' 1">search</span>
               <span>חפש</span>
             </button>
@@ -332,26 +260,26 @@
 
   <!-- ── Mobile bottom tab navigation ── -->
   <nav id="mobile-tab-bar" class="md:hidden fixed bottom-0 inset-x-0 z-50 bg-surface-container-lowest border-t border-surface-variant/20 flex safe-area-bottom">
-    <button onclick="switchTab('research')" id="mob-tab-research" class="mobile-tab-btn flex-1">
+    <button data-click="switchTab" data-arg="research" id="mob-tab-research" class="mobile-tab-btn flex-1">
       <span class="material-symbols-outlined" style="font-size:22px">chat</span>
       <span>מחקר</span>
     </button>
-    <button onclick="switchTab('reading')" id="mob-tab-reading" class="mobile-tab-btn active flex-1">
+    <button data-click="switchTab" data-arg="reading" id="mob-tab-reading" class="mobile-tab-btn active flex-1">
       <span class="material-symbols-outlined" style="font-size:22px">library_books</span>
       <span>קריאה</span>
     </button>
   </nav>
 
   <!-- ── Help overlay ── -->
-  <div id="help-overlay" onclick="if(event.target===this)closeHelp()">
+  <div id="help-overlay" data-click="closeHelpOnBackdrop">
     <div id="help-panel">
       <div id="help-content" class="prose-content">טוען…</div>
-      <button id="help-close" onclick="closeHelp()">סגור</button>
+      <button id="help-close" data-click="closeHelp">סגור</button>
     </div>
   </div>
 
   <!-- ── Settings overlay ── -->
-  <div id="settings-overlay" onclick="if(event.target===this)closeSettings()">
+  <div id="settings-overlay" data-click="closeSettingsOnBackdrop">
     <div id="settings-panel">
       <h2>הגדרות</h2>
       <div class="settings-row">
@@ -360,7 +288,7 @@
           <div class="settings-desc">הצג את קופסת שלבי העיבוד אוטומטית (ברירת מחדל: כבוי)</div>
         </div>
         <label class="toggle-switch">
-          <input type="checkbox" id="toggle-stages-always" onchange="onStagesAlwaysToggle(this)">
+          <input type="checkbox" id="toggle-stages-always" data-change="onStagesAlwaysToggle">
           <span class="toggle-track"></span>
         </label>
       </div>
@@ -370,27 +298,27 @@
           <div class="settings-desc" id="gemini-key-status">לא הוגדר</div>
         </div>
         <div class="gemini-key-settings-actions">
-          <button onclick="replaceGeminiKeyFromSettings()">החלפה</button>
-          <button onclick="deleteGeminiKeyFromSettings()">מחיקה</button>
+          <button data-click="replaceGeminiKeyFromSettings">החלפה</button>
+          <button data-click="deleteGeminiKeyFromSettings">מחיקה</button>
         </div>
       </div>
-      <button id="settings-close" onclick="closeSettings()">סגור</button>
+      <button id="settings-close" data-click="closeSettings">סגור</button>
     </div>
   </div>
 
   <!-- ── Gemini key dialog (auto-research runs on the visitor's key) ── -->
-  <div id="gemini-key-overlay" onclick="if(event.target===this)cancelGeminiKeyDialog()">
+  <div id="gemini-key-overlay" data-click="cancelGeminiKeyOnBackdrop">
     <div id="gemini-key-panel">
       <h2>מפתח Gemini API</h2>
       <p class="settings-desc">המחקר האוטומטי משתמש במודל Gemini של Google, על חשבון מפתח ה-API שלכם.
         המפתח נשמר רק בדפדפן הזה ונשלח לשרת רק לצורך הבקשה — השרת לא שומר אותו.</p>
       <p class="settings-desc"><a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">ליצירת מפתח ב-Google AI Studio</a></p>
       <input id="gemini-key-input" type="password" autocomplete="off" spellcheck="false" dir="ltr" placeholder="AIza…"
-        onkeydown="if(event.key==='Enter')saveGeminiKeyFromDialog()">
+        data-enter="saveGeminiKeyFromDialog">
       <div id="gemini-key-error" class="hidden"></div>
       <div class="gemini-key-actions">
-        <button id="gemini-key-save" onclick="saveGeminiKeyFromDialog()">שמירה</button>
-        <button id="gemini-key-later" onclick="cancelGeminiKeyDialog()">אחר כך</button>
+        <button id="gemini-key-save" data-click="saveGeminiKeyFromDialog">שמירה</button>
+        <button id="gemini-key-later" data-click="cancelGeminiKeyDialog">אחר כך</button>
       </div>
     </div>
   </div>
@@ -401,6 +329,7 @@
   <script src="/static/browser.js"></script>
   <script src="/static/tabs.js"></script>
   <script src="/static/filters.js"></script>
+  <script src="/static/actions.js"></script>
   <script type="module" src="/static/app.js"></script>
 </body>
 </html>

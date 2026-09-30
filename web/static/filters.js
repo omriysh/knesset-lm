@@ -146,9 +146,8 @@ function _rfRenderList(listId, items, type) {
   const set = _rfSetFor(type);
   el.innerHTML = items.map(item => {
     const sel  = set.has(item) ? 'rfb-option--selected' : '';
-    const safe = _rfEsc(item);
-    return `<button class="rfb-option ${sel}" data-type="${_rfEsc(type)}" data-value="${safe}" onclick="rfToggleItem(this.dataset.type, this.dataset.value)">
-  <span class="rfb-option-check material-symbols-outlined">check</span>${safe}</button>`;
+    return `<button class="rfb-option ${sel}" data-type="${_rfEsc(type)}" data-value="${_rfEsc(item)}" data-click="rfToggleItem">
+  <span class="rfb-option-check material-symbols-outlined">check</span>${_rfEsc(item)}</button>`;
   }).join('');
 }
 
@@ -305,7 +304,7 @@ function _rfRenderChips() {
 
   if (has) {
     row.innerHTML = chips.map(c =>
-      `<span class="rfb-chip">${_rfEsc(c.label)}<button class="rfb-chip-remove" data-type="${_rfEsc(c.type)}" data-value="${_rfEsc(c.value)}" onclick="rfRemoveFilter(this.dataset.type, this.dataset.value)" title="הסר"><span class="material-symbols-outlined" style="font-size:13px">close</span></button></span>`
+      `<span class="rfb-chip">${_rfEsc(c.label)}<button class="rfb-chip-remove" data-type="${_rfEsc(c.type)}" data-value="${_rfEsc(c.value)}" data-click="rfRemoveFilter" title="הסר"><span class="material-symbols-outlined" style="font-size:13px">close</span></button></span>`
     ).join('');
   }
 }

@@ -691,10 +691,23 @@ def csp_directives(policy: str) -> dict[str, list[str]]:
     return directives
 
 
+def source_matches(source: str, url: str) -> bool:
+    """CSP host-source matching: a bare origin allows the whole host, a path ending in '/' is a prefix,
+    any other path must equal the URL's path (the query string is never compared)."""
+    origin = re.match(r"https://[^/?#]+", url).group(0)
+    path = re.sub(r"[?#].*", "", url[len(origin):]) or "/"
+    source_origin = re.match(r"https://[^/?#]+", source)
+    if not source_origin or source_origin.group(0) != origin:
+        return False
+    source_path = source[len(origin):]
+    if not source_path:
+        return True
+    return path.startswith(source_path) if source_path.endswith("/") else path == source_path
+
+
 def allowed(policy: str, directive: str, url: str) -> bool:
     sources = csp_directives(policy).get(directive) or csp_directives(policy)["default-src"]
-    origin = re.match(r"https://[^/?#]+", url).group(0)
-    return origin in sources
+    return any(source_matches(source, url) for source in sources)
 
 
 class TestSecurityHeaders:
@@ -737,6 +750,20 @@ class TestSecurityHeaders:
                 assert allowed(policy, kind, url), (kind, url)
         assert "'unsafe-inline'" in csp_directives(policy)["script-src"]
 
+    def test_page_script_src_has_no_inline_and_no_whole_hosts(self, web):
+        script_sources = csp_directives(web.client.get("/").headers["Content-Security-Policy"])["script-src"]
+        assert "'unsafe-inline'" not in script_sources and "'unsafe-eval'" not in script_sources
+        for source in script_sources:
+            if source == "'self'":
+                continue
+            assert re.fullmatch(r"https://[a-z0-9.-]+/[^*\s]*[^/*\s]", source), source
+
+    def test_tailwind_is_pinned_to_one_version(self, web):
+        r = web.client.get("/")
+        tailwind = re.findall(r'<script[^>]+src="(https://cdn\.tailwindcss\.com[^"]*)"', r.text)
+        assert len(tailwind) == 1 and re.match(r"https://cdn\.tailwindcss\.com/\d+\.\d+\.\d+\?", tailwind[0])
+        assert allowed(r.headers["Content-Security-Policy"], "script-src", tailwind[0])
+
     def test_docs_and_openapi_stay_public(self, web):
         assert web.client.get("/openapi.json").status_code == 200
         assert web.client.get("/docs").status_code == 200
@@ -765,16 +792,85 @@ class TestFrontendSanitizing:
         assert html.index("dompurify@") < html.index("/static/markdown.js")
         assert html.index("marked@") < html.index("/static/markdown.js") < html.index("/static/browser.js")
 
-    def test_every_marked_call_goes_through_dompurify(self):
+    def test_every_marked_call_goes_through_the_hardened_sanitizer(self):
         for name, source in self.static_js().items():
             if name == "markdown.js":
-                assert source.count("DOMPurify.sanitize(marked.") == source.count("marked.parse")
+                assert source.count("sanitizeHtml(marked.") == source.count("marked.parse")
+                assert source.count("DOMPurify.sanitize(") == 1
                 continue
             assert "marked.parse" not in source, name
+            assert "DOMPurify.sanitize" not in source, name
+
+    def test_sanitizer_forbids_page_hijacking_markup(self):
+        source = (STATIC_DIR / "markdown.js").read_text(encoding="utf-8")
+        forbidden_tags = re.search(r"FORBID_TAGS:\s*\[([^\]]*)\]", source).group(1)
+        for tag in ("form", "input", "textarea", "select", "button", "style", "iframe", "object", "embed",
+                    "img", "image", "video", "audio", "source", "picture", "track"):
+            assert f"'{tag}'" in forbidden_tags, tag
+        forbidden_attributes = re.search(r"FORBID_ATTR:\s*\[([^\]]*)\]", source).group(1)
+        for attribute in ("style", "class", "id"):
+            assert f"'{attribute}'" in forbidden_attributes, attribute
+        assert "ALLOW_DATA_ATTR: false" in source
+        assert "addHook('afterSanitizeAttributes'" in source
+        assert "noopener noreferrer" in source
+
+    def test_no_inline_event_handlers_in_templates_or_js_html(self):
+        sources = {**self.static_js(), "index.html": self.index_html()}
+        for name, source in sources.items():
+            assert not re.search(r"""\son[a-z]+\s*=\s*["'`]""", source), name
+            assert "javascript:" not in source, name
+
+    def test_no_inline_script_blocks(self):
+        assert not re.search(r"<script(?![^>]*\bsrc=)[^>]*>", self.index_html())
+
+    def test_every_declared_action_is_registered(self):
+        actions_source = (STATIC_DIR / "actions.js").read_text(encoding="utf-8")
+        registered = set(re.findall(r"^\s{2}(\w+):", actions_source, flags=re.MULTILINE))
+        sources = {**self.static_js(), "index.html": self.index_html()}
+        used = {action for source in sources.values()
+                for action in re.findall(r'data-(?:click|input|change|enter)="(\w+)"', source)}
+        assert used and used <= registered, used - registered
+
+    def test_only_own_action_names_resolve(self):
+        actions_source = (STATIC_DIR / "actions.js").read_text(encoding="utf-8")
+        assert "Object.hasOwn(PAGE_ACTIONS," in actions_source
+        assert not re.search(r"PAGE_ACTIONS\[el\.getAttribute", actions_source)
+
+    def test_data_attribute_interpolations_are_escaped(self):
+        escapers = ("_esc(", "esc(", "_rfEsc(", "encodeURIComponent(", "CSS.escape(")
+        for name, source in self.static_js().items():
+            for value in re.findall(r'data-[a-z-]+="\$\{([^}]*)\}"', source):
+                assert value.startswith(escapers), (name, value)
+
+    def test_actions_script_loads_before_the_app(self):
+        html = self.index_html()
+        assert html.index("/static/filters.js") < html.index("/static/actions.js") < html.index("/static/app.js")
 
     def test_no_data_interpolated_into_inline_handlers(self):
         for name, source in self.static_js().items():
             assert not re.search(r"on[a-z]+=\"[^\"]*\$\{", source), name
+
+
+# ── cited meeting info (date + committee) from knesset.db ────────────────────
+
+class TestMeetingInfo:
+    def test_real_meeting_resolves_from_the_db(self, web):
+        meeting = next(m for m in SAMPLE["meetings"] if m["meeting_id"] == M2)
+        year, month, day = meeting["date"].split("-")
+        assert web.app._get_meeting_info(M2) == {"date": f"{day}/{month}/{year}", "committee": meeting["committee"]}
+
+    @pytest.mark.parametrize("meeting_id", ["../../x", "1 OR 1", "٣", "²", "1" * 5000, "", "999999999"])
+    def test_malformed_or_unknown_ids_are_not_found(self, web, monkeypatch, meeting_id):
+        import glob
+        monkeypatch.setattr(glob, "glob", lambda *a, **k: pytest.fail("no filesystem scan"))
+        assert web.app._get_meeting_info(meeting_id) == {}
+
+    def test_citations_are_enriched_from_the_db(self, web):
+        footnotes = {"ev_1": {"ui": {"enrich_fields": ["meeting_id"]}}}
+        [citation] = web.app._enrich_citations([{"ev_id": "ev_1", "quote": {"meeting_id": M2, "text": "x"}}], footnotes)
+        meeting = next(m for m in SAMPLE["meetings"] if m["meeting_id"] == M2)
+        assert citation["quote"]["committee"] == meeting["committee"]
+        assert citation["quote"]["date"].endswith(meeting["date"][:4])
 
 
 # ── L2 no server paths in responses ──────────────────────────────────────────
