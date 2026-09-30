@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import config
 from api.docs import install_public_docs
+from api.mcp_server import McpSubdomainMiddleware, install_mcp_endpoint, running_mcp_sessions
 from api.rate_limit import RateLimitMiddleware, SlidingWindowRateLimiter
 from api.request_log import RequestLogMiddleware, setup_file_logging
 from api.routes import router
@@ -34,7 +35,8 @@ def use_public_api_http_settings() -> None:
 async def lifespan(app: FastAPI):
     setup_file_logging()
     use_public_api_http_settings()
-    yield
+    async with running_mcp_sessions(app):
+        yield
 
 
 rate_limiter = SlidingWindowRateLimiter()
@@ -42,8 +44,10 @@ PUBLIC_API_TITLE = "KnessetLM public API"
 
 app = FastAPI(title=PUBLIC_API_TITLE, lifespan=lifespan, docs_url=None, redoc_url=None)
 app.add_middleware(RateLimitMiddleware, limiter=rate_limiter)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "POST"], allow_headers=["*"])
+app.add_middleware(McpSubdomainMiddleware)
 app.add_middleware(RequestLogMiddleware)
 app.include_router(router)
+install_mcp_endpoint(app, rate_limiter)
 install_public_docs(app, PUBLIC_API_TITLE)
 install_error_handlers(app)

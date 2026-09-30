@@ -29,6 +29,8 @@ All endpoints are `GET` with query-string parameters and return JSON
 - `/v1/bills?q=<title words>`: bill search by title. `/v1/bills/<bill_id>?include_text=true`: one bill.
 - `/v1/votes?q=<title words>&mk_id=`: plenum votes, optionally how one MK voted.
 - `/v1/tools`: machine-readable tool schemas (for function calling). `/v1/meta`: data coverage.
+- MCP: the same tools over MCP (Streamable HTTP, stateless) at `https://meorav.com/mcp` or
+  `https://mcp.meorav.com`, e.g. `claude mcp add --transport http knesset https://mcp.meorav.com`.
 
 ## Search tips
 

@@ -153,6 +153,22 @@ API_MAX_OFFSET                = 5000
 API_KNESSET_NUM_RANGE         = (1, 26)
 API_RATE_LIMIT_WEB_PER_MINUTE = 300      # per client IP, every other web route (reading tab fires one request per meeting/speaker)
 
+# MCP endpoint (src/api/mcp_server.py): POST /mcp on both servers, and the whole of MCP_SUBDOMAIN_HOSTS
+MCP_ENABLED                   = True
+MCP_PATH                      = "/mcp"
+MCP_SUBDOMAIN_HOSTS           = ("mcp.meorav.com",)   # "/" and MCP_PATH serve MCP, every other path 404s
+MCP_ALLOWED_HOSTS             = ("meorav.com", "mcp.meorav.com", "localhost:*", "127.0.0.1:*", "[::1]:*")
+MCP_ALLOWED_ORIGINS           = ("https://meorav.com", "https://mcp.meorav.com",
+                                 "http://localhost:*", "http://127.0.0.1:*", "http://[::1]:*")
+# Cloudflare Access in front of MCP: requests that came through Cloudflare must carry a valid
+# Cf-Access-Jwt-Assertion; local requests (peer in MCP_LOCAL_PEER_HOSTS, no Cloudflare headers) skip it.
+# Empty team domain or audiences → every Cloudflare request is refused (403).
+MCP_REQUIRE_CLOUDFLARE_ACCESS = True
+CF_ACCESS_TEAM_DOMAIN         = "wild-wildflower-e296.cloudflareaccess.com"
+CF_ACCESS_AUDIENCES           = ("497cbb31a985d70c20aa792149f1b0920d813b9f4c6c190c2f251085debeabc6",)  # Access app AUD tags covering MCP
+CF_ACCESS_JWKS_CACHE_SECONDS  = 3600
+MCP_LOCAL_PEER_HOSTS          = ("127.0.0.1", "::1")
+
 # Public web server (web/app.py, exposed through a Cloudflare tunnel)
 WEB_MAX_REQUEST_BODY_BYTES           = 64 * 1024
 WEB_MAX_MK_PHOTO_NAME_CHARS          = 100

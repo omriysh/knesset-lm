@@ -106,6 +106,50 @@ def response_format(value: str) -> str:
     return one_of(value, RESPONSE_FORMATS, "format")
 
 
+# ── JSON tool arguments (MCP sends typed JSON; the REST routes send strings and ints) ──
+
+_SIGNED_INTEGER = re.compile(r"-?[0-9]{1,9}")
+_BOOLEAN_WORDS = {"true": True, "1": True, "false": False, "0": False}
+
+
+def as_text(value, name: str) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        raise ApiInputError(f"invalid_{name}", f"{name} must be a string")
+    return str(value)
+
+
+def as_int(value, name: str) -> int | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str) and _SIGNED_INTEGER.fullmatch(value.strip()):
+        return int(value)
+    raise ApiInputError(f"invalid_{name}", f"{name} must be an integer")
+
+
+def as_bool(value, name: str) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in _BOOLEAN_WORDS:
+        return _BOOLEAN_WORDS[value.strip().lower()]
+    raise ApiInputError(f"invalid_{name}", f"{name} must be true or false")
+
+
+def as_text_list(value, name: str, split_commas: bool) -> list[str]:
+    """A list or a single value; with split_commas, 'a,b' items become ['a', 'b']."""
+    if value is None:
+        return []
+    items = [as_text(item, name) for item in (value if isinstance(value, list) else [value])]
+    if split_commas:
+        items = [part for item in items for part in item.split(",")]
+    return list_param([item.strip() for item in items if item.strip()], name)
+
+
 def _is_api_path(request: Request) -> bool:
     return request.url.path.startswith("/v1/")
 

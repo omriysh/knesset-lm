@@ -71,11 +71,6 @@ def _error_status(error_code: str) -> int:
     return 500
 
 
-def _split_list(values: list[str] | None) -> list[str]:
-    """Repeated params and comma-separated values both work: ?x=a&x=b or ?x=a,b."""
-    return [part.strip() for value in values or [] for part in value.split(",") if part.strip()]
-
-
 def _clamp(value: int | None, maximum: int) -> int | None:
     return None if value is None else max(1, min(value, maximum))
 
@@ -132,7 +127,7 @@ def _hint(tool: str, args: dict, results, trimmed: bool) -> str:
     return ""
 
 
-def _error_response(tool: str, envelope, provenance: dict) -> JSONResponse:
+def _error_status_and_body(tool: str, envelope, provenance: dict) -> tuple[int, dict]:
     status = _error_status(envelope.error)
     if status >= 500:
         metadata = envelope.metadata or {}
@@ -142,22 +137,102 @@ def _error_response(tool: str, envelope, provenance: dict) -> JSONResponse:
         message = _PUBLIC_MESSAGES_BY_ERROR.get(envelope.error) or _PUBLIC_5XX_MESSAGES.get(status, "internal error")
     else:
         message = envelope.error.replace("_", " ")
-    return JSONResponse({"error_code": envelope.error, "message": message, "tool": tool, "args": provenance},
-                        status_code=status)
+    return status, {"error_code": envelope.error, "message": message, "tool": tool, "args": provenance}
 
 
-def run_tool(tool: str, args: dict, response_format: str = "json"):
+# ── tool arguments: one set of limits for the /v1 routes and the MCP tools ──
+
+def _knesset_num_arg(args: dict) -> int:
+    requested = valid.as_int(args.get("knesset_num"), "knesset_num")
+    return valid.knesset_num(DEFAULT_KNESSET_NUM if requested is None else requested)
+
+
+def _top_k_arg(args: dict, maximum: int, default: int | None = None) -> int | None:
+    return _clamp(valid.as_int(args.get("top_k"), "top_k") or default, maximum)
+
+
+def _find_args(args: dict) -> dict:
+    return {"query": valid.search_text(valid.as_text(args.get("query"), "query")),
+            "knesset_num": _knesset_num_arg(args), "top_k": _top_k_arg(args, config.API_FIND_MAX_TOP_K)}
+
+
+def _query_protocols_args(args: dict) -> dict:
+    scopes = valid.as_text_list(args.get("search_in"), "search_in", split_commas=True)
+    committees = [valid.name_filter(c, "committee")
+                  for c in valid.as_text_list(args.get("committees"), "committee", split_commas=False)]
+    meeting_ids = [valid.numeric_id(m, "meeting_id")
+                   for m in valid.as_text_list(args.get("meeting_ids"), "meeting_id", split_commas=True)]
+    return {
+        "query":       valid.keyword_query(valid.as_text(args.get("query"), "query")),
+        "search_in":   list(dict.fromkeys(scopes)) or list(config.API_PROTOCOLS_DEFAULT_SCOPES),
+        "mk_id":       valid.numeric_id(valid.as_text(args.get("mk_id"), "mk_id"), "mk_id"),
+        "party":       valid.name_filter(valid.as_text(args.get("party"), "party"), "party"),
+        "committees":  [c for c in committees if c] or None,
+        "meeting_ids": meeting_ids or None,
+        "date_from":   valid.iso_date(valid.as_text(args.get("date_from"), "date_from"), "date_from"),
+        "date_to":     valid.iso_date(valid.as_text(args.get("date_to"), "date_to"), "date_to"),
+        "sort":        valid.name_filter(valid.as_text(args.get("sort"), "sort"), "sort"),
+        "top_k":       _top_k_arg(args, config.API_PROTOCOLS_MAX_TOP_K, config.API_PROTOCOLS_DEFAULT_TOP_K),
+        "offset":      valid.offset(valid.as_int(args.get("offset"), "offset") or 0),
+        "knesset_num": _knesset_num_arg(args),
+    }
+
+
+def _meeting_attendance_args(args: dict) -> dict:
+    return {"meeting_id": valid.numeric_id(valid.as_text(args.get("meeting_id"), "meeting_id"), "meeting_id")}
+
+
+def _query_bills_args(args: dict) -> dict:
+    return {"query": valid.search_text(valid.as_text(args.get("query"), "query")),
+            "knesset_num": _knesset_num_arg(args), "top_k": _top_k_arg(args, config.API_LIST_MAX_TOP_K)}
+
+
+def _get_bill_args(args: dict) -> dict:
+    return {"bill_id": valid.numeric_id(valid.as_text(args.get("bill_id"), "bill_id"), "bill_id"),
+            "include_text": valid.as_bool(args.get("include_text"), "include_text"),
+            "max_chars": _clamp(valid.as_int(args.get("max_chars"), "max_chars"), config.BILL_TEXT_MAX_MAX_CHARS),
+            "knesset_num": _knesset_num_arg(args)}
+
+
+def _query_votes_args(args: dict) -> dict:
+    return {"query": valid.search_text(valid.as_text(args.get("query"), "query")),
+            "mk_id": valid.numeric_id(valid.as_text(args.get("mk_id"), "mk_id"), "mk_id"),
+            "knesset_num": _knesset_num_arg(args), "top_k": _top_k_arg(args, config.API_LIST_MAX_TOP_K)}
+
+
+DEFAULT_KNESSET_NUM = 25
+TOOL_ARGUMENT_VALIDATORS = {
+    "find_mk":                _find_args,
+    "find_committee":         _find_args,
+    "find_party":             _find_args,
+    "query_protocols":        _query_protocols_args,
+    "get_meeting_attendance": _meeting_attendance_args,
+    "query_bills":            _query_bills_args,
+    "get_bill":               _get_bill_args,
+    "query_votes":            _query_votes_args,
+}
+
+
+def validated_tool_args(tool: str, args: dict) -> dict:
+    """Raises valid.ApiInputError (invalid_<arg>, or unknown_tool) on input the public API refuses."""
+    if tool not in TOOL_ARGUMENT_VALIDATORS:
+        raise valid.ApiInputError("unknown_tool", f"no tool named {tool!r}; list the tools to see their names")
+    return TOOL_ARGUMENT_VALIDATORS[tool](args)
+
+
+def tool_call_outcome(tool: str, args: dict) -> tuple[int, dict]:
+    """(200, body) or (error status, error body) for already validated args."""
     envelope = dispatch(RESEARCH_TOOL_REGISTRY, tool, {k: v for k, v in args.items() if v is not None})
     provenance = {k: v for k, v in (envelope.provenance or {}).items() if k not in _INTERNAL_PROVENANCE_KEYS}
     if envelope.error:
-        return _error_response(tool, envelope, provenance)
+        return _error_status_and_body(tool, envelope, provenance)
     try:
         results = json.loads(envelope.full) if envelope.full else None
     except json.JSONDecodeError as exc:
         print(f"[api] {tool} returned non-JSON full: {exc}")
         results = envelope.full
     trimmed = _fit_to_size(results)
-    body = {
+    return 200, {
         "tool":      tool,
         "args":      provenance,
         "results":   results,
@@ -165,6 +240,13 @@ def run_tool(tool: str, args: dict, response_format: str = "json"):
         "truncated": bool(envelope.truncated or trimmed),
         "hint":      _hint(tool, provenance, results, trimmed),
     }
+
+
+def run_tool(tool: str, raw_args: dict, response_format: str = "json"):
+    response_format = valid.response_format(response_format)
+    status, body = tool_call_outcome(tool, validated_tool_args(tool, raw_args))
+    if status != 200:
+        return JSONResponse(body, status_code=status)
     if response_format == "md":
         return PlainTextResponse(render_markdown(body), media_type="text/markdown; charset=utf-8")
     return body
@@ -173,8 +255,7 @@ def run_tool(tool: str, args: dict, response_format: str = "json"):
 # ── tool routes ──────────────────────────────────────────────────────────────
 
 def _find(tool: str, q: str, knesset_num: int, top_k: int | None, format: str):
-    return run_tool(tool, {"query": valid.search_text(q), "knesset_num": valid.knesset_num(knesset_num),
-                           "top_k": _clamp(top_k, config.API_FIND_MAX_TOP_K)}, valid.response_format(format))
+    return run_tool(tool, {"query": q, "knesset_num": knesset_num, "top_k": top_k}, format)
 
 
 @router.get("/v1/mks")
@@ -208,51 +289,34 @@ def query_protocols(
     knesset_num: int = 25,
     format: str = "json",
 ):
-    scopes = valid.list_param(_split_list(search_in), "search_in")
-    committees = [valid.name_filter(c, "committee") for c in valid.list_param(committee or [], "committee")]
-    meeting_ids = [valid.numeric_id(m, "meeting_id") for m in valid.list_param(_split_list(meeting_id), "meeting_id")]
     return run_tool("query_protocols", {
-        "query":       valid.keyword_query(q),
-        "search_in":   list(dict.fromkeys(scopes)) or list(config.API_PROTOCOLS_DEFAULT_SCOPES),
-        "mk_id":       valid.numeric_id(mk_id, "mk_id"),
-        "party":       valid.name_filter(party, "party"),
-        "committees":  [c for c in committees if c] or None,
-        "meeting_ids": meeting_ids or None,
-        "date_from":   valid.iso_date(date_from, "date_from"),
-        "date_to":     valid.iso_date(date_to, "date_to"),
-        "sort":        valid.name_filter(sort, "sort"),
-        "top_k":       _clamp(top_k or config.API_PROTOCOLS_DEFAULT_TOP_K, config.API_PROTOCOLS_MAX_TOP_K),
-        "offset":      valid.offset(offset),
-        "knesset_num": valid.knesset_num(knesset_num),
-    }, valid.response_format(format))
+        "query": q, "search_in": search_in, "mk_id": mk_id, "party": party, "committees": committee,
+        "meeting_ids": meeting_id, "date_from": date_from, "date_to": date_to, "sort": sort,
+        "top_k": top_k, "offset": offset, "knesset_num": knesset_num,
+    }, format)
 
 
 @router.get("/v1/meetings/{meeting_id}/attendance")
 def get_meeting_attendance(meeting_id: str, format: str = "json"):
-    return run_tool("get_meeting_attendance", {"meeting_id": valid.numeric_id(meeting_id, "meeting_id")},
-                    valid.response_format(format))
+    return run_tool("get_meeting_attendance", {"meeting_id": meeting_id}, format)
 
 
 @router.get("/v1/bills")
 def query_bills(q: str = "", knesset_num: int = 25, top_k: int | None = None, format: str = "json"):
-    return run_tool("query_bills", {"query": valid.search_text(q), "knesset_num": valid.knesset_num(knesset_num),
-                                    "top_k": _clamp(top_k, config.API_LIST_MAX_TOP_K)}, valid.response_format(format))
+    return run_tool("query_bills", {"query": q, "knesset_num": knesset_num, "top_k": top_k}, format)
 
 
 @router.get("/v1/bills/{bill_id}")
 def get_bill(bill_id: str, include_text: bool = False, max_chars: int | None = None,
              knesset_num: int = 25, format: str = "json"):
-    return run_tool("get_bill", {"bill_id": valid.numeric_id(bill_id, "bill_id"), "include_text": include_text,
-                                 "max_chars": _clamp(max_chars, config.BILL_TEXT_MAX_MAX_CHARS),
-                                 "knesset_num": valid.knesset_num(knesset_num)}, valid.response_format(format))
+    return run_tool("get_bill", {"bill_id": bill_id, "include_text": include_text, "max_chars": max_chars,
+                                 "knesset_num": knesset_num}, format)
 
 
 @router.get("/v1/votes")
 def query_votes(q: str = "", mk_id: str | None = None, knesset_num: int = 25,
                 top_k: int | None = None, format: str = "json"):
-    return run_tool("query_votes", {"query": valid.search_text(q), "mk_id": valid.numeric_id(mk_id, "mk_id"),
-                                    "knesset_num": valid.knesset_num(knesset_num),
-                                    "top_k": _clamp(top_k, config.API_LIST_MAX_TOP_K)}, valid.response_format(format))
+    return run_tool("query_votes", {"query": q, "mk_id": mk_id, "knesset_num": knesset_num, "top_k": top_k}, format)
 
 
 # ── discovery / meta ─────────────────────────────────────────────────────────

@@ -62,6 +62,7 @@ from api.request_log import (RequestLogMiddleware, generic_error_message, log_qu
                              request_id_of, setup_file_logging)
 from api.routes import router as api_router
 from api.docs import install_public_docs
+from api.mcp_server import McpSubdomainMiddleware, install_mcp_endpoint, running_mcp_sessions
 from api.validation import install_error_handlers
 from web.concurrency import ResearchRunSlots
 from web.gemini_keys import forget_server_gemini_keys, stop_on_rejected_gemini_key, visitor_gemini_key_or_error
@@ -421,7 +422,8 @@ async def lifespan(app: FastAPI):
     app.state.sessions_dir  = settings.SESSIONS_DIR
 
     print(f"[web] Ready — {settings.MACHINE_PATH.name}", flush=True)
-    yield
+    async with running_mcp_sessions(app):
+        yield
 
     # Cleanup (none needed for local app)
 
@@ -439,9 +441,11 @@ rate_limiter = SlidingWindowRateLimiter()
 app.add_middleware(RateLimitMiddleware, limiter=rate_limiter)
 app.add_middleware(RequestBodyLimitMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(McpSubdomainMiddleware)
 app.add_middleware(RequestLogMiddleware)
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 app.include_router(api_router)
+install_mcp_endpoint(app, rate_limiter)
 install_public_docs(app, WEB_API_TITLE)
 install_error_handlers(app)
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
