@@ -72,7 +72,8 @@ def _safe_jsonable(value: object) -> object:
     """
     try:
         return json.loads(json.dumps(value, ensure_ascii=False, default=str))
-    except Exception:
+    except Exception as exc:
+        print(f"[runner] payload is not JSON-serialisable ({exc}); using its repr", flush=True)
         return repr(value)
 
 
@@ -764,7 +765,8 @@ class MachineRunner:
                 fn_name = tc["function"]["name"]
                 try:
                     fn_args = json.loads(tc["function"]["arguments"])
-                except (json.JSONDecodeError, ValueError):
+                except (json.JSONDecodeError, ValueError) as exc:
+                    print(f"[runner] tool call {fn_name!r} has unparsable arguments ({exc}); calling with none", flush=True)
                     fn_args = {}
 
                 yield ("status", f"קורא: {fn_name}…")

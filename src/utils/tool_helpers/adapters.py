@@ -26,10 +26,9 @@ from agent.subgraph.evidence import ToolEnvelope
 from utils.knesset_db import (
     _get_active_committee_members_by_id,
     get_all_committees,
-    get_mk_votes,
-    get_recent_votes,
-    get_votes_on_topic,
-    get_votes_on_topic_by_mk,
+    get_person_votes,
+    get_person_votes_on_topic,
+    search_plenum_votes,
 )
 
 
@@ -103,118 +102,42 @@ def _safely(fn, *, kind: str, source: str, **prov):
 # ---------------------------------------------------------------------------
 
 
-def adapt_get_mk_votes(
-    *,
-    name: str,
-    knesset_num: int = 25,
-    top_n: int = 20,
-) -> ToolEnvelope:
-    def _run() -> ToolEnvelope:
-        votes = get_mk_votes(mk_name=name, knesset_num=knesset_num, top_n=top_n)
-        if not votes:
-            return _err(
-                "no_votes_found",
-                kind="fetch",
-                source="odata",
-                query=name,
-                knesset_num=knesset_num,
-            )
-        return _ok(
-            votes,
-            kind="fetch",
-            source="odata",
-            provenance={
-                "mk_query":    name,
-                "knesset_num": knesset_num,
-                "top_n":       top_n,
-            },
-        )
-
-    return _safely(
-        _run,
-        kind="fetch",
-        source="odata",
-        query=name,
-        knesset_num=knesset_num,
-    )
+def paging_metadata(*, offset: int, returned: int, page_size: int, total: int | None) -> dict:
+    """Envelope ``metadata["paging"]``: which rows were returned and whether more exist."""
+    has_more = offset + returned < total if total is not None else returned >= page_size
+    paging = {"offset": offset, "returned": returned, "has_more": has_more}
+    if total is not None:
+        paging["total"] = total
+    return paging
 
 
-def adapt_get_votes_on_topic(*, topic: str, top_n: int = 20) -> ToolEnvelope:
-    def _run() -> ToolEnvelope:
-        votes = get_votes_on_topic(topic=topic, top_n=top_n)
-        if not votes:
-            return _err(
-                "no_votes_found",
-                kind="search",
-                source="odata",
-                topic=topic,
-            )
-        return _ok(
-            votes,
-            kind="search",
-            source="odata",
-            provenance={"topic": topic, "top_n": top_n},
-        )
-
-    return _safely(_run, kind="search", source="odata", topic=topic)
-
-
-def adapt_get_votes_on_topic_by_mk(
+def adapt_query_votes(
     *,
     topic: str,
-    name: str,
-    knesset_num: int = 25,
-    top_n: int = 20,
+    person_id: int | None,
+    knesset_num: int | None,
+    offset: int = 0,
+    page_size: int = 20,
 ) -> ToolEnvelope:
+    """Plenum votes matching ``topic`` (all votes when empty), with ``person_id``'s result on each
+    when given; one Knesset or all of them when ``knesset_num`` is None. An empty page is a success."""
+    kind = "fetch" if person_id is not None else "search"
+    provenance = {"topic": topic, "person_id": person_id, "knesset_num": knesset_num,
+                  "offset": offset, "page_size": page_size}
+
     def _run() -> ToolEnvelope:
-        votes = get_votes_on_topic_by_mk(
-            topic=topic,
-            mk_name=name,
-            knesset_num=knesset_num,
-            top_n=top_n,
-        )
-        if not votes:
-            return _err(
-                "no_votes_found",
-                kind="fetch",
-                source="odata",
-                topic=topic,
-                mk_query=name,
-                knesset_num=knesset_num,
-            )
-        return _ok(
-            votes,
-            kind="fetch",
-            source="odata",
-            provenance={
-                "topic":       topic,
-                "mk_query":    name,
-                "knesset_num": knesset_num,
-                "top_n":       top_n,
-            },
-        )
+        if person_id is None:
+            votes, total = search_plenum_votes(topic or None, knesset_num, offset, page_size)
+        elif topic:
+            votes, total = get_person_votes_on_topic(person_id, topic, knesset_num, offset, page_size)
+        else:
+            votes, total = get_person_votes(person_id, knesset_num, offset, page_size)
+        envelope = _ok(votes, kind=kind, source="odata", provenance=provenance)
+        envelope.metadata["paging"] = paging_metadata(offset=offset, returned=len(votes),
+                                                      page_size=page_size, total=total)
+        return envelope
 
-    return _safely(
-        _run,
-        kind="fetch",
-        source="odata",
-        topic=topic,
-        mk_query=name,
-        knesset_num=knesset_num,
-    )
-
-
-def adapt_get_recent_votes(*, top_n: int = 10, knesset_num: int = 25) -> ToolEnvelope:
-    def _run() -> ToolEnvelope:
-        votes = get_recent_votes(top_n=top_n)
-        return _ok(
-            votes,
-            kind="search",
-            source="odata",
-            provenance={"top_n": top_n, "knesset_num": knesset_num},
-        )
-
-    return _safely(_run, kind="search", source="odata", top_n=top_n)
+    return _safely(_run, kind=kind, source="odata", **provenance)
 
 
 # ---------------------------------------------------------------------------
@@ -222,23 +145,22 @@ def adapt_get_recent_votes(*, top_n: int = 10, knesset_num: int = 25) -> ToolEnv
 # ---------------------------------------------------------------------------
 
 
-def fetch_committee_record(committee_id: str) -> dict | None:
+def fetch_committee_record(committee_id: str, knesset_num: int | None = None) -> dict | None:
     """Return the committee record matching ``committee_id`` or None.
 
-    Used as the ``fetch_by_id`` callback for ``find_committee``. Looks up
-    the per-knesset committee list (cached) and matches by id.
+    Used as the ``fetch_by_id`` callback for ``find_committee``. The committee list
+    endpoint is not filterable by id, so this walks the (cached) committee list of
+    *knesset_num*, or of the current and upcoming Knessets when it is not given.
     """
     try:
         cid = int(committee_id)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as exc:
+        print(f"[adapters] committee id {committee_id!r} is not a number: {exc}", flush=True)
         return None
 
-    # The /committees_kns_committee/list endpoint isn't filterable by id,
-    # so we walk the knesset-level list. ``get_all_committees`` already
-    # paginates / caches, and the result is small (~30 entries / Knesset).
-    for knesset_num in (25, 26):  # cheap: covers current + upcoming
+    for committee_knesset_num in (25, 26) if knesset_num is None else (knesset_num,):
         try:
-            for c in get_all_committees(knesset_num):
+            for c in get_all_committees(committee_knesset_num):
                 if int(c.get("CommitteeID") or 0) == cid:
                     record = {
                         "committee_id": str(c.get("CommitteeID") or ""),
@@ -247,20 +169,19 @@ def fetch_committee_record(committee_id: str) -> dict | None:
                         "is_current":   c.get("IsCurrent"),
                     }
                     try:
-                        record["members"] = _get_active_committee_members_by_id(cid, knesset_num)
+                        record["members"] = _get_active_committee_members_by_id(
+                            cid, committee_knesset_num, current_only=bool(c.get("IsCurrent")))
                     except Exception as exc:
                         print(f"[adapters] committee {cid} members fetch failed: {exc}", flush=True)
                     return record
         except Exception as exc:
-            print(f"[adapters] committee list (knesset {knesset_num}) fetch failed: {exc}", flush=True)
+            print(f"[adapters] committee list (knesset {committee_knesset_num}) fetch failed: {exc}", flush=True)
             continue
     return None
 
 
 __all__ = [
-    "adapt_get_mk_votes",
-    "adapt_get_votes_on_topic",
-    "adapt_get_votes_on_topic_by_mk",
-    "adapt_get_recent_votes",
+    "adapt_query_votes",
+    "paging_metadata",
     "fetch_committee_record",
 ]

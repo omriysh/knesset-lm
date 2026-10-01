@@ -59,7 +59,7 @@ class FakeRunner:
 
 
 @pytest.fixture()
-def web(sample_db, tmp_path, monkeypatch):
+def web(real_db, tmp_path, monkeypatch):
     import web.app as webapp
     import web.settings as settings
     sessions = tmp_path / "sessions"

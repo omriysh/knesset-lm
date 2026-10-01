@@ -19,10 +19,15 @@ Usage
     python scripts/build_knesset_db.py --knesset-num 25 --target all --rebuild
     python scripts/build_knesset_db.py --knesset-num 25 --target summaries      # rerunnable, upserts
     python scripts/build_knesset_db.py --knesset-num 25 --target mks,meetings --rebuild
+    python scripts/build_knesset_db.py --data-dir <scratch>/Data --rebuild             # small test db
 
 --rebuild clears the target's rows for that Knesset first; without it rows are
 upserted. FTS tables are rebuilt after every write. A target that produces
-zero rows is refused (an empty table silently breaks every consumer).
+zero rows is refused (an empty table silently breaks every consumer). Exits 1
+when any target fails.
+
+Plenum sessions (config.PLENUM_COMMITTEE_NAME, meeting_id "p<PlenumSessionID>") are
+meetings like any other; the committees target adds their committee row.
 """
 
 import argparse
@@ -40,18 +45,14 @@ import config
 from indexing.speaker_link import resolve_speaker
 from retrieval import knesset_db_store as store
 from summarization.output_parsing import QuoteLocator
-from summarization.summary_io import load_summary, summary_path_for_transcript, transcript_path_for_summary
-from utils.knesset_db import _most_recent_faction, get_all_committees, get_all_mks, mk_name_variants
+from summarization.summary_io import load_summary, transcript_path_for_summary
+from utils.knesset_db import get_all_committees, mk_roster_rows
 from utils.meeting import extract_attendance, get_meeting_speakers, load_meeting, parse_full_text_speeches
+from utils.protocol_download import json_files_by_meeting, transcripts_by_meeting
+from utils.tool_helpers.filter_resolution import normalized_name_key
 from utils.tool_helpers.fuzzy_name_index import FuzzyNameIndex
 
 TARGETS = ("mks", "committees", "meetings", "summaries", "speeches")
-NOT_MEETINGS_DIR = "not_meetings"
-
-
-def _meeting_id_from_stem(stem: str) -> str:
-    parts = stem.rsplit("_", 1)
-    return parts[-1] if len(parts) == 2 else stem
 
 
 def _iso_date(stem: str) -> str:
@@ -61,39 +62,12 @@ def _iso_date(stem: str) -> str:
     return ""
 
 
-def _newest(paths: list[Path]) -> Path:
-    return max(paths, key=lambda path: path.stat().st_mtime)
-
-
-def _json_files_by_meeting(root: Path, label: str) -> dict[str, list[Path]]:
-    """All *.json under root grouped by meeting_id, skipping NOT_MEETINGS_DIR folders."""
-    by_meeting: dict[str, list[Path]] = {}
-    for json_path in sorted(root.rglob("*.json")):
-        if NOT_MEETINGS_DIR in json_path.relative_to(root).parts:
-            continue
-        by_meeting.setdefault(_meeting_id_from_stem(json_path.stem), []).append(json_path)
-    n_duplicated = sum(1 for paths in by_meeting.values() if len(paths) > 1)
-    if n_duplicated:
-        print(f"  [{label}] {n_duplicated} meeting_ids have more than one file; keeping one each")
-    return by_meeting
-
-
-def _transcripts_by_meeting(knesset_num: int) -> dict[str, Path]:
-    """One transcript per meeting_id. Among duplicates (same meeting saved under a renamed
-    committee folder) prefer the copy that has a summary, then the newest file."""
-    chosen: dict[str, Path] = {}
-    for meeting_id, paths in _json_files_by_meeting(config.transcriptions_dir(knesset_num), "transcripts").items():
-        with_summary = [path for path in paths if summary_path_for_transcript(path).exists()]
-        chosen[meeting_id] = _newest(with_summary or paths)
-    return chosen
-
-
 def _summaries_by_meeting(knesset_num: int, transcripts: dict[str, Path]) -> dict[str, Path]:
     """One summary per meeting_id: the one paired with the chosen transcript, else the newest."""
     chosen: dict[str, Path] = {}
-    for meeting_id, paths in _json_files_by_meeting(config.summaries_dir(knesset_num), "summaries").items():
+    for meeting_id, paths in json_files_by_meeting(config.summaries_dir(knesset_num), "summaries").items():
         paired = [path for path in paths if transcript_path_for_summary(path) == transcripts.get(meeting_id)]
-        chosen[meeting_id] = paired[0] if paired else _newest(paths)
+        chosen[meeting_id] = paired[0] if paired else max(paths, key=lambda path: path.stat().st_mtime)
     return chosen
 
 
@@ -118,21 +92,7 @@ def _attendance_by_meeting(conn, knesset_num: int) -> dict[str, set[str]]:
 # ── mks / committees ──────────────────────────────────────────────────────────
 
 def build_mks(conn, knesset_num: int, rebuild: bool) -> int:
-    rows = []
-    for mk in get_all_mks(knesset_num):
-        mk_id = str(mk.get("mk_individual_id") or mk.get("PersonID") or "")
-        first = (mk.get("mk_individual_first_name") or "").strip()
-        last  = (mk.get("mk_individual_name") or "").strip()
-        full  = f"{first} {last}".strip()
-        if not mk_id or not full:
-            continue
-        faction = _most_recent_faction([f for f in (mk.get("factions") or []) if f], knesset_num)
-        aliases = mk_name_variants(first, last) + [a for a in (mk.get("altnames") or []) if a]
-        rows.append({
-            "mk_id": mk_id, "knesset_num": knesset_num, "first_name": first, "last_name": last,
-            "full_name": full, "party": (faction or {}).get("faction_name", "").strip() or None,
-            "aliases": " | ".join(dict.fromkeys(a for a in aliases if a and a != full)),
-        })
+    rows = mk_roster_rows(knesset_num)
     if not rows:
         return 0
     if rebuild:
@@ -140,12 +100,28 @@ def build_mks(conn, knesset_num: int, rebuild: bool) -> int:
     return store.insert_mks(conn, rows)
 
 
+def _insert_committees_known_only_from_meetings(conn, knesset_num: int) -> int:
+    """Committees named in meetings but missing from the Knesset committee list get a
+    'meetings:<n>' committee_id, so find_committee and the name vocabulary reach them."""
+    missing_names = [r[0] for r in conn.execute(
+        "SELECT DISTINCT committee FROM meetings WHERE knesset_num = ? AND committee IS NOT NULL "
+        "AND committee NOT IN (SELECT name FROM committees WHERE knesset_num = ?) ORDER BY committee",
+        (knesset_num, knesset_num))]
+    rows = [{"committee_id": f"meetings:{position}", "knesset_num": knesset_num, "name": name, "is_current": None}
+            for position, name in enumerate(missing_names, start=1)]
+    if rows:
+        print(f"  [meetings] {len(rows)} committees exist only in meetings; added to committees")
+    return store.insert_committees(conn, rows) if rows else 0
+
+
 def build_committees(conn, knesset_num: int, rebuild: bool) -> int:
     rows = [{"committee_id": str(c["CommitteeID"]), "knesset_num": knesset_num,
-             "name": c["Name"].strip(), "is_current": c.get("IsCurrent")}
+             "name": normalized_name_key(c["Name"]), "is_current": c.get("IsCurrent")}
             for c in get_all_committees(knesset_num)]
     if not rows:
         return 0
+    rows.append({"committee_id": config.PLENUM_COMMITTEE_ID, "knesset_num": knesset_num,
+                 "name": config.PLENUM_COMMITTEE_NAME, "is_current": True})
     if rebuild:
         store.clear_target(conn, "committees", knesset_num)
     return store.insert_committees(conn, rows)
@@ -173,7 +149,7 @@ def build_meetings(conn, knesset_num: int, rebuild: bool) -> int:
     meeting_rows: list[dict] = []
     attendance_rows: list[dict] = []
     n_resolved = n_guests = 0
-    for meeting_id, json_path in _transcripts_by_meeting(knesset_num).items():
+    for meeting_id, json_path in transcripts_by_meeting(knesset_num).items():
         try:
             meeting = load_meeting(json_path)
         except Exception as exc:
@@ -182,7 +158,7 @@ def build_meetings(conn, knesset_num: int, rebuild: bool) -> int:
         meeting_rows.append({
             "meeting_id":      meeting_id,
             "knesset_num":     knesset_num,
-            "committee":       str(meeting.get("committee") or json_path.parent.name.replace("_", " ")),
+            "committee":       normalized_name_key(str(meeting.get("committee") or json_path.parent.name.replace("_", " "))),
             "date":            _iso_date(json_path.stem),
             "format":          "structured" if "speeches" in meeting else "full_text",
             "transcript_path": str(json_path),
@@ -220,6 +196,7 @@ def build_meetings(conn, knesset_num: int, rebuild: bool) -> int:
                          [(m["meeting_id"],) for m in meeting_rows])
     n = store.insert_meetings(conn, meeting_rows)
     store.insert_attendance(conn, attendance_rows)
+    _insert_committees_known_only_from_meetings(conn, knesset_num)
     print(f"  [meetings] {n} meetings, {n_resolved} MK attendance rows, {n_guests} guest rows")
     return n
 
@@ -266,7 +243,7 @@ def build_summaries(conn, knesset_num: int, rebuild: bool) -> int:
     n_meetings = n_opinions = n_resolved = n_located = 0
     unresolved: dict[str, int] = {}
     label_cache: dict[str, dict | None] = {}
-    for meeting_id, summary_path in _summaries_by_meeting(knesset_num, _transcripts_by_meeting(knesset_num)).items():
+    for meeting_id, summary_path in _summaries_by_meeting(knesset_num, transcripts_by_meeting(knesset_num)).items():
         try:
             summary = load_summary(summary_path)
         except Exception as exc:
@@ -276,7 +253,7 @@ def build_summaries(conn, knesset_num: int, rebuild: bool) -> int:
         if meeting_id not in known_meetings:
             store.insert_meetings(conn, [{
                 "meeting_id": meeting_id, "knesset_num": knesset_num,
-                "committee": summary_path.parent.name.replace("_", " "),
+                "committee": normalized_name_key(summary_path.parent.name.replace("_", " ")),
                 "date": _iso_date(summary_path.stem), "format": None,
                 "transcript_path": str(transcript_path) if transcript_path.exists() else None}])
             known_meetings.add(meeting_id)
@@ -350,7 +327,7 @@ def build_speeches(conn, knesset_num: int, rebuild: bool) -> int:
         store.clear_target(conn, "speeches", knesset_num)
     total = 0
     batch: list[dict] = []
-    for meeting_id, json_path in _transcripts_by_meeting(knesset_num).items():
+    for meeting_id, json_path in transcripts_by_meeting(knesset_num).items():
         try:
             meeting = load_meeting(json_path)
         except Exception as exc:
@@ -393,7 +370,13 @@ def main() -> None:
     ap.add_argument("--knesset-num", type=int, default=25)
     ap.add_argument("--target", default="all", help="comma-separated subset of: all, " + ", ".join(TARGETS))
     ap.add_argument("--rebuild", action="store_true", help="clear the target's rows for this Knesset first")
+    ap.add_argument("--data-dir", type=Path, default=None,
+                    help="read raw_transcriptions/ and summaries/ from here and write <data-dir>/knesset.db "
+                         "(default: Data/); for building a small test database")
     args = ap.parse_args()
+    if args.data_dir:
+        config.DATA_DIR = args.data_dir.resolve()
+        config.KNESSET_DB = config.DATA_DIR / "knesset.db"
 
     targets = list(TARGETS) if args.target == "all" else [t.strip() for t in args.target.split(",") if t.strip()]
     unknown = [t for t in targets if t not in _BUILDERS]
@@ -403,6 +386,7 @@ def main() -> None:
 
     conn = store.connect()
     print(f"db: {store.db_path()}")
+    failed_targets: list[str] = []
     try:
         for target in targets:
             print(f"\n[{target}] knesset={args.knesset_num} rebuild={args.rebuild}")
@@ -411,14 +395,19 @@ def main() -> None:
                 n = _BUILDERS[target](conn, args.knesset_num, args.rebuild)
             except Exception as exc:
                 print(f"  ERROR building {target}: {exc}")
+                failed_targets.append(target)
                 continue
             if n == 0:
                 print(f"  ERROR: builder produced 0 rows for '{target}', nothing written")
+                failed_targets.append(target)
                 continue
             store.set_meta(conn, f"{target}:{args.knesset_num}", f"{n} rows at {time.strftime('%Y-%m-%d %H:%M')}")
             print(f"  rows={n}  elapsed={time.time() - t0:.1f}s")
     finally:
         conn.close()
+    if failed_targets:
+        print(f"\nFAILED targets: {', '.join(failed_targets)}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

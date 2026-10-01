@@ -16,6 +16,7 @@ import config
 RESPONSE_FORMATS = ("json", "md")
 
 _ASCII_DIGITS = re.compile(r"[0-9]+")
+_MEETING_ID = re.compile(rf"{re.escape(config.PLENUM_MEETING_ID_PREFIX)}?[0-9]+")
 _ISO_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 
@@ -68,10 +69,10 @@ def keyword_query(value: str | None, max_chars: int | None = None, max_words: in
     if not query:
         return query
     if not any(ch.isalnum() for ch in query):
-        raise ApiInputError("invalid_query", "q has no searchable words (letters or digits)")
+        raise ApiInputError("invalid_query", "the search text has no searchable words (letters or digits)")
     max_words = max_words or config.API_MAX_QUERY_WORDS
     if len(query.split()) > max_words:
-        raise ApiInputError("invalid_query", f"q has more than {max_words} words")
+        raise ApiInputError("invalid_query", f"the search text has more than {max_words} words")
     return query
 
 
@@ -87,6 +88,16 @@ def numeric_id(value: str | None, name: str) -> str | None:
         raise ApiInputError(f"invalid_{name}", f"{name} must be a number of up to {config.API_MAX_ID_DIGITS} digits")
     return value
 
+
+def meeting_id(value: str | None, name: str = "meeting_id") -> str | None:
+    """A committee meeting id (ASCII digits) or a plenum session id ("p" + digits)."""
+    if value is None or value == "":
+        return None
+    digits = value.removeprefix(config.PLENUM_MEETING_ID_PREFIX)
+    if not _MEETING_ID.fullmatch(value) or len(digits) > config.API_MAX_ID_DIGITS:
+        raise ApiInputError(f"invalid_{name}", f"{name} must be a number of up to {config.API_MAX_ID_DIGITS} digits, "
+                                               f"or p + digits for a plenum session")
+    return value
 
 def iso_date(value: str | None, name: str) -> str | None:
     if value is None or value == "":

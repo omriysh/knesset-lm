@@ -56,6 +56,29 @@ def summaries_dir(knesset_num: int = 25) -> Path:
     return DATA_DIR / "summaries" / str(knesset_num)
 
 
+def summary_batch_state_path(knesset_num: int = 25) -> Path:
+    """Resume state of scripts/summarize_knesset_batches.py."""
+    return DATA_DIR / "summary_batches" / f"batch_state_k{knesset_num}.json"
+
+
+# ── Plenum protocols ──────────────────────────────────────────────────────────
+# Plenum sessions are stored as meetings of one pseudo-committee, next to the committees.
+
+PLENUM_COMMITTEE_NAME    = "מליאת הכנסת"
+PLENUM_COMMITTEE_ID      = "plenum"
+PLENUM_MEETING_ID_PREFIX = "p"     # plenum meeting_id = "p" + KNS_PlenumSession.Id
+PLENUM_PROTOCOL_DOCUMENT_GROUP_TYPE_ID = 28   # KNS_DocumentPlenumSession group "דברי הכנסת"
+COMMITTEE_PROTOCOL_DOCUMENT_GROUP_TYPE_ID = 23   # KNS_DocumentCommitteeSession group "פרוטוקול ועדה"
+WORD_EXTRACTION_TIMEOUT_SECONDS = 120   # per .doc; the worker and its own Word instance are killed after this
+
+# ── Summarization (scripts/summarize_knesset_batches.py) ─────────────────────
+# The opinions pass saturates the output cap (~150 opinions) on long transcripts, so a transcript
+# longer than SUMMARY_OPINIONS_CHUNK_THRESHOLD_CHARS gets one opinions request per chunk of about
+# SUMMARY_OPINIONS_CHUNK_TARGET_CHARS, cut at speaker turns. The topics pass always sees it whole.
+SUMMARY_OPINIONS_CHUNK_THRESHOLD_CHARS = 150_000
+SUMMARY_OPINIONS_CHUNK_TARGET_CHARS    = 120_000
+
+
 # ── Plan-execute agent ───────────────────────────────────────────────────────
 
 # Models (cloud)
@@ -104,7 +127,59 @@ QUERY_PROTOCOLS_DEFAULT_TOP_K      = 50     # rows per scope (topics / opinions 
 QUERY_PROTOCOLS_MAX_TOP_K          = 200
 NAME_RESOLUTION_AUTO_THRESHOLD     = 0.35
 FUZZY_SEARCH_THRESHOLD             = 55.0   # minimum RapidFuzz score (0–100) to include a candidate
-FUZZY_BODY_SCORE_WEIGHT            = 0.85   # body match weighted lower than label match
+FUZZY_BODY_SCORE_WEIGHT            = 0.7    # body (aliases) match weighted lower than label match
+# find_mk / mk name resolution: a name sharing only one token with the query ("יאיר גולן" vs "יאיר
+# לפיד") is capped at this score. Queries of up to 2 tokens need every token matched, longer ones all but one.
+FUZZY_PARTIAL_NAME_MAX_SCORE       = 60.0
+FUZZY_NAME_TOKEN_MATCH_MIN_RATIO   = 80.0   # "מרב" ~ "מירב" match, "יאיר" ~ "מאיר" does not
+FIND_MK_CONFIDENT_SCORE            = 0.75   # below it find_mk adds a "no MK named X" hint
+MK_NAME_FILTER_MIN_SCORE           = 0.85   # query_protocols mk_id given as a name
+NAME_FILTER_UNAMBIGUOUS_GAP        = 0.1    # top fuzzy candidate must lead the runner-up by this much
+PARTY_MATCH_MIN_SCORE              = 0.8    # find_party / party filter fuzzy cutoff: typos only; "דגל התורה" (0.7) must not become "יהדות התורה"
+MAX_COMMITTEE_NAME_CHARS           = 250    # joint-committee names in meetings run to ~190 characters
+FILTER_DIAGNOSTICS_ROW_COUNT_CAP   = 1000
+
+# Party filter aliases → the exact mks.party string of Knesset 25: only abbreviations, spelling
+# variants and transliterations of the faction's own name (no renames, mergers or component parties). Keys are compared after
+# filter_resolution.normalized_party_key (quotes and dashes dropped, case folded), so 'רע"ם' covers 'רעם'.
+PARTY_ALIASES = {
+    'ש"ס':                  'התאחדות הספרדים שומרי תורה תנועתו של מרן הרב עובדיה יוסף זצ"ל',
+    "shas":                 'התאחדות הספרדים שומרי תורה תנועתו של מרן הרב עובדיה יוסף זצ"ל',
+    "ליכוד":                "הליכוד",
+    "likud":                "הליכוד",
+    "the likud":            "הליכוד",
+    "יש עתיד":              "יש עתיד",
+    "yesh atid":            "יש עתיד",
+    "עוצמה":                "עוצמה יהודית בראשות איתמר בן גביר",
+    "עוצמה יהודית":         "עוצמה יהודית בראשות איתמר בן גביר",
+    "otzma yehudit":        "עוצמה יהודית בראשות איתמר בן גביר",
+    "הציונות הדתית":        "הציונות הדתית בראשות בצלאל סמוטריץ'",
+    "ציונות דתית":          "הציונות הדתית בראשות בצלאל סמוטריץ'",
+    "religious zionism":    "הציונות הדתית בראשות בצלאל סמוטריץ'",
+    "כחול לבן":             "כחול לבן - המחנה הממלכתי",
+    "blue and white":       "כחול לבן - המחנה הממלכתי",
+    "ישראל ביתנו":          "ישראל ביתנו",
+    "yisrael beiteinu":     "ישראל ביתנו",
+    "yisrael beytenu":      "ישראל ביתנו",
+    "עבודה":                "העבודה",
+    "מפלגת העבודה":         "העבודה",
+    "labor":                "העבודה",
+    "labour":               "העבודה",
+    'רע"ם':                 'רע"ם',
+    "raam":                 'רע"ם',
+    "ra'am":                'רע"ם',
+    'חד"ש':                 'חד"ש-תע"ל',
+    "hadash":               'חד"ש-תע"ל',
+    "hadash taal":          'חד"ש-תע"ל',
+    "יהדות התורה":          "יהדות התורה",
+    "יהדות התורה המאוחדת":  "יהדות התורה",
+    "utj":                  "יהדות התורה",
+    "united torah judaism": "יהדות התורה",
+    "הימין הממלכתי":        "הימין הממלכתי",
+    "נעם":                  "נעם - בראשות אבי מעוז",
+    "נועם":                 "נעם - בראשות אבי מעוז",
+    "noam":                 "נעם - בראשות אבי מעוז",
+}
 # Score given when query and label differ only by an interior middle name
 # and agree on both first and last token ("אביחי בוארון" vs "אביחי אברהם
 # בוארון"). WRatio puts those at 85, below PARTICIPANT_FUZZY_THRESHOLD.
@@ -124,12 +199,17 @@ FUZZY_TOKEN_CONTAINMENT_SCORE      = 95.0
 PARTICIPANT_FUZZY_THRESHOLD        = 90.0
 
 # Public API (src/api) — sized for a browsing agent's context, smaller than the research agent's
-API_PROTOCOLS_DEFAULT_TOP_K   = 10
-API_PROTOCOLS_MAX_TOP_K       = 50
 API_PROTOCOLS_DEFAULT_SCOPES  = ("topics", "opinions")
-API_FIND_MAX_TOP_K            = 5
-API_LIST_MAX_TOP_K            = 50
-API_MAX_RESPONSE_CHARS        = 90_000
+# Public API page sizes: top_k is not a public argument; callers page with offset / the response's `next`
+# query_protocols pages whole rows by a character budget (utils.tool_helpers.char_paging): offset counts
+# rows, and a page takes rows while their served JSON is under API_PROTOCOLS_PAGE_CHARS, plus the row
+# that crosses it. Rows are never split or cut, so a page can run one row over the budget.
+API_PROTOCOLS_PAGE_CHARS                 = 28_000  # per scope
+API_PROTOCOLS_MAX_OFFSET                 = 20_000  # rows; the meeting with the most speeches has ~7.2k
+API_FIND_PAGE_SIZE                       = 5    # find_mk, find_committee
+API_FIND_PARTY_PAGE_SIZE                 = 3
+API_FIND_LISTING_PAGE_SIZE               = 100  # find_party / find_committee with an empty query: all of them
+API_LIST_PAGE_SIZE                       = 20   # query_bills, query_votes (rows)
 PUBLIC_API_RETRY_ATTEMPTS        = 2    # api.app and web.app processes: fail fast when the Knesset API is down
 PUBLIC_API_RETRY_SLEEP           = 1
 PUBLIC_API_HTTP_TIMEOUT_SECONDS  = 10
@@ -144,13 +224,24 @@ GEMINI_KEY_CHECK_CACHE_SECONDS      = 600
 GEMINI_KEY_CHECK_CACHE_MAX_ENTRIES  = 10_000
 API_TRUSTED_PROXY_HOSTS             = ("127.0.0.1", "::1")  # cloudflared runs on this machine
 DB_QUERY_TIMEOUT_SECONDS            = 20
+
+# Protocol FTS5 queries: each query word is OR-ed with its indexed prefixed forms (ביוקר, המחיה)
+FTS_HEBREW_PREFIXES = ("ה", "ב", "ו", "ל", "מ", "ש", "כ", "וה", "שה", "מה", "וב", "ול", "לה", "בה", "כש")
+FTS_MAX_PREFIXED_VARIANTS_PER_WORD  = 24   # on top of the ktiv spelling variants
+FTS_MIN_PREFIXED_WORD_CHARS         = 3    # shorter words (שר, כל) turn into other words behind a prefix
+# A query word that starts with a prefix (המחיה) also matches its bare base (מחיה) when the base is a common
+# indexed word, not a root that happens to start with a prefix letter (מדינה -> דינה, ממשלה -> משלה)
+FTS_MIN_STRIPPED_BASE_DOCS          = 50
+FTS_MIN_STRIPPED_BASE_DOC_RATIO     = 0.1  # of the query word's own doc count
 API_MAX_QUERY_CHARS           = 200
 API_MAX_QUERY_WORDS           = 12       # FTS5 AND-slots per protocol query
 API_MAX_NAME_CHARS            = 100      # party / committee filter values
 API_MAX_LIST_ITEMS            = 20       # repeated / comma-separated list params
 API_MAX_ID_DIGITS             = 12
-API_MAX_OFFSET                = 5000
-API_KNESSET_NUM_RANGE         = (1, 26)
+API_MAX_OFFSET                = 5000       # rows: query_bills, query_votes
+BILL_TEXT_MAX_OFFSET          = 2_000_000  # characters into one bill document's text (get_bill)
+API_KNESSET_NUM_RANGE         = (1, 25)  # live OData tools (votes, bills, find_mk, find_party, find_committee); omitted = every Knesset
+PROTOCOL_KNESSET_NUMS         = (25,)    # Knessets preprocessed into knesset.db: query_protocols, committee listing with meeting counts
 API_RATE_LIMIT_WEB_PER_MINUTE = 300      # per client IP, every other web route (reading tab fires one request per meeting/speaker)
 
 # Research agent tool arguments: validated like the public API (api.tool_arguments) but with room for

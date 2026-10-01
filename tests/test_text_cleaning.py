@@ -5,7 +5,7 @@ Free-text input hygiene (api.validation.clean_text) on every text field of the p
 web routes: lone surrogates are a 400 (never a 500 from the UTF-8 encoder), invisible format
 characters (bidi overrides, zero-width, BOM) are dropped after NFKC, Hebrew letters, niqqud,
 geresh and gershayim survive. Also utils.tools.dispatch never raises on such arguments.
-Real data: conftest.sample_db.
+Real data: the real knesset.db (conftest.real_db).
 """
 
 import json
@@ -20,13 +20,10 @@ import pytest
 from agent.subgraph.evidence import ToolEnvelope
 from api import validation as valid
 from api.routes import validated_tool_args
-from tests.conftest import ROLES, SAMPLE
-from tests.test_api import client, network  # noqa: F401
 from tests.test_web_gemini_key import KEY_HEADER, google_answers, web  # noqa: F401
 from tests.test_web_security import load, save
 from utils.tools import ToolSpec, dispatch
 
-M2 = ROLES["M2"]
 LONE_SURROGATE = "\ud800"
 
 
@@ -88,7 +85,7 @@ class TestPublicApiText:
             validated_tool_args("query_protocols", args)
         assert raised.value.error_code == error_code
 
-    def test_invisible_characters_do_not_change_results(self, client):
+    def test_invisible_characters_do_not_change_results(self, client, real_db):
         plain = client.get("/v1/protocols", params={"q": "ביטחון"}).json()["results"]
         hidden = client.get("/v1/protocols", params={"q": "בי​טחון‮"}).json()["results"]
         assert plain == hidden and any(plain.values())
@@ -126,26 +123,27 @@ class TestWebText:
         response = post_json(web, "/api/research/start", {"question": f"מה {LONE_SURROGATE}"}, KEY_HEADER)
         assert response.status_code == 400
 
-    def test_workspace_select_surrogate_is_400_and_not_stored(self, web):
+    def test_workspace_select_surrogate_is_400_and_not_stored(self, web, real_db):
         sid = save(web, status="done", workspace_data={"selected_chunks": []})
         response = post_json(web, f"/api/research/{sid}/workspace/select",
-                             {"chunk_id": "3", "text": f"קטע {LONE_SURROGATE}", "source_meeting_id": M2})
+                             {"chunk_id": "3", "text": f"קטע {LONE_SURROGATE}", "source_meeting_id": real_db.meeting_id})
         assert response.status_code == 400
         assert load(web, sid).workspace_data == {"selected_chunks": []}
 
-    def test_workspace_select_drops_invisible_characters(self, web):
+    def test_workspace_select_drops_invisible_characters(self, web, real_db):
         sid = save(web, status="done", workspace_data={"selected_chunks": []})
         response = web.client.post(f"/api/research/{sid}/workspace/select",
-                                   json={"chunk_id": "3", "text": "ק‮טע", "source_meeting_id": M2})
+                                   json={"chunk_id": "3", "text": "ק‮טע", "source_meeting_id": real_db.meeting_id})
         assert response.status_code == 200
         assert load(web, sid).workspace_data["selected_chunks"][0]["text"] == "קטע"
 
-    def test_workspace_select_keeps_a_real_transcript_chunk_verbatim(self, web):
-        speeches = [row for row in SAMPLE["speeches"] if row["meeting_id"] == M2][:3]
+    def test_workspace_select_keeps_a_real_transcript_chunk_verbatim(self, web, real_conn, real_db):
+        speeches = real_conn.execute("SELECT speaker, text FROM speeches WHERE meeting_id = ? ORDER BY idx LIMIT 3",
+                                     (real_db.meeting_id,)).fetchall()
         chunk = "\n".join(f"{row['speaker']}:\n\t{row['text']}" for row in speeches)
         sid = save(web, status="done", workspace_data={"selected_chunks": []})
         response = web.client.post(f"/api/research/{sid}/workspace/select",
-                                   json={"chunk_id": "3", "text": chunk, "source_meeting_id": M2})
+                                   json={"chunk_id": "3", "text": chunk, "source_meeting_id": real_db.meeting_id})
         assert response.status_code == 200
         assert load(web, sid).workspace_data["selected_chunks"][0]["text"] == chunk
 

@@ -3,7 +3,8 @@ tests/test_mcp_endpoint.py
 
 MCP endpoint (src/api/mcp_server.py): stateless Streamable HTTP at POST /mcp on both servers and at
 the root of MCP_SUBDOMAIN_HOSTS, exposing RESEARCH_TOOL_REGISTRY as MCP tools. Same real data and
-replayed network as tests/test_api.py; a tool call's JSON must equal the matching /v1 body.
+live upstream APIs as tests/test_api.py (upstream tools are marked `network`); a tool call's JSON must
+equal the matching /v1 body.
 Cloudflare Access: requests that came through Cloudflare need a valid Cf-Access-Jwt-Assertion.
 """
 
@@ -23,10 +24,7 @@ from fastapi.testclient import TestClient
 
 import config
 from agent.research_agent.tools import RESEARCH_TOOL_REGISTRY
-from tests.conftest import ROLES, X_MK
-from tests.test_api import client, network  # noqa: F401  (fixtures)
-
-M1, M2 = ROLES["M1"], ROLES["M2"]
+from api.routes import public_tool_schema
 UPSTREAM_TOOLS = {"find_mk", "find_committee", "find_party", "query_bills", "get_bill", "query_votes"}
 MCP_HEADERS = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json",
                "MCP-Protocol-Version": "2025-06-18"}
@@ -61,7 +59,7 @@ def allow_test_client(monkeypatch, local: bool = True):
 
 
 @pytest.fixture()
-def mcp(sample_db, network, monkeypatch):
+def mcp(real_db, monkeypatch):
     from api.app import app, rate_limiter
     allow_test_client(monkeypatch)
     rate_limiter.reset()
@@ -70,27 +68,28 @@ def mcp(sample_db, network, monkeypatch):
     rate_limiter.reset()
 
 
-def registry_input_schema(spec) -> dict:
-    return {key: value for key, value in spec.schema.items() if key != "description"}
+def public_input_schema(spec) -> dict:
+    from api.routes import public_tool_schema
+    return {key: value for key, value in public_tool_schema(spec).items() if key != "description"}
 
 
 # ── protocol surface ─────────────────────────────────────────────────────────
 
 class TestHandshakeAndListing:
-    def test_initialize_gives_server_info_and_the_agent_instructions(self, mcp):
+    def test_initialize_gives_server_info_and_the_mcp_instructions(self, mcp):
+        from api.mcp_server import mcp_instructions
         result = mcp.result("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
                                            "clientInfo": {"name": "pytest", "version": "1"}})
         assert result["serverInfo"]["name"]
         assert "tools" in result["capabilities"]
-        llms_text = mcp.http.get("/llms.txt").text
-        assert llms_text.strip() in result["instructions"]
+        assert result["instructions"] == mcp_instructions()
 
     def test_tools_mirror_the_research_registry(self, mcp):
         tools = mcp.result("tools/list")["tools"]
         assert [tool["name"] for tool in tools] == [spec.name for spec in RESEARCH_TOOL_REGISTRY]
         for tool, spec in zip(tools, RESEARCH_TOOL_REGISTRY):
-            assert tool["description"] == spec.schema["description"]
-            assert tool["inputSchema"] == registry_input_schema(spec)
+            assert tool["description"] == public_tool_schema(spec)["description"]
+            assert tool["inputSchema"] == public_input_schema(spec)
             assert tool["annotations"]["readOnlyHint"] is True
             assert tool["annotations"]["openWorldHint"] is (spec.name in UPSTREAM_TOOLS)
 
@@ -101,40 +100,49 @@ class TestHandshakeAndListing:
 # ── tool calls ───────────────────────────────────────────────────────────────
 
 class TestToolCalls:
-    def test_find_mk_equals_rest_body(self, mcp):
-        is_error, body = mcp.call_tool("find_mk", {"query": X_MK["full_name"]})
+    @pytest.mark.network
+    def test_find_mk_equals_rest_body(self, mcp, real_db):
+        is_error, body = mcp.call_tool("find_mk", {"query": real_db.mk_name})
         assert not is_error
-        assert body["results"][0]["mk_id"] == X_MK["mk_id"]
-        assert body == mcp.http.get("/v1/mks", params={"q": X_MK["full_name"]}).json()
+        assert body["results"][0]["mk_id"] == real_db.mk_id
+        assert body == mcp.http.get("/v1/mks", params={"q": real_db.mk_name}).json()
 
-    def test_query_protocols_equals_rest_body(self, mcp):
+    def test_query_protocols_equals_rest_body(self, mcp, real_db):
         is_error, body = mcp.call_tool("query_protocols", {
-            "meeting_ids": [M2], "search_in": ["speeches"], "top_k": 2})
+            "meeting_ids": [real_db.meeting_id], "search_in": ["speeches"]})
         assert not is_error
         assert body == mcp.http.get("/v1/protocols", params={
-            "meeting_id": M2, "search_in": "speeches", "top_k": 2}).json()
-        assert len(body["results"]["speeches"]) == 2 and "offset=2" in body["hint"]
+            "meeting_id": real_db.meeting_id, "search_in": "speeches"}).json()
+        next_offset = len(body["results"]["speeches"])
+        assert body["next"]["speeches"]["offset"] == next_offset and f"offset={next_offset}" in body["hint"]
 
-    def test_numeric_id_sent_as_number_is_accepted(self, mcp):
-        is_error, body = mcp.call_tool("query_protocols", {"mk_id": int(X_MK["mk_id"]), "search_in": ["opinions"]})
+    def test_numeric_id_sent_as_number_is_accepted(self, mcp, real_db):
+        is_error, body = mcp.call_tool("query_protocols", {"mk_id": int(real_db.mk_id), "search_in": ["opinions"]})
         assert not is_error
         assert body["results"]["opinions"]
-        assert all(row["mk_id"] == X_MK["mk_id"] for row in body["results"]["opinions"])
+        assert all(row["mk_id"] == real_db.mk_id for row in body["results"]["opinions"])
 
-    def test_attendance(self, mcp):
-        is_error, body = mcp.call_tool("get_meeting_attendance", {"meeting_id": M1})
+    def test_chatbot_style_keyword_search(self, mcp, real_db):
+        is_error, body = mcp.call_tool("query_protocols", {
+            "query": real_db.topic_word, "search_in": ["topics", "opinions"], "knesset_num": 25, "top_k": 5})
+        assert not is_error and body["results"]["topics"]
+
+    def test_attendance(self, mcp, real_db):
+        is_error, body = mcp.call_tool("get_meeting_attendance", {"meeting_id": real_db.other_meeting_id})
         assert not is_error and body["results"]["attendance"]
 
-    def test_top_k_is_clamped_like_rest(self, mcp):
-        is_error, body = mcp.call_tool("find_mk", {"query": "עודד", "top_k": 50})
-        assert not is_error and body["args"]["top_k"] == config.API_FIND_MAX_TOP_K
+    @pytest.mark.network
+    def test_a_sent_top_k_is_an_unknown_argument_like_rest(self, mcp):
+        is_error, body = mcp.call_tool("find_mk", {"query": "עודד", "top_k": "many"})
+        assert not is_error and "top_k" not in body["args"]
+        assert len(body["results"]) <= config.API_FIND_PAGE_SIZE
+        assert not any("top_k" in warning for warning in body["warnings"])
 
     @pytest.mark.parametrize("tool, arguments, error_code", [
         ("query_protocols", {"mk_id": "abc"}, "invalid_mk_id"),
         ("query_protocols", {"date_from": "yesterday"}, "invalid_date_from"),
         ("query_protocols", {"search_in": ["bullets"]}, "invalid_search_in"),
         ("find_mk", {"query": ""}, "missing_query"),
-        ("find_mk", {"query": "עודד", "top_k": "many"}, "invalid_top_k"),
         ("get_meeting_attendance", {"meeting_id": "9999999"}, "meeting_not_found"),
         ("no_such_tool", {}, "unknown_tool"),
     ])
@@ -175,15 +183,17 @@ class TestHostsAndSubdomain:
 # ── rate limits ──────────────────────────────────────────────────────────────
 
 class TestRateLimits:
-    def test_tool_calls_use_the_rest_route_buckets(self, mcp, monkeypatch):
+    @pytest.mark.network
+    def test_tool_calls_use_the_rest_route_buckets(self, mcp, real_db, monkeypatch):
         monkeypatch.setattr(config, "API_RATE_LIMIT_ENABLED", True)
         monkeypatch.setattr(config, "API_RATE_LIMIT_UPSTREAM_PER_MINUTE", 2)
         assert not mcp.call_tool("find_mk", {"query": "עודד"})[0]
-        assert not mcp.call_tool("find_party", {"query": X_MK["party"]})[0]
+        assert not mcp.call_tool("find_party", {"query": real_db.mk_party})[0]
         is_error, body = mcp.call_tool("find_mk", {"query": "עודד"})
         assert is_error and body["error_code"] == "rate_limited" and body["retry_after_seconds"] >= 1
-        assert not mcp.call_tool("get_meeting_attendance", {"meeting_id": M1})[0], "db tools have their own budget"
+        assert not mcp.call_tool("get_meeting_attendance", {"meeting_id": real_db.meeting_id})[0], "db tools have their own budget"
 
+    @pytest.mark.network
     def test_rest_and_mcp_share_the_budget(self, mcp, monkeypatch):
         monkeypatch.setattr(config, "API_RATE_LIMIT_ENABLED", True)
         monkeypatch.setattr(config, "API_RATE_LIMIT_UPSTREAM_PER_MINUTE", 1)
@@ -209,7 +219,7 @@ def access_token(private_key, audience=ACCESS_AUDIENCE, issuer=f"https://{TEAM_D
 
 
 @pytest.fixture()
-def behind_access(sample_db, network, monkeypatch):
+def behind_access(real_db, monkeypatch):
     """Test client treated as a request that came through Cloudflare (peer is not local)."""
     import api.mcp_server as mcp_server
     from api.app import app, rate_limiter
@@ -263,9 +273,9 @@ class TestCloudflareAccess:
         response = mcp.post("tools/list", headers={"CF-Connecting-IP": "1.2.3.4", "Cf-Ray": "abc"})
         assert response.status_code == 403
 
-    def test_rest_routes_are_not_behind_the_mcp_check(self, behind_access):
+    def test_rest_routes_are_not_behind_the_mcp_check(self, behind_access, real_db):
         mcp, _ = behind_access
-        assert mcp.http.get("/v1/mks", params={"q": "עודד"}).status_code == 200
+        assert mcp.http.get(f"/v1/meetings/{real_db.meeting_id}/attendance").status_code == 200
 
     def test_subdomain_is_behind_the_check_too(self, behind_access):
         mcp, trusted_key = behind_access
@@ -277,7 +287,7 @@ class TestCloudflareAccess:
 # ── web UI server ────────────────────────────────────────────────────────────
 
 class TestWebServer:
-    def test_web_app_serves_mcp(self, sample_db, network, monkeypatch):
+    def test_web_app_serves_mcp(self, real_db, monkeypatch):
         import web.app as webapp
         from api.mcp_server import running_mcp_sessions
         allow_test_client(monkeypatch)
@@ -292,6 +302,6 @@ class TestWebServer:
         with TestClient(webapp.app) as http_client:
             mcp = McpTestClient(http_client)
             assert [t["name"] for t in mcp.result("tools/list")["tools"]] == [s.name for s in RESEARCH_TOOL_REGISTRY]
-            is_error, body = mcp.call_tool("get_meeting_attendance", {"meeting_id": M1})
+            is_error, body = mcp.call_tool("get_meeting_attendance", {"meeting_id": real_db.meeting_id})
             assert not is_error and body["results"]["attendance"]
         webapp.rate_limiter.reset()

@@ -75,7 +75,7 @@ class TestRoster:
 class TestFindSchemas:
     @pytest.mark.parametrize("tool,top_k", [("find_mk", 5), ("find_committee", 5), ("find_party", 3)])
     def test_unchanged(self, tool, top_k):
-        assert _required(tool) == {"query"}
+        assert _required(tool) == ({"query"} if tool == "find_mk" else set())
         assert _props(tool)["knesset_num"]["default"] == 25
         assert _props(tool)["top_k"]["default"] == top_k
 
@@ -134,8 +134,9 @@ class TestOtherSchemas:
     def test_query_bills(self):
         props = _props("query_bills")
         assert _required("query_bills") == {"query"}
-        assert props["knesset_num"]["default"] == 25
+        assert "default" not in props["knesset_num"]
         assert props["top_k"]["default"] == 10
+        assert props["offset"]["default"] == 0
 
     def test_get_bill(self):
         props = _props("get_bill")
@@ -144,14 +145,14 @@ class TestOtherSchemas:
         assert props["max_chars"]["default"] == config.BILL_TEXT_DEFAULT_MAX_CHARS
         assert props["max_chars"]["minimum"] == config.BILL_TEXT_MIN_MAX_CHARS
         assert props["max_chars"]["maximum"] == config.BILL_TEXT_MAX_MAX_CHARS
-        assert props["knesset_num"]["default"] == 25
+        assert "default" not in props.get("knesset_num", {})
 
     def test_query_votes(self):
         props = _props("query_votes")
         assert _required("query_votes") == set()
-        assert {"query", "mk_id", "knesset_num", "top_k"} <= set(props)
+        assert {"query", "mk_id", "knesset_num", "top_k", "offset"} <= set(props)
+        assert "default" not in props["knesset_num"]
         assert "topic" not in props and "top_n" not in props
-        assert props["knesset_num"]["default"] == 25
         assert props["top_k"]["default"] == 20
 
 

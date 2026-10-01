@@ -5,7 +5,7 @@ Hardening of the public web server (web.app behind a Cloudflare tunnel): MK phot
 allowlist, request/body caps, workspace routes, research respond validation, concurrency
 slots and client-disconnect stops, rate-limit buckets, reading-tab input limits and SQLite
 timeout, fail-fast upstream settings, security headers + CSP, sanitized markdown on the
-frontend, and no server paths in response bodies. Uses the real sampled rows (sample_db).
+frontend, and no server paths in response bodies. Runs on the real knesset.db (conftest.real_db).
 """
 
 import asyncio
@@ -27,13 +27,11 @@ import pytest
 
 import config
 from retrieval import knesset_db_store as store
-from tests.conftest import ROLES, SAMPLE
 from tests.test_web_gemini_key import KEY_HEADER, FakeRunner, google_answers, sse_events, web  # noqa: F401
 
 WEB_DIR = Path(__file__).parent.parent / "web"
 STATIC_DIR = WEB_DIR / "static"
-M2 = ROLES["M2"]
-REAL_MK_NAME = SAMPLE["mks"][0]["full_name"]
+WELL_FORMED_MEETING_ID = "2199065"
 
 
 def save(web, status="awaiting_user", checkpoint=None, workspace_data=None) -> str:
@@ -78,24 +76,24 @@ def recording(web, monkeypatch):
 # ── H1 /mk-photo ─────────────────────────────────────────────────────────────
 
 @pytest.fixture()
-def photos(web, tmp_path, monkeypatch):
+def photos(web, real_db, tmp_path, monkeypatch):
     photos_dir = tmp_path / "mk_photos"
     photos_dir.mkdir()
-    (photos_dir / f"{REAL_MK_NAME}.jpg").write_bytes(b"\xff\xd8\xff mk photo")
+    (photos_dir / f"{real_db.mk_name}.jpg").write_bytes(b"\xff\xd8\xff mk photo")
     secret = tmp_path / "secret.png"
     secret.write_bytes(b"\x89PNG outside the photos dir")
     monkeypatch.setattr(config, "MK_PHOTOS_DIR", photos_dir)
-    return SimpleNamespace(dir=photos_dir, secret=secret)
+    return SimpleNamespace(dir=photos_dir, secret=secret, mk_name=real_db.mk_name)
 
 
 class TestMkPhoto:
     def test_known_mk_photo_is_served(self, web, photos):
-        r = web.client.get(f"/mk-photo/{quote(REAL_MK_NAME)}")
+        r = web.client.get(f"/mk-photo/{quote(photos.mk_name)}")
         assert r.status_code == 200
         assert r.content.startswith(b"\xff\xd8\xff")
 
     def test_honorific_prefix_still_resolves(self, web, photos):
-        assert web.client.get(f"/mk-photo/{quote('ח' + chr(34) + 'כ ' + REAL_MK_NAME)}").status_code == 200
+        assert web.client.get(f"/mk-photo/{quote('ח' + chr(34) + 'כ ' + photos.mk_name)}").status_code == 200
 
     @pytest.mark.parametrize("make_name", [
         lambda secret: str(secret.with_suffix("")),
@@ -133,7 +131,7 @@ class TestMkPhoto:
 class TestBodyLimit:
     def test_oversized_body_is_413(self, web):
         sid = save(web, status="done", workspace_data={"selected_chunks": []})
-        body = {"chunk_id": "1", "source_meeting_id": M2, "text": "א" * config.WEB_MAX_REQUEST_BODY_BYTES}
+        body = {"chunk_id": "1", "source_meeting_id": WELL_FORMED_MEETING_ID, "text": "א" * config.WEB_MAX_REQUEST_BODY_BYTES}
         r = web.client.post(f"/api/research/{sid}/workspace/select", json=body)
         assert r.status_code == 413
         assert load(web, sid).workspace_data == {"selected_chunks": []}
@@ -153,18 +151,18 @@ class TestWorkspaceSelect:
 
     def test_valid_chunk_is_stored(self, web):
         sid = save(web, status="done", workspace_data={"selected_chunks": []})
-        r = web.client.post(self.url(sid), json={"chunk_id": "3", "text": "קטע", "source_meeting_id": M2})
+        r = web.client.post(self.url(sid), json={"chunk_id": "3", "text": "קטע", "source_meeting_id": WELL_FORMED_MEETING_ID})
         assert r.status_code == 200 and r.json()["total_selected"] == 1
         assert load(web, sid).workspace_data["selected_chunks"][0]["text"] == "קטע"
 
     @pytest.mark.parametrize("body", [
-        {"chunk_id": "3", "text": "א" * (config.WEB_MAX_WORKSPACE_CHUNK_CHARS + 1), "source_meeting_id": M2},
-        {"chunk_id": "3", "text": "", "source_meeting_id": M2},
-        {"chunk_id": "abc", "text": "קטע", "source_meeting_id": M2},
-        {"chunk_id": "١٢", "text": "קטע", "source_meeting_id": M2},
+        {"chunk_id": "3", "text": "א" * (config.WEB_MAX_WORKSPACE_CHUNK_CHARS + 1), "source_meeting_id": WELL_FORMED_MEETING_ID},
+        {"chunk_id": "3", "text": "", "source_meeting_id": WELL_FORMED_MEETING_ID},
+        {"chunk_id": "abc", "text": "קטע", "source_meeting_id": WELL_FORMED_MEETING_ID},
+        {"chunk_id": "١٢", "text": "קטע", "source_meeting_id": WELL_FORMED_MEETING_ID},
         {"chunk_id": "3", "text": "קטע", "source_meeting_id": "../../etc"},
         {"chunk_id": "3", "text": "קטע", "source_meeting_id": "²"},
-        {"chunk_id": "3", "text": ["list"], "source_meeting_id": M2},
+        {"chunk_id": "3", "text": ["list"], "source_meeting_id": WELL_FORMED_MEETING_ID},
     ])
     def test_invalid_fields_are_400(self, web, body):
         sid = save(web, status="done", workspace_data={"selected_chunks": []})
@@ -174,7 +172,7 @@ class TestWorkspaceSelect:
     def test_selected_chunk_count_is_capped(self, web, monkeypatch):
         monkeypatch.setattr(config, "WEB_MAX_WORKSPACE_SELECTED_CHUNKS", 2)
         sid = save(web, status="done", workspace_data={"selected_chunks": []})
-        statuses = [web.client.post(self.url(sid), json={"chunk_id": str(i), "text": "קטע", "source_meeting_id": M2})
+        statuses = [web.client.post(self.url(sid), json={"chunk_id": str(i), "text": "קטע", "source_meeting_id": WELL_FORMED_MEETING_ID})
                     .status_code for i in range(3)]
         assert statuses == [200, 200, 400]
         assert len(load(web, sid).workspace_data["selected_chunks"]) == 2
@@ -364,7 +362,7 @@ class TestRespondValidation:
             sid = save(recording, checkpoint=paused_at(DEEP_DIVE))
             assert respond(recording, sid, "selected_meetings", value).status_code == 400, value
         sid = save(recording, checkpoint=paused_at(DEEP_DIVE))
-        assert respond(recording, sid, "selected_meetings", [M2, "2199062"]).status_code == 200
+        assert respond(recording, sid, "selected_meetings", [WELL_FORMED_MEETING_ID, "2199062"]).status_code == 200
 
     def test_unknown_ui_type_is_rejected(self, recording):
         sid = save(recording, checkpoint=paused_at({"ui": "free_json", "output_var": "x"}))
@@ -587,11 +585,16 @@ class TestBrowseLimits:
         assert r.status_code == 400
         assert r.json().get("error")
 
-    def test_guest_like_wildcards_are_literal(self, web):
-        everything = browse(web, filters={"guest": "%"})
-        assert everything.status_code == 200
-        assert everything.json()["meetings"] == []
-        assert browse(web, filters={"guest": "_"}).json()["meetings"] == []
+    @pytest.mark.parametrize("wildcard", ["%", "_"])
+    def test_guest_like_wildcards_are_literal(self, web, real_conn, wildcard):
+        response = browse(web, filters={"guest": wildcard})
+        assert response.status_code == 200
+        guests_with_the_literal_character = {r[0] for r in real_conn.execute(
+            "SELECT DISTINCT a.meeting_id FROM attendance a JOIN meetings m ON m.meeting_id = a.meeting_id "
+            "WHERE a.mk_id IS NULL AND instr(a.name, ?) > 0 AND (m.is_protocol IS NULL OR m.is_protocol != 0)",
+            (wildcard,))}
+        assert len(guests_with_the_literal_character) < 50
+        assert {m["meeting_id"] for m in response.json()["meetings"]} == guests_with_the_literal_character
 
     def test_fuzzy_index_is_built_once(self, web, monkeypatch):
         import web.app as webapp
@@ -615,11 +618,11 @@ class TestBrowseLimits:
         monkeypatch.setattr(config, "DB_QUERY_TIMEOUT_SECONDS", -1)
         monkeypatch.setattr(store, "_PROGRESS_HANDLER_OPCODES", 1)
         sid = save(web, status="done")
-        assert web.client.get(f"/api/research/{sid}/meeting/{M2}/hits", params={"q": "העלייה"}).status_code == 503
+        assert web.client.get(f"/api/research/{sid}/meeting/{WELL_FORMED_MEETING_ID}/hits", params={"q": "העלייה"}).status_code == 503
 
     def test_hits_query_is_capped(self, web):
         sid = save(web, status="done")
-        r = web.client.get(f"/api/research/{sid}/meeting/{M2}/hits",
+        r = web.client.get(f"/api/research/{sid}/meeting/{WELL_FORMED_MEETING_ID}/hits",
                            params={"q": "א" * (config.WEB_MAX_HITS_QUERY_CHARS + 1)})
         assert r.status_code == 400
 
@@ -854,10 +857,10 @@ class TestFrontendSanitizing:
 # ── cited meeting info (date + committee) from knesset.db ────────────────────
 
 class TestMeetingInfo:
-    def test_real_meeting_resolves_from_the_db(self, web):
-        meeting = next(m for m in SAMPLE["meetings"] if m["meeting_id"] == M2)
-        year, month, day = meeting["date"].split("-")
-        assert web.app._get_meeting_info(M2) == {"date": f"{day}/{month}/{year}", "committee": meeting["committee"]}
+    def test_real_meeting_resolves_from_the_db(self, web, real_db):
+        year, month, day = real_db.meeting_date.split("-")
+        assert web.app._get_meeting_info(real_db.meeting_id) == {"date": f"{day}/{month}/{year}",
+                                                                 "committee": real_db.meeting_committee}
 
     @pytest.mark.parametrize("meeting_id", ["../../x", "1 OR 1", "٣", "²", "1" * 5000, "", "999999999"])
     def test_malformed_or_unknown_ids_are_not_found(self, web, monkeypatch, meeting_id):
@@ -865,22 +868,22 @@ class TestMeetingInfo:
         monkeypatch.setattr(glob, "glob", lambda *a, **k: pytest.fail("no filesystem scan"))
         assert web.app._get_meeting_info(meeting_id) == {}
 
-    def test_citations_are_enriched_from_the_db(self, web):
+    def test_citations_are_enriched_from_the_db(self, web, real_db):
         footnotes = {"ev_1": {"ui": {"enrich_fields": ["meeting_id"]}}}
-        [citation] = web.app._enrich_citations([{"ev_id": "ev_1", "quote": {"meeting_id": M2, "text": "x"}}], footnotes)
-        meeting = next(m for m in SAMPLE["meetings"] if m["meeting_id"] == M2)
-        assert citation["quote"]["committee"] == meeting["committee"]
-        assert citation["quote"]["date"].endswith(meeting["date"][:4])
+        [citation] = web.app._enrich_citations(
+            [{"ev_id": "ev_1", "quote": {"meeting_id": real_db.meeting_id, "text": "x"}}], footnotes)
+        assert citation["quote"]["committee"] == real_db.meeting_committee
+        assert citation["quote"]["date"].endswith(real_db.meeting_date[:4])
 
 
 # ── L2 no server paths in responses ──────────────────────────────────────────
 
 class TestNoServerPaths:
-    def test_health_has_no_db_path(self, web, sample_db):
+    def test_health_has_no_db_path(self, web, real_db):
         r = web.client.get("/api/health")
         assert r.status_code == 200
         assert "db_path" not in r.json()
-        assert str(sample_db) not in r.text and sample_db.name not in r.text
+        assert str(real_db.db_path) not in r.text and real_db.db_path.name not in r.text
 
     def test_transcript_404_has_no_path(self, web, monkeypatch, tmp_path):
         import web.app as webapp
@@ -895,3 +898,20 @@ class TestNoServerPaths:
         r = browse(web, query="")
         assert r.status_code == 503
         assert "nowhere" not in r.text and "build_knesset_db" not in r.text
+
+
+class TestPlenumMeetingIds:
+    """Plenum sessions have meeting_id "p" + PlenumSessionID; the meeting-id checks accept them."""
+
+    @pytest.mark.parametrize("value,ok", [("p2245272", True), ("2199065", True), ("p", False), ("pp1", False),
+                                          ("P1", False), ("p²", False), ("../p1", False)])
+    def test_ok_meeting_id(self, value, ok):
+        import web.app as webapp
+        assert webapp._ok_meeting_id(value) is ok
+
+    def test_workspace_chunk_may_come_from_a_plenum_session(self):
+        import pydantic
+        import web.app as webapp
+        assert webapp.WorkspaceSelectRequest(chunk_id="3", text="קטע", source_meeting_id="p2245272").source_meeting_id == "p2245272"
+        with pytest.raises(pydantic.ValidationError):
+            webapp.WorkspaceSelectRequest(chunk_id="p3", text="קטע", source_meeting_id="p2245272")

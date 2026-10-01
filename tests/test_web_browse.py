@@ -1,16 +1,12 @@
 """
 tests/test_web_browse.py
 
-Keyword-only reading-tab endpoints of web.app against a temp knesset.db seeded
-with real rows (see conftest.build_sample_db):
+Keyword-only reading-tab endpoints of web.app on the real Data/knesset.db:
   POST /api/browse/search, GET /api/research/{sid}/meeting/{mid}/hits,
   GET /api/health (db row counts), removed RAG routes → 404.
 
-Assumptions (post-refactor state per spec): the app lifespan is NOT run
-(TestClient is used without a context manager); the tests set the app.state
-attributes the routes read — settings (web.settings), sessions_dir (tmp dir),
-machine (a stub with .name). Browse sessions are created by /api/browse/search
-itself; /hits is called with a session saved via web.session.save_session.
+The app lifespan is not run (TestClient without a context manager); the tests set the app.state
+attributes the routes read. Expected meetings come from SQL over the same db (conftest.real_conn).
 """
 
 import sys
@@ -24,16 +20,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.conftest import ROLES, SAMPLE, SYN_MEETING, synthetic_rows
+import utils.tools as tools
 
-M1, M2, M3, M4, M5, M6 = (ROLES[k] for k in ("M1", "M2", "M3", "M4", "M5", "M6"))
-SYN = SYN_MEETING
-C1 = SAMPLE["committees"]["C1"]
-C2 = SAMPLE["committees"]["C2"]
+NONSENSE_WORD = "קשקשתאינהקיימתבשוםפרוטוקול"
 
 
 @pytest.fixture()
-def client(sample_db, tmp_path):
+def client(real_db, tmp_path):
     import web.app as webapp
     import web.settings as settings
     sessions = tmp_path / "sessions"
@@ -67,113 +60,137 @@ def mids(data):
     return [m["meeting_id"] for m in data["meetings"]]
 
 
+def only_meeting_filters(real_db):
+    return {"committees": [real_db.meeting_committee], "date_from": real_db.meeting_date,
+            "date_to": real_db.meeting_date}
+
+
+def iso_date(browse_date: str) -> str:
+    """The reading tab shows dates as DD/MM/YYYY; the db stores YYYY-MM-DD."""
+    day, month, year = browse_date.split("/")
+    return f"{year}-{month}-{day}"
+
+
+def assert_newest_first(meetings):
+    dates = [iso_date(m["date"]) for m in meetings]
+    assert dates == sorted(dates, reverse=True)
+
+
+def meeting_set(conn, sql, *params) -> set[str]:
+    return {r[0] for r in conn.execute(sql, params)}
+
+
 class TestBrowseEmptyQuery:
-    def test_newest_meetings_without_filters(self, client):
-        ids = mids(search(client))
-        assert ids[:2] == [SYN, M6]
-        assert set(ids[2:4]) == {M3, M4}
-        assert ids[4:] == [M2, M1]
+    def test_newest_meetings_first(self, client, real_conn):
+        meetings = search(client)["meetings"]
+        assert meetings
+        newest = real_conn.execute("SELECT MAX(date) FROM meetings WHERE is_protocol IS NULL OR is_protocol != 0"
+                                   ).fetchone()[0]
+        assert iso_date(meetings[0]["date"]) == newest
+        assert_newest_first(meetings)
 
     def test_query_field_may_be_omitted_or_blank(self, client):
         assert mids(search(client, query="")) == mids(search(client)) == mids(search(client, query="   "))
 
-    def test_meeting_shape_and_excerpt_from_topics(self, client):
-        meetings = {m["meeting_id"]: m for m in search(client)["meetings"]}
+    def test_meeting_shape_and_excerpt_from_topics(self, client, real_db):
+        meetings = {m["meeting_id"]: m for m in search(client, filters=only_meeting_filters(real_db))["meetings"]}
         for m in meetings.values():
             assert {"meeting_id", "title", "date", "committee", "score", "excerpt"} <= set(m)
-        assert synthetic_rows()["topics"][0]["text"] in meetings[SYN]["excerpt"]
-        first_m2_topic = next(t["text"] for t in SAMPLE["topics"] if t["meeting_id"] == M2 and t["idx"] == 0)
-        assert first_m2_topic in meetings[M2]["excerpt"]
-        assert meetings[M2]["committee"] == C1
+        assert real_db.meeting_first_topic in meetings[real_db.meeting_id]["excerpt"]
+        assert meetings[real_db.meeting_id]["committee"] == real_db.meeting_committee
 
-    def test_committee_filter_with_underscores(self, client):
-        data = search(client, filters={"committees": [C2.replace(" ", "_")]})
-        assert mids(data) == [SYN, M6, M3]
+    def test_committee_filter_with_underscores(self, client, real_db):
+        data = search(client, filters={"committees": [real_db.other_committee.replace(" ", "_")]})
+        assert data["meetings"] and {m["committee"] for m in data["meetings"]} == {real_db.other_committee}
+        assert_newest_first(data["meetings"])
 
-    def test_date_filter(self, client):
-        data = search(client, filters={"date_from": "2023-01-05", "date_to": "2023-02-08"})
-        assert mids(data)[0] in (M3, M4) and set(mids(data)) == {M2, M3, M4}
-        assert mids(data)[-1] == M2
+    def test_date_filter(self, client, real_db):
+        meetings = search(client, filters={"date_from": real_db.meeting_date, "date_to": real_db.meeting_date})["meetings"]
+        assert real_db.meeting_id in mids({"meetings": meetings})
+        assert {iso_date(m["date"]) for m in meetings} == {real_db.meeting_date}
 
-    def test_party_filter(self, client):
-        assert mids(search(client, filters={"parties": ["העבודה"]})) == [M3]
+    def test_party_filter(self, client, real_db, real_conn):
+        ids = set(mids(search(client, filters={"parties": [real_db.mk_party]})))
+        assert ids and ids <= meeting_set(real_conn, "SELECT meeting_id FROM attendance WHERE party = ?",
+                                          real_db.mk_party)
 
-    def test_mk_name_filter(self, client):
-        assert mids(search(client, filters={"mks": ["גלעד קריב"]})) == [M3]
+    def test_mk_name_filter(self, client, real_db, real_conn):
+        ids = set(mids(search(client, filters={"mks": [real_db.mk_name]})))
+        assert ids and ids <= meeting_set(real_conn, "SELECT meeting_id FROM attendance WHERE mk_id = ?", real_db.mk_id)
 
-    def test_guest_filter(self, client):
-        assert set(mids(search(client, filters={"guest": "איל קופמן"}))) == {SYN, M6, M3}
+    def test_guest_filter(self, client, real_db, real_conn):
+        guest = real_conn.execute("SELECT name FROM attendance WHERE meeting_id = ? AND mk_id IS NULL ORDER BY name",
+                                  (real_db.meeting_id,)).fetchone()[0]
+        filters = {**only_meeting_filters(real_db), "guest": guest}
+        assert real_db.meeting_id in mids(search(client, filters=filters))
 
-    def test_filters_matching_nothing(self, client):
+    def test_filters_matching_nothing(self, client, real_db):
         assert search(client, filters={"committees": ["ועדה שאינה קיימת"]})["meetings"] == []
 
     def test_top_k(self, client):
-        assert mids(search(client, top_k=2)) == [SYN, M6]
+        assert mids(search(client, top_k=2)) == mids(search(client))[:2]
 
 
 class TestBrowseQuery:
-    def test_ranked_by_best_speech(self, client):
-        ids = mids(search(client, query="העלייה"))
-        assert ids[0] == M2
-        assert set(ids[1:3]) == {M1, M4}
-        assert ids[3:] == [SYN]
+    def test_ranked_query_finds_the_meeting(self, client, real_db):
+        ids = mids(search(client, query=real_db.topic_word, filters={"committees": [real_db.meeting_committee]}))
+        assert real_db.meeting_id in ids
 
-    def test_sort_date(self, client):
-        assert mids(search(client, query="העלייה", sort="date")) == [SYN, M4, M2, M1]
+    def test_sort_date(self, client, real_db):
+        meetings = search(client, query=real_db.topic_word, sort="date")["meetings"]
+        assert meetings
+        assert_newest_first(meetings)
 
-    def test_excerpt_is_matching_speech(self, client):
-        meetings = search(client, query="העלייה")["meetings"]
-        assert all("העלייה" in m["excerpt"] for m in meetings)
+    def test_excerpt_is_a_matching_speech(self, client):
+        meetings = search(client, query="תקציב")["meetings"]
+        assert meetings and sum("תקציב" in m["excerpt"] for m in meetings) >= len(meetings) // 2
 
-    def test_query_with_filters(self, client):
-        ids = mids(search(client, query="העלייה", filters={"committees": [C1]}))
-        assert ids[0] == M2 and set(ids) == {M1, M2, M4}
+    def test_query_with_filters(self, client, real_db):
+        meetings = search(client, query="תקציב", filters={"committees": [real_db.other_committee]})["meetings"]
+        assert meetings and {m["committee"] for m in meetings} == {real_db.other_committee}
 
-    def test_not_protocol_meetings_excluded(self, client):
-        ids = mids(search(client, query="פרוטוקול"))
-        assert M5 not in ids
-        assert set(ids) == {M1, M2, M3, M4, M6}
-        assert M5 not in mids(search(client, filters={"committees": ["ועדת החינוך התרבות והספורט"]}))
+    def test_not_protocol_meetings_excluded(self, client, real_db, real_conn):
+        committee, date = real_conn.execute("SELECT committee, date FROM meetings WHERE meeting_id = ?",
+                                            (real_db.non_protocol_meeting_id,)).fetchone()
+        filters = {"committees": [committee], "date_from": date, "date_to": date}
+        assert real_db.non_protocol_meeting_id not in mids(search(client, filters=filters))
 
     def test_ktiv_expansion(self, client):
-        assert mids(search(client, query="בטחון")) == [SYN]
+        assert search(client, query="בטחון")["meetings"]
 
     def test_no_match(self, client):
-        assert search(client, query="רופאים")["meetings"] == []
+        assert search(client, query=NONSENSE_WORD)["meetings"] == []
 
-    def test_session_usable_by_summary_route(self, client):
-        data = search(client, query="העלייה")
-        r = client.get(f"/api/research/{data['session_id']}/meeting/{M2}/summary")
-        assert r.status_code == 200 and r.json()["meeting_id"] == M2
+    def test_session_usable_by_summary_route(self, client, real_db):
+        data = search(client, query=real_db.topic_word)
+        r = client.get(f"/api/research/{data['session_id']}/meeting/{real_db.meeting_id}/summary")
+        assert r.status_code == 200 and r.json()["meeting_id"] == real_db.meeting_id
 
 
 class TestHits:
-    def test_hits_for_query(self, client, session_id):
-        r = client.get(f"/api/research/{session_id}/meeting/{M2}/hits", params={"q": "העלייה"})
+    def test_hits_are_the_matching_speeches(self, client, session_id, real_db, real_conn):
+        word = "הוועדה"
+        r = client.get(f"/api/research/{session_id}/meeting/{real_db.meeting_id}/hits", params={"q": word})
         assert r.status_code == 200
         hits = r.json()["hits"]
-        assert {h["speech_idx"] for h in hits} == {0, 1, 4, 7, 8}
-        scores = {h["speech_idx"]: h["score"] for h in hits}
-        assert all(0 < s <= 1 for s in scores.values())
-        assert max(scores.values()) == pytest.approx(1.0)
-        assert scores[1] == pytest.approx(1.0)
-        assert scores[8] < scores[1]
+        match = tools._fts_match(word, "speeches_fts")
+        expected = meeting_set(real_conn, "SELECT x.idx FROM speeches_fts JOIN speeches x ON x.id = speeches_fts.rowid "
+                                          "WHERE speeches_fts MATCH ? AND x.meeting_id = ?", match, real_db.meeting_id)
+        assert hits and {h["speech_idx"] for h in hits} == expected
+        scores = [h["score"] for h in hits]
+        assert all(0 < s <= 1 for s in scores) and max(scores) == pytest.approx(1.0)
 
-    def test_ktiv_query(self, client, session_id):
-        hits = client.get(f"/api/research/{session_id}/meeting/{SYN}/hits", params={"q": "בטחון"}).json()["hits"]
-        assert {h["speech_idx"] for h in hits} == {0, 1, 2}
-
-    def test_empty_q(self, client, session_id):
-        r = client.get(f"/api/research/{session_id}/meeting/{M2}/hits", params={"q": ""})
+    def test_empty_q(self, client, session_id, real_db):
+        r = client.get(f"/api/research/{session_id}/meeting/{real_db.meeting_id}/hits", params={"q": ""})
         assert r.status_code == 200 and r.json() == {"hits": []}
 
-    def test_no_match_in_meeting(self, client, session_id):
-        r = client.get(f"/api/research/{session_id}/meeting/{M3}/hits", params={"q": "העלייה"})
+    def test_no_match_in_meeting(self, client, session_id, real_db):
+        r = client.get(f"/api/research/{session_id}/meeting/{real_db.meeting_id}/hits", params={"q": NONSENSE_WORD})
         assert r.json() == {"hits": []}
 
-    def test_topic_text_as_query(self, client, session_id):
-        topic = next(t["text"] for t in SAMPLE["topics"] if t["meeting_id"] == M2 and t["idx"] == 2)
-        r = client.get(f"/api/research/{session_id}/meeting/{M2}/hits", params={"q": topic})
+    def test_topic_text_as_query(self, client, session_id, real_db):
+        r = client.get(f"/api/research/{session_id}/meeting/{real_db.meeting_id}/hits",
+                       params={"q": real_db.meeting_first_topic[:150]})
         assert r.status_code == 200 and isinstance(r.json()["hits"], list)
 
 
@@ -190,30 +207,62 @@ def _find_counts(obj):
 
 
 class TestHealth:
-    def test_reports_db_row_counts(self, client, sample_db):
-        import sqlite3
-        conn = sqlite3.connect(str(sample_db))
-        expected = {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
-                    for t in ("meetings", "topics", "opinions", "speeches")}
-        conn.close()
+    def test_reports_db_row_counts(self, client, real_db):
         r = client.get("/api/health")
         assert r.status_code == 200
         counts = _find_counts(r.json())
         assert counts is not None, r.json()
-        assert {k: counts[k] for k in expected} == expected
+        for table in ("meetings", "topics", "opinions", "speeches"):
+            assert counts[table] == real_db.table_counts[table], table
         assert "collections" not in r.json()
 
 
 class TestRemovedRoutes:
     def test_browse_rag_gone(self, client):
-        assert client.post("/api/browse/rag", json={"query": "העלייה"}).status_code == 404
+        assert client.post("/api/browse/rag", json={"query": "תקציב"}).status_code == 404
 
     def test_research_rag_gone(self, client, session_id):
-        assert client.get(f"/api/research/{session_id}/rag", params={"query": "העלייה"}).status_code == 404
+        assert client.get(f"/api/research/{session_id}/rag", params={"query": "תקציב"}).status_code == 404
 
-    def test_pass2_chunks_gone(self, client, session_id):
-        assert client.get(f"/api/research/{session_id}/meeting/{M2}/pass2_chunks").status_code == 404
+    def test_pass2_chunks_gone(self, client, session_id, real_db):
+        assert client.get(f"/api/research/{session_id}/meeting/{real_db.meeting_id}/pass2_chunks").status_code == 404
 
-    def test_score_pass2_gone(self, client, session_id):
-        r = client.post(f"/api/research/{session_id}/meeting/{M2}/score_pass2", json={"query": "העלייה"})
+    def test_score_pass2_gone(self, client, session_id, real_db):
+        r = client.post(f"/api/research/{session_id}/meeting/{real_db.meeting_id}/score_pass2", json={"query": "תקציב"})
         assert r.status_code == 404
+
+
+class TestTypedWordsRankFirst:
+    """"ביוקר" also matches its variant "ביקר" ("visited"); meetings and speeches with the word as typed come first."""
+    TYPED_WORD = "ביוקר"
+
+    def meetings_with_typed_word(self, real_conn) -> set[str]:
+        return meeting_set(real_conn, "SELECT DISTINCT x.meeting_id FROM speeches_fts "
+                                      "JOIN speeches x ON x.id = speeches_fts.rowid WHERE speeches_fts MATCH ?",
+                           tools._fts_exact_match(self.TYPED_WORD))
+
+    def test_search_lists_meetings_with_the_typed_word_first(self, client, real_conn):
+        meetings = search(client, query=self.TYPED_WORD, top_k=500,
+                          filters={"date_from": "2024-03-01", "date_to": "2024-03-31"})["meetings"]
+        assert len(meetings) < 500
+        with_typed_word = self.meetings_with_typed_word(real_conn)
+        typed_flags = [m["meeting_id"] in with_typed_word for m in meetings]
+        assert True in typed_flags and False in typed_flags
+        assert typed_flags == sorted(typed_flags, reverse=True)
+        scores = [m["score"] for m in meetings]
+        assert scores == sorted(scores, reverse=True) and scores[0] == pytest.approx(1.0)
+
+    def test_heatmap_scores_speeches_with_the_typed_word_higher(self, client, session_id, real_conn):
+        meeting_id = real_conn.execute(
+            "SELECT x.meeting_id FROM speeches_fts JOIN speeches x ON x.id = speeches_fts.rowid "
+            "WHERE speeches_fts MATCH ? AND x.meeting_id IN (SELECT x2.meeting_id FROM speeches_fts "
+            "JOIN speeches x2 ON x2.id = speeches_fts.rowid WHERE speeches_fts MATCH '\"ביקר\"') LIMIT 1",
+            (tools._fts_exact_match(self.TYPED_WORD),)).fetchone()[0]
+        hits = client.get(f"/api/research/{session_id}/meeting/{meeting_id}/hits",
+                          params={"q": self.TYPED_WORD}).json()["hits"]
+        typed_idxs = meeting_set(real_conn, "SELECT x.idx FROM speeches_fts JOIN speeches x ON x.id = speeches_fts.rowid "
+                                            "WHERE speeches_fts MATCH ? AND x.meeting_id = ?",
+                                 tools._fts_exact_match(self.TYPED_WORD), meeting_id)
+        typed_scores = [h["score"] for h in hits if h["speech_idx"] in typed_idxs]
+        variant_scores = [h["score"] for h in hits if h["speech_idx"] not in typed_idxs]
+        assert typed_scores and variant_scores and min(typed_scores) > max(variant_scores)

@@ -2,7 +2,8 @@
 Server logs shared by the web app and the standalone public API, under config.LOG_DIR, rotated at UTC
 midnight and kept LOG_RETENTION_DAYS days:
   requests.jsonl   one JSON line per HTTP request (RequestLogMiddleware; allowlisted headers only)
-  questions.jsonl  questions visitors asked the agent
+  questions.jsonl  questions visitors asked the agent, and public tool calls (/v1 and MCP) with their
+                   result row count and error code
   errors.log       server-side tracebacks, tagged with the request id the client got
 Nothing is written until setup_file_logging() (called from both lifespans).
 """
@@ -89,10 +90,12 @@ def log_server_error(request_id: str | None, context: str, traceback_text: str) 
     ERRORS_LOGGER.error(f"[{request_id}] {context}\n{traceback_text.rstrip()}")
 
 
-def log_question(request: Request, route: str, session_id: str | None, question) -> None:
+def log_question(request: Request, route: str, session_id: str | None, question, outcome: dict | None = None) -> None:
+    """outcome: for tool calls, {"rows": result row count or None, "error_code": ... or None}."""
     QUESTIONS_LOGGER.info(json.dumps({
         "ts": utc_timestamp(), "id": request_id_of(request), "ip": client_ip(request),
-        "route": route, "session_id": session_id, "q": question,
+        "route": route, "session_id": session_id, "q": question, **(outcome or {}),
+        "ua": (request.headers.get("user-agent") or "")[:config.REQUEST_LOG_MAX_USER_AGENT_CHARS],
     }, ensure_ascii=False, default=str))
 
 

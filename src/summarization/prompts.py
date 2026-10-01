@@ -7,7 +7,7 @@ answering in plain text that summarization.output_parsing turns into JSON.
 Exp8/prompts.py mirrors these for experiments.
 """
 
-_INTRO = """You analyze Israeli Knesset committee meeting protocols. Answer in Hebrew.
+_INTRO = """You analyze protocols of Israeli Knesset meetings: committee meetings and plenum sessions. Answer in Hebrew.
 
 If the text is not a meeting protocol (for example a bill text, a background document or an agenda), answer with exactly:
 לא פרוטוקול
@@ -31,6 +31,7 @@ SYSTEM_PROMPT_OPINIONS = _INTRO + """List the opinions expressed in the meeting,
 - העמדה: one or two short sentences stating what the speaker argued, supported, opposed or demanded, and about what. One claim per line: a speaker who makes several distinct claims gets several lines.
 - ציטוט: a verbatim excerpt from one of that speaker's speeches that shows this specific claim. Copy it character by character from the protocol: one continuous passage from a single speech, one to three sentences, no paraphrase, no ellipsis, never joined from different speeches.
 - Include every meaningful opinion of every speaker, not only the main ones. A long list is fine.
+- A long protocol is sent in parts (the request says which part). List only the opinions expressed in the part you received.
 - Skip statements that only report a status, a procedure or a legal fact without taking a side. Skip remarks about who speaks next, time or attendance, and questions without a stated position.
 - Do not invent opinions or quotes that are not in the text.
 - Output only the list. No heading, no commentary."""

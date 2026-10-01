@@ -3,11 +3,11 @@ tests/test_api_limits.py
 
 Operational limits of the public API: per-IP rate limits, upstream retry/timeout settings of
 the standalone server, the requests-cache session behind the Knesset API calls, and the SQLite
-query timeout. Uses the real sampled rows (sample_db) and the recorded OData replies
-(tests/test_api.py fixtures).
+query timeout. Runs on the real knesset.db; rate-limit tests fail upstream calls locally
+(conftest.upstream_down) since only the limiter's decision matters, and the cache test queries
+the live OData API (`network`).
 """
 
-import io
 import json
 import sys
 from pathlib import Path
@@ -19,24 +19,18 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 import pytest
 import requests
 import requests_cache
-import urllib3
 from fastapi.testclient import TestClient
 
 import config
 import utils.knesset_db as kdb
 import utils.tools as tools
 from retrieval import knesset_db_store as store
-from tests.conftest import SAMPLE
-from tests.test_api import client, network  # noqa: F401  (fixtures)
-from tests.test_odata_tools import META, RESULTS
-
-REAL_WORD = max((w for w in SAMPLE["topics"][0]["text"].split() if w.isalpha()), key=len)
 
 
 # ── rate limits ──────────────────────────────────────────────────────────────
 
 @pytest.fixture()
-def limited(client, monkeypatch):
+def limited(client, upstream_down, monkeypatch):
     from api.app import rate_limiter
     monkeypatch.setattr(config, "API_RATE_LIMIT_ENABLED", True)
     monkeypatch.setattr(config, "API_RATE_LIMIT_UPSTREAM_PER_MINUTE", 2)
@@ -48,19 +42,19 @@ def limited(client, monkeypatch):
 
 class TestRateLimit:
     def test_upstream_routes_share_the_low_limit(self, limited):
-        assert limited.get("/v1/bills", params={"q": META["bill_query"]}).status_code == 200
-        assert limited.get("/v1/votes", params={"q": META["vote_topic"], "top_k": 5}).status_code == 200
+        assert limited.get("/v1/bills", params={"q": "חינוך"}).status_code != 429
+        assert limited.get("/v1/votes", params={"q": "חינוך", "top_k": 5}).status_code != 429
         r = limited.get("/v1/mks", params={"q": "עודד"})
         assert r.status_code == 429
         assert r.json()["error_code"] == "rate_limited"
         assert int(r.headers["Retry-After"]) >= 1
 
-    def test_db_routes_have_their_own_budget(self, limited):
+    def test_db_routes_have_their_own_budget(self, limited, real_db):
         for _ in range(2):
-            limited.get("/v1/bills", params={"q": META["bill_query"]})
+            limited.get("/v1/bills", params={"q": "חינוך"})
         for _ in range(3):
-            assert limited.get("/v1/protocols", params={"q": REAL_WORD}).status_code == 200
-        assert limited.get("/v1/protocols", params={"q": REAL_WORD}).status_code == 429
+            assert limited.get("/v1/protocols", params={"q": real_db.topic_word}).status_code == 200
+        assert limited.get("/v1/protocols", params={"q": real_db.topic_word}).status_code == 429
 
     def test_docs_are_not_limited(self, limited, monkeypatch):
         monkeypatch.setattr(config, "API_RATE_LIMIT_WEB_PER_MINUTE", 3)
@@ -73,21 +67,21 @@ class TestRateLimit:
         from api.app import rate_limiter
         monkeypatch.setattr(config, "API_TRUST_CLOUDFLARE_IP_HEADER", False)
 
-        def statuses(ip):
-            return [limited.get("/v1/bills", params={"q": META["bill_query"]},
-                                headers={"CF-Connecting-IP": ip}).status_code for _ in range(3)]
-        assert statuses("1.1.1.1") == [200, 200, 429]
-        assert statuses("2.2.2.2")[0] == 429, "header ignored unless trusted: same socket peer"
+        def limited_flags(ip):
+            return [limited.get("/v1/bills", params={"q": "חינוך"},
+                                headers={"CF-Connecting-IP": ip}).status_code == 429 for _ in range(3)]
+        assert limited_flags("1.1.1.1") == [False, False, True]
+        assert limited_flags("2.2.2.2")[0], "header ignored unless trusted: same socket peer"
         monkeypatch.setattr(config, "API_TRUST_CLOUDFLARE_IP_HEADER", True)
         rate_limiter.reset()
-        assert statuses("1.1.1.1") == [200, 200, 429]
-        assert statuses("2.2.2.2")[0] == 429, "trusted only from the local cloudflared peer"
+        assert limited_flags("1.1.1.1") == [False, False, True]
+        assert limited_flags("2.2.2.2")[0], "trusted only from the local cloudflared peer"
         monkeypatch.setattr(config, "API_TRUSTED_PROXY_HOSTS", ("testclient",))
         rate_limiter.reset()
-        assert statuses("1.1.1.1") == [200, 200, 429]
-        assert statuses("2.2.2.2") == [200, 200, 429]
+        assert limited_flags("1.1.1.1") == [False, False, True]
+        assert limited_flags("2.2.2.2") == [False, False, True]
 
-    def test_web_ui_server_is_rate_limited_too(self, sample_db, network, monkeypatch, tmp_path):
+    def test_web_ui_server_is_rate_limited_too(self, real_db, monkeypatch, tmp_path):
         import web.app as webapp
         import web.settings as settings
         monkeypatch.setattr(config, "API_RATE_LIMIT_ENABLED", True)
@@ -97,7 +91,7 @@ class TestRateLimit:
         webapp.app.state.machine = SimpleNamespace(name="test_machine", version=2)
         webapp.rate_limiter.reset()
         web_client = TestClient(webapp.app)
-        statuses = [web_client.get("/v1/protocols", params={"q": REAL_WORD}).status_code for _ in range(2)]
+        statuses = [web_client.get("/v1/protocols", params={"q": real_db.topic_word}).status_code for _ in range(2)]
         webapp.rate_limiter.reset()
         assert statuses == [200, 429]
 
@@ -123,7 +117,8 @@ class TestUpstreamRetry:
             timeouts.append(kwargs.get("timeout"))
             raise requests.exceptions.Timeout("read timed out")
         monkeypatch.setattr(requests, "get", timing_out)
-        env = tools.handle_query_bills({"query": META["bill_query"]})
+        monkeypatch.setattr(kdb, "HTTP_SESSION", SimpleNamespace(get=timing_out))
+        env = tools.handle_query_bills({"query": "חינוך"})
         assert env.error == "odata_request_failed"
         assert timeouts == [10, 10]
 
@@ -131,29 +126,30 @@ class TestUpstreamRetry:
 # ── requests-cache session ───────────────────────────────────────────────────
 
 @pytest.fixture()
-def cached_session(monkeypatch):
-    """A real CachedSession (in-memory backend) whose transport serves the recorded bill search."""
+def fresh_cached_session(monkeypatch):
+    """An empty in-memory CachedSession in front of the live OData API; records what reaches the network."""
     session = requests_cache.CachedSession(backend="memory", expire_after=config.CACHE_TTL)
     sent = []
-    payload = json.dumps({"value": RESULTS["search_bills"]}).encode()
+    real_send = requests.adapters.HTTPAdapter.send
 
-    def send(adapter, request, **kwargs):
+    def counting_send(adapter, request, **kwargs):
         sent.append(request.url)
-        raw = urllib3.HTTPResponse(body=io.BytesIO(payload), status=200,
-                                   headers={"Content-Type": "application/json"}, preload_content=False)
-        return adapter.build_response(request, raw)
-    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", send)
+        return real_send(adapter, request, **kwargs)
+    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", counting_send)
     monkeypatch.setattr(kdb, "HTTP_SESSION", session)
     return sent
 
 
 class TestCache:
-    def test_repeated_tool_call_is_served_from_cache(self, cached_session):
-        first = tools.handle_query_bills({"query": META["bill_query"]})
-        second = tools.handle_query_bills({"query": META["bill_query"]})
+    @pytest.mark.network
+    def test_repeated_tool_call_is_served_from_cache(self, fresh_cached_session):
+        first = tools.handle_query_bills({"query": "חינוך"})
+        requests_after_first_call = len(fresh_cached_session)
+        second = tools.handle_query_bills({"query": "חינוך"})
         assert first.error is None and first.full == second.full
         assert json.loads(first.full)
-        assert len(cached_session) == 1
+        assert requests_after_first_call >= 1
+        assert len(fresh_cached_session) == requests_after_first_call
 
     def test_bill_documents_bypass_the_cache(self, monkeypatch):
         class NoCacheSession:
@@ -198,20 +194,20 @@ class TestQueryTimeout:
     def test_default_is_twenty_seconds(self):
         assert config.DB_QUERY_TIMEOUT_SECONDS == 20
 
-    def test_handler_reports_query_timeout(self, sample_db, monkeypatch):
+    def test_handler_reports_query_timeout(self, real_db, monkeypatch):
         monkeypatch.setattr(config, "DB_QUERY_TIMEOUT_SECONDS", -1)
-        monkeypatch.setattr(store, "_PROGRESS_HANDLER_OPCODES", 1)  # the sample db is tiny
-        env = tools.handle_query_protocols({"query": REAL_WORD, "search_in": ["speeches"]})
+        monkeypatch.setattr(store, "_PROGRESS_HANDLER_OPCODES", 1)
+        env = tools.handle_query_protocols({"query": real_db.topic_word, "search_in": ["speeches"]})
         assert env.error == "query_timeout"
 
-    def test_api_returns_503_with_advice(self, client, monkeypatch):
+    def test_api_returns_503_with_advice(self, client, real_db, monkeypatch):
         monkeypatch.setattr(config, "DB_QUERY_TIMEOUT_SECONDS", -1)
-        monkeypatch.setattr(store, "_PROGRESS_HANDLER_OPCODES", 1)  # the sample db is tiny
-        r = client.get("/v1/protocols", params={"q": REAL_WORD})
+        monkeypatch.setattr(store, "_PROGRESS_HANDLER_OPCODES", 1)
+        r = client.get("/v1/protocols", params={"q": real_db.topic_word})
         assert r.status_code == 503
         body = r.json()
         assert body["error_code"] == "query_timeout"
         assert "filter" in body["message"] and "interrupted" not in body["message"]
 
-    def test_normal_queries_unaffected(self, client):
-        assert client.get("/v1/protocols", params={"q": REAL_WORD}).status_code == 200
+    def test_normal_queries_unaffected(self, client, real_db):
+        assert client.get("/v1/protocols", params={"q": real_db.topic_word}).status_code == 200

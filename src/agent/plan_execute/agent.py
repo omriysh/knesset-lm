@@ -93,7 +93,8 @@ def _parse_plan_json(raw: object) -> dict | None:
     try:
         parsed = json.loads(text)
         return parsed if isinstance(parsed, dict) else None
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        print(f"[plan_execute] LLM output is not a JSON object ({exc})", flush=True)
         return None
 
 

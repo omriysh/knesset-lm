@@ -22,11 +22,8 @@ import config
 import utils.knesset_db as kdb
 import utils.tools as tools
 from retrieval import knesset_db_store as store
-from tests.conftest import ROLES, SAMPLE
-from tests.test_api import client, network, ok  # noqa: F401 — fixtures
-from tests.test_odata_tools import BILL_ID, _FakeResponse
-
-M2 = ROLES["M2"]
+from tests.conftest import ok
+from tests.test_api import REAL_BILL_ID
 
 FTS_PAYLOADS = [
     '"', '""', "'", "*", "ביטחון*", "^ביטחון", "NEAR(ביטחון תקציב, 2)", "ביטחון NEAR תקציב",
@@ -65,18 +62,14 @@ def db_counts(client) -> dict:
 
 class TestFtsInjection:
     @pytest.mark.parametrize("payload", FTS_PAYLOADS)
-    def test_match_expression_always_parses(self, sample_db, payload):
-        conn = sqlite3.connect(str(sample_db))
-        try:
-            for scope in store.PROTOCOL_SCOPES:
-                match = tools._fts_match(payload, f"{scope}_fts")
-                if match:
-                    conn.execute(f"SELECT count(*) FROM {scope}_fts WHERE {scope}_fts MATCH ?", (match,)).fetchone()
-        finally:
-            conn.close()
+    def test_match_expression_always_parses(self, real_conn, payload):
+        for scope in store.PROTOCOL_SCOPES:
+            match = tools._fts_match(payload, f"{scope}_fts")
+            if match:
+                real_conn.execute(f"SELECT rowid FROM {scope}_fts WHERE {scope}_fts MATCH ? LIMIT 1", (match,)).fetchone()
 
     @pytest.mark.parametrize("payload", FTS_PAYLOADS)
-    def test_handler_never_errors(self, sample_db, payload):
+    def test_handler_never_errors(self, real_db, payload):
         env = tools.handle_query_protocols({"query": payload, "search_in": list(store.PROTOCOL_SCOPES)})
         assert env.error is None, (env.error, env.metadata)
 
@@ -102,7 +95,7 @@ class TestFtsInjection:
         for payload in ('"', "***", "()", "^:-+"):
             bad_request(client.get("/v1/protocols", params={"q": payload}), "invalid_query")
 
-    def test_punctuation_only_query_has_no_rows_in_handler(self, sample_db):
+    def test_punctuation_only_query_has_no_rows_in_handler(self, real_db):
         env = tools.handle_query_protocols({"query": '"', "search_in": ["speeches"]})
         assert env.error is None and '"speeches": []' in env.full
 
@@ -120,7 +113,7 @@ class TestSqlFilters:
 
     @pytest.mark.parametrize("field,value", [
         ("mk_id", "1 OR 1=1"), ("mk_id", "30121'--"), ("mk_id", "abc"), ("mk_id", "٣٠١٢١"), ("mk_id", "1" * 40),
-        ("meeting_id", "1 OR 1=1"), ("meeting_id", f"{M2},2 OR 1=1"), ("meeting_id", "²"),
+        ("meeting_id", "1 OR 1=1"), ("meeting_id", "2199065,2 OR 1=1"), ("meeting_id", "²"),
         ("date_from", "2023-01-01' OR 1=1 --"), ("date_from", "2023-13-01"), ("date_from", "2023-1-1"),
         ("date_to", "yesterday"), ("date_to", "2023-02-30"), ("date_to", "20230101"),
     ])
@@ -144,8 +137,8 @@ def filter_shape(flt: str) -> str:
     return _ODATA_LITERAL.sub("S", flt)
 
 
-def outgoing_filters(network, suffix: str) -> list[str]:
-    return [p.get("$filter", "") for url, p in network.calls if url.rstrip("/").endswith(suffix)]
+def outgoing_filters(upstream, suffix: str) -> list[str]:
+    return [p.get("$filter", "") for url, p in upstream.calls if url.rstrip("/").endswith(suffix)]
 
 
 ODATA_PAYLOADS = [
@@ -157,41 +150,40 @@ ODATA_PAYLOADS = [
 
 class TestODataInjection:
     @pytest.mark.parametrize("payload", ODATA_PAYLOADS)
-    def test_bill_search_filter_is_escaped(self, client, network, payload):
+    def test_bill_search_filter_is_escaped(self, client, upstream_down, payload):
         r = client.get("/v1/bills", params={"q": payload})
-        assert r.status_code in (200, 400, 502), r.text
-        filters = outgoing_filters(network, "/KNS_Bill")
+        assert r.status_code in (400, 502), r.text
+        filters = outgoing_filters(upstream_down, "/KNS_Bill")
         assert filters or r.status_code == 400
         for flt in filters:
-            assert filter_shape(flt) == "contains(Name,S) and KnessetNum eq 25", flt
+            assert re.fullmatch(r"contains\(Name,S\)( and KnessetNum eq \d+)?", filter_shape(flt)), flt
             assert not any(ord(ch) < 32 for ch in flt)
 
     @pytest.mark.parametrize("payload", ODATA_PAYLOADS)
-    def test_vote_topic_filter_is_escaped(self, client, network, payload):
+    def test_vote_topic_filter_is_escaped(self, client, upstream_down, payload):
         r = client.get("/v1/votes", params={"q": payload})
         assert r.status_code in (200, 400, 404, 502), r.text
-        filters = outgoing_filters(network, "/KNS_PlenumVote")
+        filters = outgoing_filters(upstream_down, "/KNS_PlenumVote")
         assert filters or r.status_code == 400
         for flt in filters:
-            assert filter_shape(flt) == "contains(VoteTitle,S) or contains(VoteSubject,S)", flt
+            assert re.fullmatch(r"\(contains\(VoteTitle,S\) or contains\(VoteSubject,S\)\)"
+                                r"( and KNS_PlenumSession/KnessetNum eq \d+)?", filter_shape(flt)), flt
             assert not any(ord(ch) < 32 for ch in flt)
 
-    def test_bill_filter_keeps_the_literal_text(self, client, network):
+    def test_bill_filter_keeps_the_literal_text(self, client, upstream_down):
         client.get("/v1/bills", params={"q": "x' or '1' eq '1"})
-        flt = outgoing_filters(network, "/KNS_Bill")[0]
+        flt = outgoing_filters(upstream_down, "/KNS_Bill")[0]
         assert "'x'' or ''1'' eq ''1'" in flt
 
     @pytest.mark.parametrize("bill_id", ["²", "٣", "123abc", "-1", "1 or 1 eq 1", "1)", "9" * 40, "0x10"])
-    def test_bill_id_digits_only(self, client, network, bill_id):
+    def test_bill_id_digits_only(self, client, upstream_down, bill_id):
         body = bad_request(client.get(f"/v1/bills/{bill_id}"), "invalid_bill_id")
-        assert not network.calls, "nothing may reach OData"
+        assert not upstream_down.calls, "nothing may reach OData"
         assert body["error_code"] == "invalid_bill_id"
 
-    def test_odata_down_hides_exception_text(self, client, monkeypatch):
-        def offline(url, *a, **k):
-            raise requests.exceptions.ConnectionError(f"secret-host refused {url}")
-        monkeypatch.setattr(requests, "get", offline)
-        for path, params in (("/v1/bills", {"q": "חינוך"}), (f"/v1/bills/{BILL_ID}", {}),
+    def test_odata_down_hides_exception_text(self, client, upstream_down):
+        upstream_down.message = "secret-host refused"
+        for path, params in (("/v1/bills", {"q": "חינוך"}), (f"/v1/bills/{REAL_BILL_ID}", {}),
                              ("/v1/votes", {"q": "חינוך"})):
             r = client.get(path, params=params)
             assert r.status_code == 502, (path, r.text)
@@ -201,12 +193,20 @@ class TestODataInjection:
 
 # ── bill documents: SSRF / size / pages ──────────────────────────────────────
 
-class _StreamResponse(_FakeResponse):
+class _StreamResponse:
+    """A streamed document download (the transport under test is the size / host guard, not OData)."""
+
     def __init__(self, content: bytes, content_length: str | None = None):
-        super().__init__(200, None, content=content, content_type="application/pdf")
+        self.status_code = 200
+        self.content = content
+        self.url = "https://fs.knesset.gov.il/doc.pdf"
+        self.headers = {"Content-Type": "application/pdf"}
         if content_length is not None:
             self.headers["Content-Length"] = content_length
         self.closed = False
+
+    def raise_for_status(self):
+        pass
 
     def iter_content(self, chunk_size=1):
         for i in range(0, len(self.content), chunk_size):
@@ -281,7 +281,8 @@ class TestLimits:
     def test_party_and_committee_length_cap(self, client):
         long_text = "א" * (config.API_MAX_NAME_CHARS + 1)
         bad_request(client.get("/v1/protocols", params={"party": long_text}), "invalid_party")
-        bad_request(client.get("/v1/protocols", params={"committee": long_text}), "invalid_committee")
+        long_committee = "א" * (config.MAX_COMMITTEE_NAME_CHARS + 1)
+        bad_request(client.get("/v1/protocols", params={"committee": long_committee}), "invalid_committee")
 
     def test_list_param_count_caps(self, client):
         n = config.API_MAX_LIST_ITEMS + 1
@@ -289,45 +290,48 @@ class TestLimits:
         bad_request(client.get("/v1/protocols", params=[("committee", f"c{i}") for i in range(n)]), "invalid_committee")
         bad_request(client.get("/v1/protocols", params={"search_in": ",".join(["topics"] * n)}), "invalid_search_in")
 
-    @pytest.mark.parametrize("offset", ["-1", str(10**6), str(10**30)])
+    @pytest.mark.parametrize("offset", ["-1", str(10**7), str(10**30)])
     def test_offset_range(self, client, offset):
         bad_request(client.get("/v1/protocols", params={"offset": offset}), "invalid_offset")
 
-    def test_offset_max_is_allowed(self, client):
-        ok(client.get("/v1/protocols", params={"meeting_id": M2, "offset": config.API_MAX_OFFSET}))
+    def test_offset_max_is_allowed(self, client, real_db):
+        ok(client.get("/v1/protocols", params={"meeting_id": real_db.meeting_id, "offset": config.API_PROTOCOLS_MAX_OFFSET}))
 
     @pytest.mark.parametrize("path", ["/v1/protocols", "/v1/mks?q=x", "/v1/committees?q=x", "/v1/parties?q=x",
-                                      "/v1/bills?q=x", f"/v1/bills/{BILL_ID}", "/v1/votes"])
-    @pytest.mark.parametrize("knesset_num", ["0", "-1", "999", str(10**20)])
-    def test_knesset_num_range(self, client, network, path, knesset_num):
+                                      "/v1/bills?q=x", f"/v1/bills/{REAL_BILL_ID}", "/v1/votes"])
+    @pytest.mark.parametrize("knesset_num", ["0", "-1", "26", "999", str(10**20)])
+    def test_knesset_num_range(self, client, upstream_down, path, knesset_num):
         sep = "&" if "?" in path else "?"
         bad_request(client.get(f"{path}{sep}knesset_num={knesset_num}"), "invalid_knesset_num")
-        assert not network.calls
+        assert not upstream_down.calls
 
-    @pytest.mark.parametrize("top_k", ["-5", "0", str(10**30)])
-    def test_top_k_clamped_not_error(self, client, top_k):
-        body = ok(client.get("/v1/protocols", params={"meeting_id": M2, "top_k": top_k}))
-        assert 1 <= body["args"]["top_k"] <= config.API_PROTOCOLS_MAX_TOP_K
+    @pytest.mark.parametrize("top_k", ["-5", "0", str(10**30), "abc"])
+    def test_top_k_is_an_unknown_parameter_not_an_error(self, client, real_db, top_k):
+        body = ok(client.get("/v1/protocols", params={"meeting_id": real_db.meeting_id, "top_k": top_k}))
+        assert "top_k" not in body["args"]
+        assert not any("top_k" in warning for warning in body["warnings"])
 
+    @pytest.mark.network
     def test_max_chars_huge_is_clamped(self, client):
-        body = ok(client.get(f"/v1/bills/{BILL_ID}", params={"include_text": "true", "max_chars": str(10**30)}))
+        body = ok(client.get(f"/v1/bills/{REAL_BILL_ID}", params={"include_text": "true", "max_chars": str(10**30)}))
         assert body["args"]["max_chars"] == config.BILL_TEXT_MAX_MAX_CHARS
 
+    @pytest.mark.network
     @pytest.mark.parametrize("max_chars", ["0", "-5"])
     def test_non_positive_max_chars_is_the_default(self, client, max_chars):
-        body = ok(client.get(f"/v1/bills/{BILL_ID}", params={"include_text": "true", "max_chars": max_chars}))
+        body = ok(client.get(f"/v1/bills/{REAL_BILL_ID}", params={"include_text": "true", "max_chars": max_chars}))
         assert body["args"]["max_chars"] == config.BILL_TEXT_DEFAULT_MAX_CHARS
 
-    @pytest.mark.parametrize("params", [{"top_k": "abc"}, {"offset": "1.5"}, {"knesset_num": "x"},
+    @pytest.mark.parametrize("params", [{"offset": "1.5"}, {"knesset_num": "x"},
                                         {"include_text": "maybe"}])
     def test_type_errors_are_400_in_api_shape(self, client, params):
-        path = f"/v1/bills/{BILL_ID}" if "include_text" in params else "/v1/protocols"
+        path = f"/v1/bills/{REAL_BILL_ID}" if "include_text" in params else "/v1/protocols"
         body = bad_request(client.get(path, params=params), "invalid_parameter")
         assert "detail" not in body
 
     @pytest.mark.parametrize("fmt", ["xml", "MD ", "../json", ""])
     def test_format_enum(self, client, fmt):
-        bad_request(client.get("/v1/protocols", params={"meeting_id": M2, "format": fmt}), "invalid_format")
+        bad_request(client.get("/v1/protocols", params={"meeting_id": "2199065", "format": fmt}), "invalid_format")
 
 
 # ── path params ──────────────────────────────────────────────────────────────
@@ -356,6 +360,7 @@ class TestUnicode:
     def test_null_byte_in_path(self, client):
         bad_request(client.get("/v1/meetings/2199065%00/attendance"), "invalid_meeting_id")
 
+    @pytest.mark.network
     def test_hebrew_marks_and_emoji_ok(self, client):
         ok(client.get("/v1/protocols", params={"q": "ביטחון\u200f 🙂"}))
         ok(client.get("/v1/mks", params={"q": "\u202eעודד"}))
@@ -372,6 +377,7 @@ class TestErrorBodies:
         def broken(*a, **k):
             raise sqlite3.OperationalError("fts5: syntax error near C:\\secret\\knesset.db")
         monkeypatch.setattr(store, "query_protocol_rows", broken)
+        monkeypatch.setattr(store, "iter_protocol_rows", broken)
         r = client.get("/v1/protocols", params={"q": "ביטחון"})
         assert r.status_code == 500 and r.json()["error_code"] == "db_search_failed"
         not_leaking(r.text, "secret", "fts5", "syntax error")
@@ -392,12 +398,12 @@ class TestErrorBodies:
             assert r.status_code == 503, r.text
             not_leaking(r.text, "hidden-dir", "nope.db", str(tmp_path))
 
-    def test_mk_positions_error_is_generic(self, client, monkeypatch):
+    @pytest.mark.network
+    def test_mk_positions_error_is_generic(self, client, real_db, monkeypatch):
         def fail(*a, **k):
             raise requests.exceptions.ConnectionError("secret-host down")
         monkeypatch.setattr(tools, "get_mk_positions", fail)
-        from tests.conftest import X_MK
-        body = ok(client.get("/v1/mks", params={"q": X_MK["full_name"]}))
+        body = ok(client.get("/v1/mks", params={"q": real_db.mk_name}))
         profile = body["results"][0]["profile"]
         assert profile["positions_error"]
         not_leaking(str(body), "secret-host")

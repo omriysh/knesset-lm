@@ -114,6 +114,11 @@ def _ok_numeric_id(value: str) -> bool:
     return value.isascii() and value.isdigit() and len(value) <= config.API_MAX_ID_DIGITS
 
 
+def _ok_meeting_id(value: str) -> bool:
+    """A committee meeting id (digits) or a plenum session id ("p" + digits)."""
+    return _ok_numeric_id(value[1:] if value.startswith(config.PLENUM_MEETING_ID_PREFIX) else value)
+
+
 def _busy_response() -> JSONResponse:
     return JSONResponse({"error": "busy", "message": BUSY_MESSAGE}, status_code=503)
 
@@ -123,7 +128,7 @@ def _busy_response() -> JSONResponse:
 def _get_meeting_info(meeting_id: str) -> dict:
     """{date: DD/MM/YYYY, committee} of a knesset.db meeting; {} for a malformed or unknown meeting_id
     (the id comes from LLM / tool output, so it is checked before the lookup)."""
-    if not _ok_numeric_id(meeting_id) or not store.exists():
+    if not _ok_meeting_id(meeting_id) or not store.exists():
         return {}
     conn = _connect_for_query()
     try:
@@ -286,7 +291,7 @@ from retrieval import knesset_db_store as store
 from retrieval.lemmatize import lemmatize
 from utils.meeting import get_transcript_path_from_id
 from utils.speech import get_mk_speeches_in_committee
-from utils.tools import _connect_for_query, _expand_match, _quote_match
+from utils.tools import _connect_for_query, _expand_match, _fts_exact_match, _quote_match
 
 
 # ── Summary helpers (knesset.db) ──────────────────────────────────────────────
@@ -978,7 +983,7 @@ def _validated_user_response(pending_ui_event: Any, output_var: str, value: Any)
         value_is_valid = _is_offered_option(pending_ui_event, value)
     elif ui_type == "deep_dive":
         value_is_valid = (isinstance(value, list) and len(value) <= config.WEB_MAX_DEEP_DIVE_MEETINGS
-                          and all(isinstance(v, str) and _ok_numeric_id(v) for v in value))
+                          and all(isinstance(v, str) and _ok_meeting_id(v) for v in value))
     elif ui_type == "text_input":
         value = _clean_question(value) if isinstance(value, str) else value
         value_is_valid = isinstance(value, str) and _ok_question(value)
@@ -1155,9 +1160,18 @@ def _speech_word_matches(query: str) -> list[str]:
     """One FTS5 MATCH expression per distinct query word (ktiv-expanded), for ranking speeches by
     how many of the words they contain. Words shorter than 3 letters (על, של, את) are dropped
     unless nothing else remains."""
+    return [m for m in (_expand_match(w, "speeches_fts") or _quote_match(w) for w in _heatmap_words(query))
+            if m.strip()]
+
+
+def _speech_exact_word_matches(query: str) -> list[str]:
+    """_speech_word_matches without spelling / prefix variants: the words as typed."""
+    return [m for m in (_quote_match(w) for w in _heatmap_words(query)) if m.strip()]
+
+
+def _heatmap_words(query: str) -> list[str]:
     words = list(dict.fromkeys(lemmatize(query).split()))
-    content_words = [w for w in words if len(w) >= _HEATMAP_MIN_WORD_CHARS] or words
-    return [m for m in (_expand_match(w, "speeches_fts") or _quote_match(w) for w in content_words) if m.strip()]
+    return [w for w in words if len(w) >= _HEATMAP_MIN_WORD_CHARS] or words
 
 
 def _resolve_participant_filters(filters: BrowseFilterRequest) -> tuple[list[str], str | None]:
@@ -1220,16 +1234,17 @@ def _browse_search_meetings(query: str, sort: str, filters: BrowseFilterRequest,
                 return []
             try:
                 rows = store.meetings_by_best_speech(conn, match, knesset_num, limit=top_k, sort=sort,
-                                                     candidate_meeting_ids=candidate_meeting_ids)
+                                                     candidate_meeting_ids=candidate_meeting_ids,
+                                                     exact_match=_fts_exact_match(query))
             except sqlite3.Error as exc:
                 if store.deadline_passed(conn):
                     raise
                 print(f"[browse_search] FTS query failed for {match!r}: {exc}", flush=True)
                 return []
-            best_score = min((r["score"] for r in rows), default=0.0)
-            for r in rows:
+            display_scores = _tiered_display_scores(rows)
+            for r, display_score in zip(rows, display_scores):
                 r["excerpt"] = store.speech_snippet(conn, match, r["best_speech_rowid"])
-                r["score"] = round(r["score"] / best_score, 4) if best_score < 0 else 1.0
+                r["score"] = display_score
     except sqlite3.OperationalError as exc:
         if store.deadline_passed(conn):
             print(f"[browse_search] query timed out for {query!r}: {exc}", flush=True)
@@ -1243,6 +1258,22 @@ def _browse_search_meetings(query: str, sort: str, filters: BrowseFilterRequest,
         meetings_out.append({"meeting_id": r["meeting_id"], "date": date, "committee": committee,
                              "title": title, "excerpt": r["excerpt"], "score": r["score"]})
     return meetings_out
+
+
+def _tiered_display_scores(rows: list[dict]) -> list[float]:
+    """bm25 scores normalized to (0, 1], best = 1, per exact-match tier. When both tiers are present,
+    tier 0 (the query words as typed) maps to (0.5, 1] and tier 1 (variants only) to (0, 0.5], so a
+    client ordering by score keeps exact matches first."""
+    tiers = sorted({r.get("tier", 0) for r in rows})
+    best_score_by_tier = {tier: min(r["score"] for r in rows if r.get("tier", 0) == tier) for tier in tiers}
+    display_scores = []
+    for r in rows:
+        best_score = best_score_by_tier[r.get("tier", 0)]
+        normalized = r["score"] / best_score if best_score < 0 else 1.0
+        if len(tiers) > 1:
+            normalized = 0.5 * normalized + (0.5 if r.get("tier", 0) == tiers[0] else 0.0)
+        display_scores.append(round(normalized, 4))
+    return display_scores
 
 
 @app.post("/api/browse/search")
@@ -1286,18 +1317,18 @@ def browse_search(req: BrowseSearchRequest, request: Request):
 class WorkspaceSelectRequest(BaseModel):
     chunk_id: str = Field(min_length=1, max_length=config.API_MAX_ID_DIGITS, pattern=r"^[0-9]+$")
     text: str = Field(min_length=1, max_length=config.WEB_MAX_WORKSPACE_CHUNK_CHARS)
-    source_meeting_id: str = Field(min_length=1, max_length=config.API_MAX_ID_DIGITS, pattern=r"^[0-9]+$")
+    source_meeting_id: str = Field(min_length=1, max_length=config.API_MAX_ID_DIGITS + 1, pattern=r"^p?[0-9]+$")
 
 
 class WorkspaceAskRequest(BaseModel):
     question: str = Field(max_length=_MAX_QUESTION)
-    meeting_id: str | None = Field(default=None, max_length=config.API_MAX_ID_DIGITS)
+    meeting_id: str | None = Field(default=None, max_length=config.API_MAX_ID_DIGITS + 1)
 
 
 # ── Meeting routes (reading tab) ──────────────────────────────────────────────
 
 def _invalid_meeting_route(session_id: str, meeting_id: str) -> JSONResponse | None:
-    if not _ok_session_id(session_id) or not _ok_numeric_id(meeting_id):
+    if not _ok_session_id(session_id) or not _ok_meeting_id(meeting_id):
         return JSONResponse({"error": "Invalid parameters"}, status_code=400)
     return None
 
@@ -1372,10 +1403,11 @@ def research_meeting_hits(session_id: str, meeting_id: str, q: str = ""):
     word_matches = _speech_word_matches(query)
     if not word_matches or not store.exists():
         return {"hits": []}
+    exact_word_matches = _speech_exact_word_matches(query)
 
     conn = _connect_for_query()
     try:
-        rows = store.meeting_speech_hits(conn, word_matches, meeting_id)
+        rows = store.meeting_speech_hits(conn, word_matches, meeting_id, exact_word_matches)
     except sqlite3.Error as exc:
         print(f"[hits] FTS query failed for meeting {meeting_id}, {word_matches!r}: {exc}", flush=True)
         if store.deadline_passed(conn):
@@ -1383,9 +1415,11 @@ def research_meeting_hits(session_id: str, meeting_id: str, q: str = ""):
         rows = []
     finally:
         conn.close()
-    # Rank by matched word count; bm25 relevance only breaks ties within the same count.
+    # Rank by words matched as typed, then matched word count; bm25 relevance only breaks ties.
     best_relevance = max((r["relevance"] for r in rows), default=0.0) or 1.0
-    rank_keys = {r["speech_idx"]: r["matched_words"] + 0.5 * max(r["relevance"], 0.0) / best_relevance for r in rows}
+    word_count_weight = len(word_matches) + 1
+    rank_keys = {r["speech_idx"]: r["exact_words"] * word_count_weight + r["matched_words"]
+                 + 0.5 * max(r["relevance"], 0.0) / best_relevance for r in rows}
     best_rank_key = max(rank_keys.values(), default=1.0)
     return {"hits": [{"speech_idx": idx, "score": key / best_rank_key} for idx, key in rank_keys.items()]}
 
@@ -1547,7 +1581,7 @@ async def workspace_ask(session_id: str, req: WorkspaceAskRequest, request: Requ
         return JSONResponse({"error": "שאלה ריקה"}, status_code=400)
     if not _ok_question(question):
         return JSONResponse({"error": "שאלה מכילה תווים לא חוקיים או ארוכה מדי"}, status_code=400)
-    if req.meeting_id is not None and not _ok_numeric_id(req.meeting_id):
+    if req.meeting_id is not None and not _ok_meeting_id(req.meeting_id):
         return JSONResponse({"error": "Invalid meeting ID"}, status_code=400)
 
     _gemini_api_key, gemini_key_error = await asyncio.to_thread(visitor_gemini_key_or_error, request)

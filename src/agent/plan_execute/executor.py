@@ -56,7 +56,8 @@ def _truncate_tool_result(text: str, max_chars: int) -> str:
         return text
     try:
         parsed = json.loads(text)
-    except Exception:
+    except Exception as exc:
+        print(f"[executor] oversize tool result is not JSON ({exc}); truncating as text", flush=True)
         parsed = None
 
     if isinstance(parsed, list):
@@ -627,7 +628,8 @@ def _parse_record_json(raw: object, n_calls: int) -> dict:
 
     try:
         data = json.loads(text)
-    except Exception:
+    except Exception as exc:
+        print(f"[executor] step output is not JSON ({exc}); keeping it as a summary", flush=True)
         return {"decision": "produced", "summary": str(raw)[:500], "tool_results": []}
 
     if not isinstance(data, dict):

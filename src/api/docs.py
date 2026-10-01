@@ -5,7 +5,7 @@ Swagger UI and ReDoc are served from pinned local copies under /docs-assets (swa
 redoc 2.5.4 standalone bundle, downloaded from cdn.jsdelivr.net/npm), so no third-party
 script runs on the origin that keeps the visitor's Gemini key. The OpenAPI schema is enriched
 after generation: every operation gets a tag, and /v1 tool routes take their description and
-parameter docs from the research tool registry (the single source the agent also reads).
+parameter docs from the public view of the research tool registry (routes.public_tool_schema).
 """
 
 from pathlib import Path
@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 
 import config
 from agent.research_agent.tools import RESEARCH_TOOL_REGISTRY
-from api.routes import TOOL_ENDPOINTS
+from api.routes import TOOL_ENDPOINTS, public_tool_schema
 
 DOCS_ASSETS_DIR = Path(__file__).parent / "docs_assets"
 DOCS_ASSETS_URL = "/docs-assets"
@@ -52,16 +52,11 @@ TAG_DESCRIPTIONS = {
 }
 
 API_PARAM_TO_TOOL_ARG = {"q": "query", "committee": "committees", "meeting_id": "meeting_ids"}
-TOP_K_CAP_BY_TOOL = {
-    "find_mk": config.API_FIND_MAX_TOP_K,
-    "find_committee": config.API_FIND_MAX_TOP_K,
-    "find_party": config.API_FIND_MAX_TOP_K,
-    "query_protocols": config.API_PROTOCOLS_MAX_TOP_K,
-}
 API_PARAM_DESCRIPTIONS = {
     "format": "`json` (default) or `md`: markdown, more compact for an LLM context.",
     "knesset_num": "Knesset number (default 25).",
-    "offset": "Rows to skip, for paging (same value per scope).",
+    "offset": "Paging position: characters for protocols and bill text, rows for bills and votes; "
+              "copy it from the response's `next`.",
     "search_in": "Scopes to search: `topics`, `opinions`, `speeches` (repeat or comma-separate; "
                  f"default: {', '.join(config.API_PROTOCOLS_DEFAULT_SCOPES)}).",
     "meeting_id": "Meeting id(s), as returned in protocol rows (repeat or comma-separate).",
@@ -96,21 +91,19 @@ def tool_parameter_description(tool_name: str, api_param: str, tool_properties: 
     tool_arg = api_param if api_param in tool_properties else API_PARAM_TO_TOOL_ARG.get(api_param, api_param)
     registry_description = (tool_properties.get(tool_arg) or {}).get("description", "")
     description = registry_description or API_PARAM_DESCRIPTIONS.get(api_param, "")
-    if api_param == "top_k":
-        cap = TOP_K_CAP_BY_TOOL.get(tool_name, config.API_LIST_MAX_TOP_K)
-        description = f"{description or 'Maximum rows to return'} (API cap: {cap})."
     if not description:
         description = f"See the `{tool_arg}` argument of the `{tool_name}` tool in /v1/tools."
     return description
 
 
 def document_tool_operation(operation: dict, tool_name: str, tool_spec) -> None:
-    tool_description = tool_spec.schema.get("description", "")
+    public_schema = public_tool_schema(tool_spec)
+    tool_description = public_schema["description"]
     operation["summary"] = first_sentence(tool_description)
     operation["description"] = (f"{tool_description}\n\n"
                                 f"Research-agent tool: `{tool_name}`. Errors return "
-                                "`{error_code, message, tool, args}` with a 4xx/5xx status.")
-    tool_properties = tool_spec.schema.get("properties", {})
+                                "`{error_code, message, tool, args, hint}` with a 4xx/5xx status.")
+    tool_properties = public_schema.get("properties", {})
     for parameter in operation.get("parameters", []):
         if not parameter.get("description"):
             parameter["description"] = tool_parameter_description(tool_name, parameter["name"], tool_properties)

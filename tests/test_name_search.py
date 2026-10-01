@@ -50,7 +50,7 @@ class _RecordingFetcher:
     def __init__(self):
         self.requested_ids: list[str] = []
 
-    def __call__(self, committee_id: str) -> dict:
+    def __call__(self, committee_id: str, knesset_num: int | None = None) -> dict:
         self.requested_ids.append(committee_id)
         return {"committee_id": committee_id, "members": [{"mk_id": "1", "name": "x"}]}
 
@@ -119,7 +119,7 @@ def test_failing_fetcher_leaves_candidate_unfetched():
     assert candidates[0]["fetched"] is False
 
 
-def test_find_committee_tool_inlines_record(sample_db, monkeypatch):
+def test_find_committee_tool_inlines_record(real_db, monkeypatch):
     from utils import tools
     fetcher = _RecordingFetcher()
     monkeypatch.setattr(tools, "fetch_committee_record", fetcher)
@@ -161,3 +161,36 @@ def test_real_db_ambiguous_names_fetch_nothing(real_committee_index, query):
     fetcher = _RecordingFetcher()
     name_search(query, fuzzy_index=real_committee_index, fetch_by_id=fetcher)
     assert fetcher.requested_ids == []
+
+
+@pytest.mark.network
+def test_find_committee_in_an_older_knesset_uses_its_live_committee_list():
+    from utils import tools
+    envelope = tools.handle_find_committee({"query": "כספים", "knesset_num": 20})
+    payload = json.loads(envelope.full)
+    finance = next(c for c in payload if c["name"] == "ועדת הכספים")
+    assert finance["committee_id"] != "4186"
+    assert all(c["extra"]["knesset_num"] == 20 for c in payload)
+
+
+@pytest.mark.network
+def test_find_committee_record_is_fetched_from_the_requested_knesset():
+    from utils.tool_helpers.adapters import fetch_committee_record
+    from utils.knesset_db import get_all_committees
+    finance_20 = next(c for c in get_all_committees(20) if c["Name"] == "ועדת הכספים")
+    record = fetch_committee_record(str(finance_20["CommitteeID"]), knesset_num=20)
+    assert record["knesset_num"] == 20
+    assert record["name"] == "ועדת הכספים"
+    assert record["members"], "a past Knesset's members are not current; they must still be listed"
+
+
+@pytest.mark.parametrize("knesset_num, accepted", [(1, True), (20, True), (25, True), (26, False), (0, False)])
+def test_find_committee_accepts_knessets_1_to_25(knesset_num, accepted):
+    from api.tool_arguments import PUBLIC_API_LIMITS, TOOL_ARGUMENT_VALIDATORS
+    from api.validation import ApiInputError
+    validate = TOOL_ARGUMENT_VALIDATORS["find_committee"]
+    if accepted:
+        assert validate({"query": "כספים", "knesset_num": knesset_num}, PUBLIC_API_LIMITS)["knesset_num"] == knesset_num
+    else:
+        with pytest.raises(ApiInputError):
+            validate({"query": "כספים", "knesset_num": knesset_num}, PUBLIC_API_LIMITS)
