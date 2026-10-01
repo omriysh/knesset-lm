@@ -5,7 +5,10 @@
  *   sessionId  — active research session
  *   meetingId  — meeting to show on open
  *   meetings   — [{meeting_id, title, date, committee, score}] from /api/browse/search
- *   opts       — { originalQuestion, postCompletion, searchRequest, ... }
+ *   opts       — { originalQuestion, postCompletion, searchRequest, focus, pushUrl, ... }
+ *
+ * In the reading tab (standalone) the open meeting, the clicked speech and the selected text are
+ * mirrored into the page URL (url_state.js), so the address bar and the share buttons link to them.
  *
  * openProtocolBrowserWithSearch(sessionId, searchRequest, opts)
  *   runs /api/browse/search first (empty query = newest meetings), then opens.
@@ -40,8 +43,7 @@ let _summary   = null;   // last fetched summary {topics:[]}
 let _origQ     = '';     // original question (for summarize button)
 let _standalone = false; // true when embedded in reading tab (no chat bar)
 let _container  = null;  // DOM element the panel is appended into
-let _pendingScrollChunk = null; // chunk_id to scroll to once its meeting loads
-let _pendingScrollQuote = '';   // quote to highlight inside that chunk
+let _pendingFocus = null;       // {speech, offset, length} or {speech, quote} to show once the meeting loads
 let _searchRequest = null;      // /api/browse/search body behind _meetings (null = no "load more")
 
 /* ── Heatmap state ──────────────────────────────────────────────── */
@@ -92,9 +94,7 @@ function openProtocolBrowser(sessionId, meetingId, meetings, opts = {}) {
   _hmChunks          = [];
   _activeHitsQuery   = null;
   _searchRequest     = opts.searchRequest || null;
-  _pendingScrollChunk = (opts.focusChunkId != null && opts.focusChunkId !== '')
-    ? String(opts.focusChunkId) : null;
-  _pendingScrollQuote = opts.focusQuote || '';
+  _pendingFocus = opts.focus?.speech != null ? opts.focus : null;
 
   // Replace any existing panel
   if (_panel) _panel.remove();
@@ -109,7 +109,8 @@ function openProtocolBrowser(sessionId, meetingId, meetings, opts = {}) {
   if (qLabel) qLabel.textContent = _origQ || 'עיון בפרוטוקולים';
 
   _renderSidebar();
-  if (meetingId) _loadMeeting(meetingId);
+  _wireTranscriptSharing();
+  if (meetingId) _loadMeeting(meetingId, { pushUrl: opts.pushUrl !== false });
   else _panel.querySelector('#browser-transcript-col').innerHTML =
     '<div class="browser-loading">לא נמצאו ישיבות</div>';
   _loadAllParticipants();
@@ -145,15 +146,15 @@ function openProtocolBrowser(sessionId, meetingId, meetings, opts = {}) {
 function _shellHtml(postCompletion) {
   // In standalone mode: no "summarize for me", no chat bar, no close button
   const summarizeBtn = (postCompletion || _standalone) ? '' :
-    `<button id="browser-summarize-btn" class="browser-summarize-btn" title="תמצת על בסיס הפרוטוקולים שנמצאו">
-      תמצת עבורי
+    `<button id="browser-summarize-btn" class="browser-summarize-btn" title="תמצות על בסיס הפרוטוקולים שנמצאו">
+      תמצות הממצאים
     </button>`;
   const closeBtn = _standalone ? '' :
-    `<button class="browser-close-btn" data-click="closeProtocolBrowser" title="סגור">✕</button>`;
+    `<button class="browser-close-btn" data-click="closeProtocolBrowser" title="סגירה">✕</button>`;
   const chatBar = _standalone ? '' : `
   <div class="browser-chat-bar">
-    <textarea id="browser-chat-input" placeholder="שאל שאלה על הישיבה הזו… (Ctrl+Enter)" rows="1"></textarea>
-    <button id="browser-chat-submit" class="browser-chat-submit">שלח</button>
+    <textarea id="browser-chat-input" placeholder="שאלה על הישיבה הזו… (Ctrl+Enter)" rows="1"></textarea>
+    <button id="browser-chat-submit" class="browser-chat-submit">שליחה</button>
   </div>`;
 
   return `
@@ -165,7 +166,7 @@ function _shellHtml(postCompletion) {
     </button>
     <!-- Desktop: appears when sidebar is collapsed -->
     <button class="sidebar-expand-btn" id="sidebar-expand-btn"
-            data-click="browserToggleSidebar" title="הצג ישיבות" style="display:none">
+            data-click="browserToggleSidebar" title="הצגת ישיבות" style="display:none">
       <span class="material-symbols-outlined" style="font-size:15px">format_list_bulleted</span>
       <span>ישיבות</span>
     </button>
@@ -175,6 +176,9 @@ function _shellHtml(postCompletion) {
     </button>
     <span class="browser-breadcrumb" id="browser-question-label"></span>
     <div class="browser-header-actions">
+      ${_standalone ? `<button class="browser-share-btn" data-click="browserShareMeeting" data-share-level="meeting" title="קישור לישיבה">
+        <span class="material-symbols-outlined" style="font-size:16px">share</span><span>לשיתוף</span>
+      </button>` : ''}
       ${summarizeBtn}
       ${closeBtn}
     </div>
@@ -183,7 +187,7 @@ function _shellHtml(postCompletion) {
   <div class="browser-body">
     <div class="browser-transcript-wrap">
       <div class="browser-transcript-col" id="browser-transcript-col">
-        <div class="browser-loading">טוען…</div>
+        <div class="browser-loading">בטעינה…</div>
       </div>
       <div class="heatmap-strip" id="heatmap-strip">
         <div class="hm-bands" id="hm-bands"></div>
@@ -194,34 +198,34 @@ function _shellHtml(postCompletion) {
       <!-- Desktop: collapse button above meeting list -->
       <div class="sidebar-top-header">
         <span class="sidebar-top-title">ישיבות</span>
-        <button class="sidebar-top-close" data-click="browserToggleSidebar" title="הסתר">
+        <button class="sidebar-top-close" data-click="browserToggleSidebar" title="הסתרה">
           <span class="material-symbols-outlined" id="sidebar-top-arrow" style="font-size:18px">chevron_right</span>
         </button>
       </div>
       <div class="sidebar-inner">
         <div class="sidebar-controls">
           <div class="sidebar-sort-row">
-            <label class="sort-label">מיין:</label>
+            <label class="sort-label">מיון:</label>
             <select id="sort-select" class="sort-select" data-change="browserSetSort">
               <option value="relevance">רלוונטיות</option>
               <option value="date_desc">תאריך ↓</option>
               <option value="date_asc">תאריך ↑</option>
             </select>
-            <button id="sort-grp" class="sort-btn" data-click="browserToggleGroup">קבץ לפי ועדה</button>
+            <button id="sort-grp" class="sort-btn" data-click="browserToggleGroup">קיבוץ לפי ועדה</button>
           </div>
           <div class="sidebar-filter-row">
             <input id="sidebar-part-input" class="sidebar-part-input"
-                   placeholder="טוען משתתפים…"
+                   placeholder="טעינת משתתפים…"
                    data-input="browserFilterParticipant"
                    disabled />
           </div>
         </div>
         <div class="sidebar-list" id="sidebar-list"></div>
-        <button class="sidebar-load-more" data-click="browserLoadMore">טען עוד ישיבות</button>
+        <button class="sidebar-load-more" data-click="browserLoadMore">טעינת ישיבות נוספות</button>
       </div>
     </div>
   </div>
-  <button class="sidebar-side-tab" id="sidebar-side-tab" data-click="browserToggleSidebar" title="פתח רשימת ישיבות" style="display:none">
+  <button class="sidebar-side-tab" id="sidebar-side-tab" data-click="browserToggleSidebar" title="רשימת הישיבות" style="display:none">
     <span class="material-symbols-outlined" id="sidebar-side-tab-icon" style="font-size:18px">format_list_bulleted</span>
   </button>
   ${chatBar}
@@ -381,7 +385,7 @@ function browserToggleSummary() {
   if (!bar) return;
   const open = bar.classList.toggle('open');
   const btn = _panel?.querySelector('#browser-summary-btn span:not(.material-symbols-outlined)');
-  if (btn) btn.textContent = open ? 'סגור' : 'סיכום';
+  if (btn) btn.textContent = open ? 'סגירה' : 'סיכום';
 }
 
 /* ── Participant loading ─────────────────────────────────────────── */
@@ -416,8 +420,9 @@ function _onParticipantLoaded(total) {
 }
 
 /* ── Load meeting (summary + transcript) ─────────────────────────── */
-async function _loadMeeting(meetingId) {
+async function _loadMeeting(meetingId, { pushUrl = true } = {}) {
   _activeId          = meetingId;
+  if (_standalone) updateProtocolUrl({ meeting: meetingId }, { push: pushUrl });
   _activeHitsQuery   = null;
   _hmChunks          = [];
   _summary           = null;
@@ -428,7 +433,7 @@ async function _loadMeeting(meetingId) {
   _renderSidebar();
 
   const col = _panel.querySelector('#browser-transcript-col');
-  col.innerHTML = '<div class="browser-loading">טוען…</div>';
+  col.innerHTML = '<div class="browser-loading">בטעינה…</div>';
 
   try {
     const [summaryData, transcriptData] = await Promise.all([
@@ -476,13 +481,10 @@ async function _loadMeeting(meetingId) {
     // Async: color the heatmap by the speeches matching the search query
     _loadHitsHeatmap(meetingId, _searchQuery());
 
-    // Deep-link: scroll to the requested chunk once the transcript is laid out.
-    if (_pendingScrollChunk != null) {
-      const target = _pendingScrollChunk;
-      const quote  = _pendingScrollQuote;
-      _pendingScrollChunk = null;
-      _pendingScrollQuote = '';
-      requestAnimationFrame(() => browserScrollToChunk(target, quote));
+    if (_pendingFocus) {
+      const focus = _pendingFocus;
+      _pendingFocus = null;
+      requestAnimationFrame(() => browserFocusSpeech(focus.speech, focus));
     }
 
   } catch (err) {
@@ -497,18 +499,20 @@ function _bulletHtml(b, isTopic) {
   const speechIdx = typeof b === 'string' ? null : b.speech_idx;
   const quote     = typeof b === 'string' ? '' : (b.quote || '');
   const verified  = typeof b !== 'string' && !!b.quote_verified;
+  const rangeAttrs = (typeof b !== 'string' && b.quote_offset != null && b.quote_length)
+    ? ` data-quote-offset="${_esc(b.quote_offset)}" data-quote-length="${_esc(b.quote_length)}"` : '';
   const quoteAttrs = speechIdx != null
-    ? `data-speech-idx="${_esc(speechIdx)}" data-quote="${_esc(quote)}"`
+    ? `data-speech-idx="${_esc(speechIdx)}" data-quote="${_esc(quote)}"${rangeAttrs}`
     : (quote ? `data-approx-quote="${_esc(quote)}"` : '');
   const bulletAttrs = isTopic
-    ? `data-hits-query="${_esc(text)}" title="הדגש במפת החום נאומים התואמים לנושא"`
-    : (speechIdx != null ? `${quoteAttrs} title="קפוץ לציטוט בפרוטוקול"`
-      : (quote ? `${quoteAttrs} title="חפש את הקטע הקרוב ביותר בפרוטוקול"` : ''));
+    ? `data-hits-query="${_esc(text)}" title="הדגשת הנאומים התואמים לנושא במפת החום"`
+    : (speechIdx != null ? `${quoteAttrs} title="מעבר לציטוט בפרוטוקול"`
+      : (quote ? `${quoteAttrs} title="חיפוש הקטע הקרוב ביותר בפרוטוקול"` : ''));
   const jump = speechIdx != null
-    ? `<button class="summary-jump-btn" ${quoteAttrs} title="קפוץ לציטוט בפרוטוקול"><span class="material-symbols-outlined">arrow_outward</span></button>`
+    ? `<button class="summary-jump-btn" ${quoteAttrs} title="מעבר לציטוט בפרוטוקול"><span class="material-symbols-outlined">arrow_outward</span></button>`
     : '';
   const approxSearch = speechIdx == null && quote
-    ? `<button class="summary-approx-btn" ${quoteAttrs}><span class="material-symbols-outlined">search</span>חפש בפרוטוקול</button>`
+    ? `<button class="summary-approx-btn" ${quoteAttrs}><span class="material-symbols-outlined">search</span>חיפוש בפרוטוקול</button>`
     : '';
   let quoteHtml = '';
   if (quote && verified) {
@@ -576,7 +580,10 @@ function _wireSummaryJumps(root) {
   root?.querySelectorAll('.summary-jump-btn[data-speech-idx], .summary-bullet-btn[data-speech-idx]').forEach(btn => {
     btn.addEventListener('click', e => {
       e.stopPropagation();
-      browserScrollToChunk(btn.dataset.speechIdx, btn.dataset.quote || '');
+      const d = btn.dataset;
+      browserFocusSpeech(d.speechIdx, d.quoteOffset != null
+        ? { offset: Number(d.quoteOffset), length: Number(d.quoteLength) }
+        : { quote: d.quote || '' });
     });
   });
   // Quote without an exact location → rank the meeting's speeches by the quote's words and go to the best one
@@ -622,6 +629,9 @@ function _transcriptHtml(data) {
   <div class="chunk-body" style="border-right-color:${color}">
     <div class="chunk-speaker-row">
       <span class="chunk-speaker">${_esc(c.speaker || '—')}</span>
+      ${_standalone ? `<button class="chunk-share-btn" data-click="browserShareSpeech" data-share-level="speech" title="קישור לדברים">
+        <span class="material-symbols-outlined">share</span>
+      </button>` : ''}
     </div>
     <div class="chunk-text">${_esc(c.text)}</div>
   </div>
@@ -664,7 +674,7 @@ async function _loadHitsHeatmap(meetingId, query, scrollToBest = false) {
     _renderHeatmap(scores);
     if (scrollToBest) {
       const best = (data.hits || []).reduce((a, h) => (!a || h.score > a.score) ? h : a, null);
-      if (best) browserScrollToChunk(String(best.speech_idx));
+      if (best) browserFocusSpeech(best.speech_idx);
     }
   } catch (err) {
     console.error('[browser] hits failed:', err);
@@ -720,13 +730,22 @@ function _updateHeatmapViewport() {
   vp.style.top    = (col.scrollTop * ratio) + 'px';
 }
 
-/* ── Scroll transcript to chunk ──────────────────────────────────── */
-function browserScrollToChunk(chunkId, quote = '') {
+/* ── Focus a speech: scroll to it, optionally highlight a range in it ── */
+/* range: {offset, length} (a link, a located quote) or {quote} (a citation's text, found the way
+   quotes are verified: ignoring niqqud, whitespace and punctuation); without one, any highlight is removed. */
+function browserFocusSpeech(speechIdx, range = null) {
   const col  = _panel?.querySelector('#browser-transcript-col');
-  const card = col?.querySelector(`.chunk-card[data-chunk-id="${CSS.escape(String(chunkId))}"]`);
+  const card = col?.querySelector(`.chunk-card[data-chunk-id="${CSS.escape(String(speechIdx))}"]`);
   if (!col || !card) return;
 
-  const mark = quote ? _markQuoteInCard(card, quote) : null;
+  const textRange = range?.quote ? _quoteRangeInCard(card, range.quote)
+    : (range?.offset != null && range?.length ? range : null);
+  const mark = _highlightInCard(card, textRange);
+  if (_standalone) {
+    updateProtocolUrl({ speech: Number(speechIdx), offset: mark ? textRange.offset : null,
+                        length: mark ? textRange.length : null });
+  }
+
   const anchor = mark || card;
   const target = col.scrollTop
     + anchor.getBoundingClientRect().top
@@ -742,19 +761,17 @@ function browserScrollToChunk(chunkId, quote = '') {
 
 const _QUOTE_IGNORED_CHARS = /[֑-ׇ\s"'“”„״׳.,:;!?()\[\]\-–—…]/;
 
-/* Wrap the quote inside the card's text in <mark class="quote-highlight">. Matching ignores niqqud,
-   whitespace and punctuation, so a verified quote is found even when the transcript punctuates differently. */
-function _markQuoteInCard(card, quote) {
+function _clearHighlights(card) {
   card.closest('.transcript-body')?.querySelectorAll('mark.quote-highlight').forEach(old => {
+    const parent = old.parentNode;
     old.replaceWith(document.createTextNode(old.textContent));
+    parent.normalize();
   });
-  const textEl = card.querySelector('.chunk-text');
-  if (!textEl) return null;
-  textEl.normalize();
-  const textNode = textEl.firstChild;
-  if (!textNode || textNode.nodeType !== Node.TEXT_NODE) return null;
+}
 
-  const raw = textNode.textContent;
+/* {offset, length} of the quote in the card's text, or null */
+function _quoteRangeInCard(card, quote) {
+  const raw = card.querySelector('.chunk-text')?.textContent || '';
   let normalized = '';
   const rawIndexOf = [];
   for (let i = 0; i < raw.length; i++) {
@@ -765,14 +782,101 @@ function _markQuoteInCard(card, quote) {
   const normalizedQuote = [...quote].filter(ch => !_QUOTE_IGNORED_CHARS.test(ch)).join('');
   const start = normalizedQuote ? normalized.indexOf(normalizedQuote) : -1;
   if (start < 0) return null;
+  const offset = rawIndexOf[start];
+  return { offset, length: rawIndexOf[start + normalizedQuote.length - 1] + 1 - offset };
+}
 
-  const range = document.createRange();
-  range.setStart(textNode, rawIndexOf[start]);
-  range.setEnd(textNode, rawIndexOf[start + normalizedQuote.length - 1] + 1);
+/* Wrap range ({offset, length} in the card's text) in <mark class="quote-highlight">, after removing the
+   previous highlight; null when there is no range or it falls outside the text. */
+function _highlightInCard(card, range) {
+  _clearHighlights(card);
+  const textNode = card.querySelector('.chunk-text')?.firstChild;
+  if (!range || !textNode || textNode.nodeType !== Node.TEXT_NODE) return null;
+  const end = range.offset + range.length;
+  if (range.offset < 0 || range.length <= 0 || end > textNode.textContent.length) return null;
+
+  const domRange = document.createRange();
+  domRange.setStart(textNode, range.offset);
+  domRange.setEnd(textNode, end);
   const mark = document.createElement('mark');
   mark.className = 'quote-highlight';
-  range.surroundContents(mark);
+  domRange.surroundContents(mark);
   return mark;
+}
+
+/* ── Sharing: a speech card click or a text selection inside one speech goes into the URL ── */
+
+function _wireTranscriptSharing() {
+  if (!_standalone) return;
+  const col = _panel.querySelector('#browser-transcript-col');
+  col.addEventListener('click', e => {
+    const card = e.target.closest('.transcript-body .chunk-card');
+    if (!card || e.target.closest('button') || !document.getSelection().isCollapsed) return;
+    updateProtocolUrl({ speech: Number(card.dataset.chunkId), offset: null, length: null });
+  });
+  const onSelectionEnd = () => setTimeout(_onTranscriptSelection, 0);
+  col.addEventListener('mouseup', onSelectionEnd);
+  col.addEventListener('touchend', onSelectionEnd);
+  col.addEventListener('keyup', onSelectionEnd);
+  col.addEventListener('scroll', _hideSelectionShareButton, { passive: true });
+}
+
+/* Selection within one speech's text → its range in the URL and a floating share button */
+function _onTranscriptSelection() {
+  const selection = document.getSelection();
+  if (!selection || selection.isCollapsed || !selection.rangeCount) { _hideSelectionShareButton(); return; }
+  const range = selection.getRangeAt(0);
+  const common = range.commonAncestorContainer;
+  const textEl = (common.nodeType === Node.ELEMENT_NODE ? common : common.parentElement)?.closest('.chunk-text');
+  const card = textEl?.closest('.transcript-body .chunk-card');
+  if (!card || !range.toString().trim()) { _hideSelectionShareButton(); return; }
+
+  const beforeSelection = document.createRange();
+  beforeSelection.setStart(textEl, 0);
+  beforeSelection.setEnd(range.startContainer, range.startOffset);
+  updateProtocolUrl({ speech: Number(card.dataset.chunkId), offset: beforeSelection.toString().length,
+                      length: range.toString().length });
+  _showSelectionShareButton(range.getBoundingClientRect());
+}
+
+let _selectionShareButton = null;
+
+function _showSelectionShareButton(selectionRect) {
+  if (!_selectionShareButton) {
+    _selectionShareButton = document.createElement('button');
+    _selectionShareButton.className = 'selection-share-btn';
+    _selectionShareButton.dataset.click = 'browserShareQuote';
+    _selectionShareButton.dataset.shareLevel = 'quote';
+    _selectionShareButton.innerHTML = '<span class="material-symbols-outlined">share</span><span>לשיתוף</span>';
+    _selectionShareButton.addEventListener('mousedown', e => e.preventDefault());
+    document.body.appendChild(_selectionShareButton);
+  }
+  const button = _selectionShareButton;
+  button.style.display = 'flex';
+  const top = selectionRect.top - button.offsetHeight - 8;
+  button.style.top  = `${top > 8 ? top : selectionRect.bottom + 8}px`;
+  button.style.left = `${Math.max(8, Math.min(selectionRect.left + selectionRect.width / 2 - button.offsetWidth / 2,
+                                              window.innerWidth - button.offsetWidth - 8))}px`;
+}
+
+function _hideSelectionShareButton() {
+  if (_selectionShareButton) _selectionShareButton.style.display = 'none';
+}
+
+function browserShareMeeting(button) {
+  openShareMenu(button, 'meeting');
+}
+
+function browserShareSpeech(button) {
+  const card = button.closest('.chunk-card');
+  if (!card) return;
+  updateProtocolUrl({ speech: Number(card.dataset.chunkId) });
+  openShareMenu(button, 'speech');
+}
+
+function browserShareQuote(button) {
+  openShareMenu(button, 'quote');
+  _hideSelectionShareButton();
 }
 
 function _afterScrollSettles(col, alreadyThere, callback) {
@@ -802,7 +906,8 @@ function openProtocolFromCitation(sid, meetingId, speechIdx, quote = '') {
     ? seed
     : [{ meeting_id: String(meetingId) }];
 
-  if (typeof switchTab === 'function') switchTab('reading');
+  switchTab('reading', { writeUrl: false });
+  setProtocolUrlState({ ...readProtocolUrl(''), meeting: null });
 
   const area = document.getElementById('reading-browser-area');
   if (area) area.innerHTML = '';
@@ -811,22 +916,30 @@ function openProtocolFromCitation(sid, meetingId, speechIdx, quote = '') {
     container:      area || undefined,
     standalone:     true,
     postCompletion: true,
-    focusChunkId:   (speechIdx != null && speechIdx !== '') ? String(speechIdx) : null,
-    focusQuote:     quote,
+    focus:          (speechIdx != null && speechIdx !== '') ? { speech: String(speechIdx), quote } : null,
   });
 }
 
 /* ── Sidebar switch meeting ──────────────────────────────────────── */
-function browserSwitchMeeting(meetingId) {
+function browserSwitchMeeting(meetingId, { focus = null, pushUrl = true } = {}) {
   if (meetingId === _activeId) return;
-  _loadMeeting(meetingId);
+  _pendingFocus = focus?.speech != null ? focus : null;
+  _loadMeeting(meetingId, { pushUrl });
+}
+
+function browserShowsMeeting(meetingId) {
+  return !!_panel && _standalone && _activeId === meetingId;
+}
+
+function browserListsMeeting(meetingId) {
+  return !!_panel && _standalone && _meetings.some(m => m.meeting_id === meetingId);
 }
 
 /* ── Load more meetings (same search, larger top_k) ─────────────── */
 async function browserLoadMore() {
   const btn = _panel.querySelector('.sidebar-load-more');
   if (!_searchRequest || !btn) return;
-  btn.textContent = 'טוען…';
+  btn.textContent = 'בטעינה…';
   try {
     const requested = _meetings.length + 40;
     const data = await _browseSearch({ ..._searchRequest, top_k: requested });
@@ -836,10 +949,10 @@ async function browserLoadMore() {
     _renderSidebar();
     if (newOnes.length) _loadNewParticipants(newOnes);
     if ((data.meetings || []).length < requested) btn.style.display = 'none';
-    else btn.textContent = 'טען עוד ישיבות';
+    else btn.textContent = 'טעינת ישיבות נוספות';
   } catch (err) {
     console.error('[browser] load more failed:', err);
-    btn.textContent = 'שגיאה — נסה שוב';
+    btn.textContent = 'שגיאה — ניסיון נוסף';
   }
 }
 
@@ -903,7 +1016,7 @@ async function _browserAsk() {
 
 /* ── Summarize button ────────────────────────────────────────────── */
 async function _browserSummarize() {
-  const q = _origQ || 'תמצת את הממצאים העיקריים מהפרוטוקולים שנמצאו';
+  const q = _origQ || 'תמצות הממצאים העיקריים מהפרוטוקולים שנמצאו';
   _streamWorkspaceAsk(q, _activeId);
 }
 

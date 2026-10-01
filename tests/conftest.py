@@ -242,10 +242,10 @@ def handler_payload(handler, args: dict):
 
 def assert_within_character_budget(rows: list[dict], budget: int) -> None:
     """A query_protocols page (utils.tool_helpers.char_paging): the rows before the last one stay under the
-    budget, so the page runs over it by at most its last row."""
+    budget, so the page runs over it by at most its last row. The rows' source `url` is not counted."""
     from utils.tool_helpers.char_paging import served_json_chars
     assert rows
-    assert sum(served_json_chars(row) for row in rows[:-1]) < budget
+    assert sum(served_json_chars({k: v for k, v in row.items() if k != "url"}) for row in rows[:-1]) < budget
 
 
 # ── Upstream failure / spy (no canned payloads) ───────────────────────────────

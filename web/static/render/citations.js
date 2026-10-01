@@ -312,7 +312,7 @@ export function buildSourcesHtml(footnotes, sid) {
         ` data-result-ref="${esc(ref)}" data-session-id="${esc(sid || '')}"` +
         ` data-tool-name="${esc(toolName)}" data-loaded="0">` +
         `<summary class="ev-source-header">${header}</summary>` +
-        `<div class="ev-source-full-slot"><div class="ev-source-placeholder">▼ לחץ להצגת מקור מלא</div></div>` +
+        `<div class="ev-source-full-slot"><div class="ev-source-placeholder">▼ להצגת המקור המלא</div></div>` +
         `</details>`
       );
     }

@@ -32,7 +32,7 @@ export function wireStatusToggle(statusEl, stagesEl) {
   if (stagesAlways()) return;
   const wrap = stagesEl.parentElement;
   statusEl.classList.add('clickable');
-  statusEl.title = 'לחץ לצפייה בשלבי עיבוד';
+  statusEl.title = 'לצפייה בשלבי העיבוד';
   statusEl.addEventListener('click', () => {
     const hidden = wrap.style.display === 'none';
     wrap.style.display = hidden ? 'block' : 'none';

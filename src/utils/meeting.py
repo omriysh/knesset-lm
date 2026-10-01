@@ -626,9 +626,11 @@ def speaker_turn_starts(transcript_text: str) -> list[int]:
 
 def format_meeting_chunks(meeting: dict) -> list[dict]:
     """
-    Format a meeting into display chunks for the web UI.
+    The meeting's speeches as the web UI shows them and knesset.db stores them (speeches table,
+    opinions.speech_idx / quote_offset / quote_length), so a speech index and a character range in it
+    mean the same text everywhere.
 
-    Returns list of {chunk_id: str, speaker: str, text: str}.
+    Returns list of {chunk_id: str, speaker: str, text: str}; chunk_id is the speech index.
 
     Three formats handled:
     - structured speeches  → ftfy-cleaned text per speech

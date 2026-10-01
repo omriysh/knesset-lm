@@ -25,7 +25,6 @@ MCP_HEADERS = {"Accept": "application/json, text/event-stream", "Content-Type": 
                "MCP-Protocol-Version": "2025-06-18"}
 LOGGED_MK_ORIT_FARKASH_HACOHEN = "30685"
 SCIENCE_COMMITTEE_SINGLE_SPACED = "ועדת המדע והטכנולוגיה"
-SCIENCE_COMMITTEE_DOUBLE_SPACED = "ועדת  המדע  והטכנולוגיה"
 NONSENSE_WORD = "קשקשתאינהקיימתבשוםמקום"
 
 
@@ -111,13 +110,14 @@ def test_party_without_definite_article(mcp):
 
 
 def test_single_spaced_committee_covers_double_spaced_meetings(mcp, real_conn):
-    """Was: committee filter is exact-match: single-spaced name misses the double-spaced 'ועדת  המדע  והטכנולוגיה' meetings."""
+    """Was: committee filter is exact-match: single-spaced name misses the double-spaced 'ועדת  המדע  והטכנולוגיה'
+    meetings. The build now stores names whitespace-normalized, so every science meeting is under one name."""
     meetings = [r[0] for r in real_conn.execute(
         "SELECT m.meeting_id FROM meetings m WHERE m.committee = ? AND (m.is_protocol IS NULL OR m.is_protocol != 0) "
         "AND (EXISTS (SELECT 1 FROM topics t WHERE t.meeting_id = m.meeting_id) "
         "     OR EXISTS (SELECT 1 FROM speeches s WHERE s.meeting_id = m.meeting_id)) ORDER BY m.meeting_id",
-        (SCIENCE_COMMITTEE_DOUBLE_SPACED,))]
-    assert len(meetings) >= 70
+        (SCIENCE_COMMITTEE_SINGLE_SPACED,))]
+    assert len(meetings) >= 70 + 38
     missed = []
     for meeting_id in meetings:
         _, rows = protocol_rows(mcp, {"committees": [SCIENCE_COMMITTEE_SINGLE_SPACED], "meeting_ids": [meeting_id],

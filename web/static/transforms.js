@@ -4,14 +4,14 @@
 
 // Status messages displayed when the backend emits a `progress` subgraph event.
 export const PROGRESS_MSGS = {
-  planning_started:          'מתכנן שלבי חקר...',
-  executing:                 'מבצע שלבי חקר...',
-  synthesizing:              'מסכם ממצאים...',
-  replanning:                'מתכנן מחדש...',
-  critic_pre_revise:         'מתקן תוכנית...',
-  validator_revise:          'מאמת תוכנית...',
-  critic_post_started:       'בודק תוצאות...',
-  critic_post_replan_capped: 'מסכם למרות תוצאות חלקיות...',
+  planning_started:          'תכנון שלבי חקר...',
+  executing:                 'ביצוע שלבי חקר...',
+  synthesizing:              'סיכום ממצאים...',
+  replanning:                'תכנון מחדש...',
+  critic_pre_revise:         'תיקון התוכנית...',
+  validator_revise:          'אימות התוכנית...',
+  critic_post_started:       'בדיקת תוצאות...',
+  critic_post_replan_capped: 'סיכום למרות תוצאות חלקיות...',
 };
 
 // Categorize a subgraph phase name (e.g. "executor:s2:t1", "synthesizer:expand").
@@ -33,12 +33,12 @@ export function extractTaskLabel(prompt) {
 // Hebrew label for a subgraph phase, used as the card heading.
 export function subgraphPhaseLabel(phase) {
   const labels = {
-    'planner':        'מתכנן שלבי חקר',
-    'planner_replan': 'מתכנן מחדש',
+    'planner':        'תכנון שלבי חקר',
+    'planner_replan': 'תכנון מחדש',
     'critic_pre':     'ביקורת תוכנית',
     'validator':      'אימות תוכנית',
     'critic_post':    'ביקורת תוצאות',
-    'synthesizer':    'מסכם ממצאים',
+    'synthesizer':    'סיכום ממצאים',
   };
   if (phase && phase.startsWith('executor:')) {
     const stepId = phase.split(':')[1] || '';

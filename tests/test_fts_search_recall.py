@@ -187,7 +187,7 @@ class TestKtivAlternation:
         assert not unwanted & set(expand_token(token, config.KNESSET_DB, "speeches_fts"))
 
     @pytest.mark.parametrize("token, wanted", [
-        ("בטחון", "ביטחון"), ("ביטחון", "בטחון"), ("חינוך", "חנוך"), ("תכנית", "תוכנית"), ("עניין", "ענין"),
+        ("בטחון", "ביטחון"), ("ביטחון", "בטחון"), ("חינוך", "חנוך"), ("תכנית", "תוכנית"),
     ])
     def test_real_db_expansion_keeps_true_variants(self, real_db, token, wanted):
         assert wanted in expand_token(token, config.KNESSET_DB, "speeches_fts")

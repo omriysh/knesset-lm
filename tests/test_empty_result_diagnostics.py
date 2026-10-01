@@ -45,7 +45,8 @@ def test_knesset_without_protocols(conn):
 
 def test_date_range_outside_coverage(conn):
     problem = _problems(conn, date_from="2020-01-01", date_to="2020-12-31")["date_out_of_coverage"]
-    assert "2022-11-16" in problem["message"]
+    first_meeting_date = conn.execute("SELECT MIN(date) FROM meetings WHERE knesset_num = 25").fetchone()[0]
+    assert first_meeting_date in problem["message"]
 
 
 def test_date_range_inverted(conn):

@@ -4,7 +4,7 @@
  * (Enter key) = a key of PAGE_ACTIONS, with its argument in data-arg or other data-* attributes.
  * Only the actions listed here can run; sanitized markdown never carries data-* attributes.
  *
- * Non-module script, loaded after browser.js / tabs.js / filters.js (whose functions it calls) and
+ * Non-module script, loaded after url_state.js / browser.js / tabs.js / filters.js (whose functions it calls) and
  * before app.js; app.js and gemini_key.js expose their functions on window.
  */
 const PAGE_ACTIONS = {
@@ -42,6 +42,9 @@ const PAGE_ACTIONS = {
   browserToggleCommGroup:       (el) => browserToggleCommGroup(el.dataset.committee),
   browserSwitchMeeting:         (el) => browserSwitchMeeting(el.dataset.meetingId),
   openProtocolFromCitation:     (el) => openProtocolFromCitationButton(el),
+  browserShareMeeting:          (el) => browserShareMeeting(el),
+  browserShareSpeech:           (el) => browserShareSpeech(el),
+  browserShareQuote:            (el) => browserShareQuote(el),
 };
 
 function runDeclaredAction(event, actionAttribute) {

@@ -43,7 +43,7 @@ def conn(tmp_path, monkeypatch):
     store.replace_meeting_summary(c, "m1", 25, "m1.json", True, ["תקציב החינוך", "מעונות יום"], [
         {"speaker_label": "שמחה רוטמן (הציונות הדתית)", "speaker_name": "שמחה רוטמן", "mk_id": "1",
          "party": "הציונות הדתית", "opinion": "תומך בתקציב", "quote": "אני תומך", "quote_verified": True,
-         "speech_idx": 3, "quote_offset": 10},
+         "speech_idx": 3, "quote_offset": 10, "quote_length": 8},
     ])
     store.replace_meeting_summary(c, "m2", 25, "m2.json", True, ["תקציב הביטחון"], [])
     store.replace_meeting_summary(c, "m3", 25, "m3.json", False, [], [])
@@ -84,7 +84,8 @@ class TestSummaryRows:
     def test_get_opinions_fields(self, conn):
         op = store.get_opinions(conn, "m1")[0]
         assert op["speaker"] == "שמחה רוטמן (הציונות הדתית)" and op["speaker_name"] == "שמחה רוטמן"
-        assert op["speech_idx"] == 3 and op["quote_offset"] == 10 and op["quote_verified"] == 1
+        assert op["speech_idx"] == 3 and op["quote_offset"] == 10 and op["quote_length"] == 8
+        assert op["quote_verified"] == 1
 
 
 class TestCandidateMeetingIds:
@@ -125,7 +126,12 @@ class TestSummaryIo:
 class TestLocateQuote:
     def test_offset_points_at_raw_text(self):
         text = 'ח"כ יעל: הַחוק מסוכן, לדעתי.\nתודה.'
-        offset = locate_quote('"החוק מסוכן, לדעתי"', text)
-        assert text[offset:offset + 5] == "הַחוק"
+        start, length = locate_quote('"החוק מסוכן, לדעתי"', text)
+        assert text[start:start + length] == "הַחוק מסוכן, לדעתי"
+
+    def test_length_covers_raw_text_that_differs_from_the_quote(self):
+        text = "אמרתי:   א  -  ב בדיוק"
+        start, length = locate_quote("א, ב", text)
+        assert text[start:start + length] == "א  -  ב"
         assert locate_quote("לא קיים", text) is None
         assert locate_quote("", text) is None

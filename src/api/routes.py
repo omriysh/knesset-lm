@@ -347,9 +347,10 @@ _PUBLIC_USAGE_NOTES = {
                         "Query: 1-2 Hebrew key words, all must appear; one topic per call. mk_id, party and "
                         "committees accept names, the server resolves them. Protocols cover Knesset "
                         f"{_PROTOCOL_KNESSETS_TEXT} only, meetings from {{meeting_date_from}} to {{meeting_date_to}}. "
-                        "Cite committee, date and meeting_id for every claim; quote `quote` or speech `text`, "
-                        "never an `opinion` paraphrase as a quote."),
-    "get_meeting_attendance": "Cite the meeting_id.",
+                        "Cite committee, date and meeting_id for every claim and link the row's `url` (the source "
+                        "in the protocol reader: the meeting, the speech, or the quote highlighted); quote `quote` "
+                        "or speech `text`, never an `opinion` paraphrase as a quote."),
+    "get_meeting_attendance": "Cite the meeting_id and link the `url`.",
     "query_bills":     f"Pages of {config.API_LIST_PAGE_SIZE}; follow `next` for more. {_EVERY_KNESSET_TEXT}",
     "get_bill":        ("include_text=true returns max_chars characters of the text from offset, with "
                         f"text_chars [start, end, total]; follow `next` for more. {_EVERY_KNESSET_TEXT}"),

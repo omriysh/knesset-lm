@@ -47,7 +47,7 @@ from retrieval import knesset_db_store as store
 from summarization.output_parsing import QuoteLocator
 from summarization.summary_io import load_summary, transcript_path_for_summary
 from utils.knesset_db import get_all_committees, mk_roster_rows
-from utils.meeting import extract_attendance, get_meeting_speakers, load_meeting, parse_full_text_speeches
+from utils.meeting import extract_attendance, format_meeting_chunks, get_meeting_speakers, load_meeting
 from utils.protocol_download import json_files_by_meeting, transcripts_by_meeting
 from utils.tool_helpers.filter_resolution import normalized_name_key
 from utils.tool_helpers.fuzzy_name_index import FuzzyNameIndex
@@ -204,27 +204,19 @@ def build_meetings(conn, knesset_num: int, rebuild: bool) -> int:
 # ── summaries ─────────────────────────────────────────────────────────────────
 
 class _MeetingQuoteIndex:
-    """Per-meeting locators: one for each speech (structured or parsed from full_text)
-    and one for the whole full_text, built once and reused for every opinion."""
+    """One locator per displayed speech (utils.meeting.format_meeting_chunks), built once per meeting."""
 
     def __init__(self, meeting: dict) -> None:
-        self.structured = "speeches" in meeting
-        if self.structured:
-            speeches = meeting["speeches"]
-            self.full = None
-        else:
-            full_text = meeting.get("full_text") or ""
-            speeches = parse_full_text_speeches(full_text) or []
-            self.full = QuoteLocator(full_text)
-        self.speeches = [QuoteLocator(s.get("text_he") or "") for s in speeches]
+        self.speeches = [(int(chunk["chunk_id"]), QuoteLocator(chunk["text"]))
+                         for chunk in format_meeting_chunks(meeting)]
 
-    def locate(self, quote: str) -> tuple[int | None, int | None]:
-        """(speech_idx, quote_offset) per the knesset_db_store docstring; (None, None) when not found."""
-        speech_idx = next((i for i, loc in enumerate(self.speeches) if loc.find(quote) is not None), None)
-        if self.structured:
-            return (speech_idx, self.speeches[speech_idx].find(quote)) if speech_idx is not None else (None, None)
-        offset = self.full.find(quote)
-        return (speech_idx, offset) if offset is not None else (None, None)
+    def locate(self, quote: str) -> tuple[int | None, int | None, int | None]:
+        """(speech_idx, quote_offset, quote_length) per the knesset_db_store docstring; Nones when not found."""
+        for speech_idx, locator in self.speeches:
+            span = locator.find(quote)
+            if span is not None:
+                return speech_idx, span[0], span[1]
+        return None, None, None
 
 
 def build_summaries(conn, knesset_num: int, rebuild: bool) -> int:
@@ -274,14 +266,14 @@ def build_summaries(conn, knesset_num: int, rebuild: bool) -> int:
             hit = label_cache[label]
             row = {"speaker_label": label, "opinion": o["opinion"], "quote": o["quote"],
                    "quote_verified": o["quote_verified"], "mk_id": None, "party": None,
-                   "speaker_name": label, "speech_idx": None, "quote_offset": None}
+                   "speaker_name": label, "speech_idx": None, "quote_offset": None, "quote_length": None}
             if hit:
                 n_resolved += 1
                 row.update(mk_id=hit["mk_id"], speaker_name=hit["mk_name"], party=party_map.get(hit["mk_id"]) or None)
             else:
                 unresolved[label] = unresolved.get(label, 0) + 1
             if o["quote_verified"] and quote_index is not None:
-                row["speech_idx"], row["quote_offset"] = quote_index.locate(o["quote"])
+                row["speech_idx"], row["quote_offset"], row["quote_length"] = quote_index.locate(o["quote"])
                 n_located += row["quote_offset"] is not None
             opinions.append(row)
             n_opinions += 1
@@ -333,18 +325,11 @@ def build_speeches(conn, knesset_num: int, rebuild: bool) -> int:
         except Exception as exc:
             print(f"  [speeches] skip {json_path.name}: {exc}")
             continue
-        if "speeches" in meeting:
-            speeches = meeting["speeches"]
-        else:
-            full = (meeting.get("full_text") or "").strip()
-            speeches = parse_full_text_speeches(full) or ([{"speaker": "", "text_he": full}] if full else [])
-        for idx, speech in enumerate(speeches):
-            text = (speech.get("text_he") or "").strip()
-            if len(text) < config.MIN_SPEECH_CHARS:
+        for chunk in format_meeting_chunks(meeting):
+            if len(chunk["text"]) < config.MIN_SPEECH_CHARS:
                 continue
-            speaker = (speech.get("speaker") or "").strip()
-            batch.append({"meeting_id": meeting_id, "knesset_num": knesset_num, "idx": idx,
-                          "speaker": speaker, "mk_id": _mk_id(speaker), "text": text})
+            batch.append({"meeting_id": meeting_id, "knesset_num": knesset_num, "idx": int(chunk["chunk_id"]),
+                          "speaker": chunk["speaker"], "mk_id": _mk_id(chunk["speaker"]), "text": chunk["text"]})
         if len(batch) >= 20_000:
             total += store.insert_speeches(conn, batch)
             batch = []

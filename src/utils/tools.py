@@ -72,6 +72,7 @@ from utils.tool_helpers.filter_resolution import (
     resolve_party,
 )
 from utils.tool_helpers.char_paging import char_budget_page
+from utils.source_links import protocol_row_url, protocol_url
 from utils.tool_helpers.fuzzy_name_index import FuzzyNameIndex
 from utils.tool_helpers.name_search import name_search
 
@@ -353,9 +354,10 @@ def handle_query_protocols(args: dict) -> ToolEnvelope:
             if page_chars:
                 ranked_rows = store.iter_protocol_rows(conn, scope, knesset_num, **row_filters, offset=offset)
                 try:
-                    results[scope], more_rows_follow = char_budget_page(ranked_rows, page_chars)
+                    page_rows, more_rows_follow = char_budget_page(ranked_rows, page_chars)
                 finally:
                     ranked_rows.close()
+                results[scope] = [_public_protocol_row(scope, row) for row in page_rows]
                 if more_rows_follow:
                     next_offsets[scope] = offset + len(results[scope])
             else:
@@ -383,6 +385,16 @@ def handle_query_protocols(args: dict) -> ToolEnvelope:
         metadata=metadata,
         provenance=provenance,
     )
+
+
+_PUBLIC_ROW_HIDDEN_FIELDS = ("quote_offset", "quote_length")
+
+
+def _public_protocol_row(scope: str, row: dict) -> dict:
+    """The row with a link to its source in the reading tab instead of the raw quote location."""
+    public_row = {key: value for key, value in row.items() if key not in _PUBLIC_ROW_HIDDEN_FIELDS}
+    public_row["url"] = protocol_row_url(scope, row)
+    return public_row
 
 
 @dataclass
@@ -511,6 +523,7 @@ def handle_get_meeting_attendance(args: dict) -> ToolEnvelope:
         "meeting_id": meeting_id,
         "committee":  meeting.get("committee"),
         "date":       meeting.get("date"),
+        "url":        protocol_url(meeting_id),
         "attendance": attendance,
     }
     return ToolEnvelope(

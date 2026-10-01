@@ -23,7 +23,7 @@ DB_ROUTE_PREFIXES = ("/v1/protocols", "/v1/meetings/", "/api/browse/search")
 DB_ROUTE_PATHS = ("/v1/meta", "/api/health")
 AGENT_ROUTE_PATTERN = re.compile(r"^/api/research/(start|[^/]+/(respond|workspace/ask))$")
 STREAM_REPLAY_PATTERN = re.compile(r"^/api/research/[^/]+/stream$")
-UNLIMITED_PATHS = ("/", "/favicon.ico", "/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json",
+UNLIMITED_PATHS = ("/", config.RESEARCH_PAGE_PATH, config.PROTOCOLS_PAGE_PATH, "/favicon.ico", "/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json",
                    "/llms.txt", "/llms-full.txt", "/agent-instructions")
 UNLIMITED_PREFIXES = ("/static/", "/docs-assets/")
 

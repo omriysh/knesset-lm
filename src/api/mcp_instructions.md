@@ -11,7 +11,7 @@ Rules:
 - Search with Hebrew key words, 1-2 per call. All words must appear (AND), so use one topic per call and separate calls for synonyms.
 - Read `hint` (the next step), `diagnostics` (why a filter matched nothing) and `next` (the exact arguments for the next page) in every response.
 - query_protocols pages are about {protocols_page_chars} characters of whole rows per scope, and `offset` counts rows: follow `next` for more. Texts are never cut or split; a long speech comes whole.
-- Answer only from returned data. Cite committee, date and meeting_id (plus speech_idx for a quote). Quote `quote` or speech `text` verbatim; an `opinion` is a summary, never a quote.
+- Answer only from returned data. Cite committee, date and meeting_id, and link each claim to its row's `url`: it opens the protocol at the speech, with an opinion's quote highlighted. Quote `quote` or speech `text` verbatim; an `opinion` is a summary, never a quote.
 
 Recipes:
 - MK X on topic Y: find_mk(query="X"), then query_protocols(query="Y", mk_id="<mk_id>", search_in=["opinions"])

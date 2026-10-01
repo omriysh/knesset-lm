@@ -171,7 +171,7 @@ function replaySubgraph(data, replay) {
     });
   } else if (kind === 'hook' && name === 'synthesizer_completed' && replay.subgraphContainer) {
     addCompletedStageCard(replay.subgraphContainer, {
-      label: 'מסכם ממצאים', stage: 'research',
+      label: 'סיכום ממצאים', stage: 'research',
       content: '', thinking: '', tools: [], tool_results: [], prompt: {},
     });
   } else if (kind === 'done' && replay.subgraphContainer) {

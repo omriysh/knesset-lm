@@ -5,7 +5,8 @@
  */
 
 /* ── Tab switching ───────────────────────────────────────────────── */
-function switchTab(name) {
+/* writeUrl: false when the URL already names this tab (opening a link, back/forward) */
+function switchTab(name, { writeUrl = true, push = true } = {}) {
   // Hide all panels
   document.querySelectorAll('.app-tab-panel').forEach(p => {
     p.classList.add('hidden');
@@ -33,8 +34,62 @@ function switchTab(name) {
   const mobBtn = document.getElementById(`mob-tab-${name}`);
   if (mobBtn) mobBtn.classList.add('active');
 
+  setActiveTab(name, { writeUrl, push });
   if (name === 'research' && typeof window.promptGeminiKeyIfMissing === 'function') window.promptGeminiKeyIfMissing();
 }
+
+/* ── URL routing: /research, /protocols?… (url_state.js); back/forward re-applies the URL ── */
+function applyUrlRoute() {
+  if (location.pathname === RESEARCH_PATH) { switchTab('research', { writeUrl: false }); return; }
+  if (location.pathname !== PROTOCOLS_PATH) {
+    setActiveTab(document.getElementById('tab-research')?.classList.contains('hidden') ? 'reading' : 'research',
+                 { writeUrl: false });
+    return;
+  }
+  switchTab('reading', { writeUrl: false });
+  const target = readProtocolUrl();
+  setProtocolUrlState(target);
+  const input = document.getElementById('reading-search-input');
+  if (input) input.value = target.query;
+  rfSetFilters(target.filters);
+  if (!target.meeting) return;
+  const focus = { speech: target.speech, offset: target.offset, length: target.length };
+  if (browserShowsMeeting(target.meeting)) browserFocusSpeech(target.speech, focus);
+  else if (browserListsMeeting(target.meeting)) browserSwitchMeeting(target.meeting, { focus, pushUrl: false });
+  else _openMeetingFromUrl(target, focus);
+}
+
+async function _openMeetingFromUrl(target, focus) {
+  _setBrowseLoading(true);
+  try {
+    const data = await _browseSearch({ query: '', filters: { ...emptyProtocolFilters(), meeting_ids: [target.meeting] } });
+    const area = document.getElementById('reading-browser-area');
+    area.innerHTML = '';
+    if (!data.meetings || !data.meetings.length) {
+      _showBrowsePlaceholder('הישיבה לא נמצאה', 'ייתכן שהקישור שגוי או שהישיבה אינה זמינה.', 'link_off');
+      return;
+    }
+    const label = target.query || 'ישיבה מקישור';
+    openProtocolBrowser(data.session_id, target.meeting, data.meetings, {
+      originalQuestion: label,
+      container:        area,
+      standalone:       true,
+      postCompletion:   true,
+      searchRequest:    hasProtocolSearch(target) ? { query: target.query, filters: target.filters } : null,
+      focus,
+      pushUrl:          false,
+    });
+    _collapseRfb(label);
+  } catch (err) {
+    console.error('[tabs] opening the linked meeting failed:', err);
+    _showBrowseError('שגיאה בפתיחת הקישור: ' + err.message);
+  } finally {
+    _setBrowseLoading(false);
+  }
+}
+
+window.addEventListener('popstate', applyUrlRoute);
+document.addEventListener('DOMContentLoaded', applyUrlRoute);
 
 /* ── Browse search (keyword; empty = newest meetings) ────────────── */
 async function browseSearch() {
@@ -43,8 +98,9 @@ async function browseSearch() {
   if (!input || !btn) return;
 
   const query   = input.value.trim();
-  const filters = typeof rfGetFilters === 'function' ? rfGetFilters() : {};
+  const filters = rfGetFilters();
   const searchRequest = { query, filters };
+  updateProtocolUrl({ query, filters, meeting: null }, { push: true });
 
   _setBrowseLoading(true);
   try {
@@ -63,7 +119,7 @@ async function browseSearch() {
     if (!data.meetings || !data.meetings.length) {
       _showBrowsePlaceholder(
         'לא נמצאו ישיבות',
-        'נסה מילות מפתח אחרות או שינוי הסינון.',
+        'אפשר לנסות מילות מפתח אחרות או לשנות את הסינון.',
         'search_off',
       );
       return;
@@ -82,6 +138,7 @@ async function browseSearch() {
         standalone:       true,
         postCompletion:   true,
         searchRequest,
+        pushUrl:          false,
       }
     );
 
@@ -118,7 +175,7 @@ function _setBrowseLoading(on) {
   if (btn) {
     btn.disabled = on;
     const label = btn.querySelector('span:not(.material-symbols-outlined)');
-    if (label) label.textContent = on ? 'מחפש…' : 'חפש';
+    if (label) label.textContent = on ? 'בחיפוש…' : 'חיפוש';
   }
   if (!area) return;
   const existing = document.getElementById('browse-loading-overlay');
@@ -128,7 +185,7 @@ function _setBrowseLoading(on) {
     overlay.className = 'browse-loading-overlay';
     overlay.innerHTML = `
       <div class="browse-spinner"></div>
-      <div class="browse-loading-text">מחפש פרוטוקולים…</div>`;
+      <div class="browse-loading-text">חיפוש פרוטוקולים…</div>`;
     area.appendChild(overlay);
   } else if (!on && existing) {
     existing.remove();

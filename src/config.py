@@ -254,6 +254,11 @@ AGENT_MAX_OFFSET              = 100_000
 AGENT_FIND_MAX_TOP_K          = 20
 AGENT_LIST_MAX_TOP_K          = 100      # bills / votes; the OData service caps $top at 100
 
+# Web page paths and the links the API/MCP rows carry to them (utils/source_links.py)
+PUBLIC_SITE_URL               = "https://meorav.com"
+RESEARCH_PAGE_PATH            = "/research"
+PROTOCOLS_PAGE_PATH           = "/protocols"
+
 # MCP endpoint (src/api/mcp_server.py): POST /mcp on both servers, and the whole of MCP_SUBDOMAIN_HOSTS
 MCP_ENABLED                   = True
 MCP_PATH                      = "/mcp"

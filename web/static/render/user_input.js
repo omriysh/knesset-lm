@@ -41,7 +41,7 @@ export function renderUserInputPanel(data) {
 }
 
 function renderOptionSelect(data, outputVar) {
-  const prompt  = data.prompt_he || data.prompt || 'בחר אפשרות:';
+  const prompt  = data.prompt_he || data.prompt || 'בחירת אפשרות:';
   const options = data.options || [];
   const multi   = data.multi_select || false;
 
@@ -117,7 +117,7 @@ function renderTextInput(data, outputVar) {
   const textarea = document.createElement('textarea');
   textarea.className = 'text-input-field';
   textarea.rows = 3;
-  textarea.placeholder = 'הקלד כאן...';
+  textarea.placeholder = 'הקלדה כאן...';
   card.appendChild(textarea);
 
   const errHint = document.createElement('span');
@@ -126,7 +126,7 @@ function renderTextInput(data, outputVar) {
 
   const submitEl = document.createElement('button');
   submitEl.className = 'text-input-submit';
-  submitEl.textContent = 'שלח';
+  submitEl.textContent = 'שליחה';
   submitEl.addEventListener('click', () => {
     const val = textarea.value.trim();
     if (!val) return;

@@ -24,7 +24,6 @@ pytestmark = pytest.mark.skipif(not store.exists(), reason="Data/knesset.db not 
 
 SHAS = 'התאחדות הספרדים שומרי תורה תנועתו של מרן הרב עובדיה יוסף זצ"ל'
 SCIENCE_COMMITTEE_SINGLE_SPACE = "ועדת המדע והטכנולוגיה"
-SCIENCE_COMMITTEE_DOUBLE_SPACE = "ועדת  המדע  והטכנולוגיה"
 SCIENCE_COMMITTEE_ID = "4195"
 YAIR_LAPID_MK_ID = "878"
 CONFIDENT_SCORE = 0.75
@@ -246,37 +245,40 @@ def test_query_protocols_unknown_party_returns_nothing_without_suggestions():
 
 # ── committee filter ─────────────────────────────────────────────────────────
 
-def test_committee_single_space_name_reaches_double_space_meetings(conn):
+def test_committee_names_are_stored_whitespace_normalized(conn):
+    """Was: 'ועדת  המדע  והטכנולוגיה' (double spaces) kept 38 meetings apart from the single-spaced name."""
+    assert conn.execute("SELECT COUNT(*) FROM meetings WHERE committee LIKE '%  %' OR committee <> TRIM(committee)"
+                        ).fetchone()[0] == 0
     vocabulary = filter_resolution.filter_vocabulary(conn, 25)
     resolution = filter_resolution.resolve_committee(SCIENCE_COMMITTEE_SINGLE_SPACE, vocabulary)
-    assert SCIENCE_COMMITTEE_DOUBLE_SPACE in resolution.db_names
-    assert sum(vocabulary.committee_meeting_counts.get(n, 0) for n in resolution.db_names) == 77 + 38
+    assert resolution.db_names == [SCIENCE_COMMITTEE_SINGLE_SPACE]
+    assert vocabulary.committee_meeting_counts[SCIENCE_COMMITTEE_SINGLE_SPACE] >= 77 + 38
 
 
 def test_query_protocols_committee_filter_returns_all_science_meetings(conn):
-    double_space_meetings = {r[0] for r in conn.execute(
+    science_meetings = {r[0] for r in conn.execute(
         "SELECT meeting_id FROM meetings WHERE committee = ? AND is_protocol != 0",
-        (SCIENCE_COMMITTEE_DOUBLE_SPACE,))}
-    assert len(double_space_meetings) >= 70
+        (SCIENCE_COMMITTEE_SINGLE_SPACE,))}
+    assert len(science_meetings) >= 70 + 38
     listed_meetings: set[str] = set()
     offset = 0
     while True:
         page = _rows(tools.handle_query_protocols({
             "committees": [SCIENCE_COMMITTEE_SINGLE_SPACE], "search_in": ["topics"],
-            "meeting_ids": sorted(double_space_meetings), "top_k": config.QUERY_PROTOCOLS_MAX_TOP_K,
+            "meeting_ids": sorted(science_meetings), "top_k": config.QUERY_PROTOCOLS_MAX_TOP_K,
             "offset": offset}))["topics"]
         if not page:
             break
         listed_meetings |= {r["meeting_id"] for r in page}
         offset += len(page)
-    assert listed_meetings == double_space_meetings
+    assert listed_meetings == science_meetings
 
 
 def test_query_protocols_accepts_committee_id():
     envelope = tools.handle_query_protocols({"committees": [SCIENCE_COMMITTEE_ID], "search_in": ["topics"],
                                              "top_k": 50})
     committees_seen = {r["committee"] for r in _rows(envelope)["topics"]}
-    assert committees_seen and committees_seen <= {SCIENCE_COMMITTEE_SINGLE_SPACE, SCIENCE_COMMITTEE_DOUBLE_SPACE}
+    assert committees_seen and committees_seen == {SCIENCE_COMMITTEE_SINGLE_SPACE}
 
 
 def test_committee_with_trailing_space_and_long_committee_name_are_reachable(conn):

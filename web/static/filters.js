@@ -72,7 +72,7 @@ async function _rfLoadMeta() {
 
 function _rfSetListLoading(listId) {
   const el = document.getElementById(listId);
-  if (el) el.innerHTML = '<div class="rfb-list-status">טוען…</div>';
+  if (el) el.innerHTML = '<div class="rfb-list-status">בטעינה…</div>';
 }
 
 function _rfSetListError(listId) {
@@ -304,7 +304,7 @@ function _rfRenderChips() {
 
   if (has) {
     row.innerHTML = chips.map(c =>
-      `<span class="rfb-chip">${_rfEsc(c.label)}<button class="rfb-chip-remove" data-type="${_rfEsc(c.type)}" data-value="${_rfEsc(c.value)}" data-click="rfRemoveFilter" title="הסר"><span class="material-symbols-outlined" style="font-size:13px">close</span></button></span>`
+      `<span class="rfb-chip">${_rfEsc(c.label)}<button class="rfb-chip-remove" data-type="${_rfEsc(c.type)}" data-value="${_rfEsc(c.value)}" data-click="rfRemoveFilter" title="הסרה"><span class="material-symbols-outlined" style="font-size:13px">close</span></button></span>`
     ).join('');
   }
 }
@@ -313,6 +313,28 @@ function _fmtDate(iso) {
   if (!iso) return '';
   const [y, m, d] = iso.split('-');
   return `${d}.${m}.${y}`;
+}
+
+/* ── Set the whole filter state (a shared link) ─────────────────── */
+function rfSetFilters(filters) {
+  _rfState.committees = new Set(filters.committees || []);
+  _rfState.mks        = new Set(filters.mks || []);
+  _rfState.parties    = new Set(filters.parties || []);
+  _rfState.guest      = filters.guest || '';
+  _rfState.dateFrom   = filters.date_from || '';
+  _rfState.dateTo     = filters.date_to || '';
+
+  _rfRenderList('rf-committee-list', _RF_COMMITTEES, 'committee');
+  _rfRenderList('rf-mk-list',        _RF_MKS,        'mk');
+  _rfRenderList('rf-party-list',     _RF_PARTIES,    'party');
+  const inputValues = { 'rf-guest-input': _rfState.guest, 'rf-date-from': _rfState.dateFrom, 'rf-date-to': _rfState.dateTo };
+  for (const [id, value] of Object.entries(inputValues)) {
+    const el = document.getElementById(id); if (el) el.value = value;
+  }
+  _rfBadge('committee', _rfState.committees.size);
+  _rfBadge('participants', _rfParticipantCount());
+  _rfBadge('date', (_rfState.dateFrom || _rfState.dateTo) ? 1 : 0);
+  _rfRenderChips();
 }
 
 /* ── Return current filter state for search API ─────────────────── */

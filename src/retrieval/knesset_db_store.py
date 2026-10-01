@@ -10,11 +10,10 @@ Built by scripts/build_knesset_db.py. Read by utils/tools.py, web/app.py and
 utils/meeting.py. One connection per query call; nothing is cached across
 requests.
 
-Quote location in opinions: speech_idx indexes the speech list the viewer
-shows (meeting["speeches"] for structured files, parse_full_text_speeches()
-for full_text files); quote_offset is a raw character offset inside
-speeches[speech_idx].text_he for structured files and inside full_text for
-full_text files. Both are NULL when the quote was not verified.
+Quote location in opinions: speech_idx indexes utils.meeting.meeting_display_speeches(),
+the speech list the viewer shows and the speeches table stores; quote_offset and
+quote_length are the character range of the quote inside that speech's text. All
+three are NULL when the quote was not located.
 """
 
 from __future__ import annotations
@@ -99,6 +98,7 @@ CREATE TABLE IF NOT EXISTS opinions (
     quote_verified INTEGER NOT NULL,
     speech_idx     INTEGER,
     quote_offset   INTEGER,
+    quote_length   INTEGER,
     UNIQUE (meeting_id, idx)
 );
 CREATE INDEX IF NOT EXISTS idx_opinions_meeting ON opinions(meeting_id);
@@ -172,6 +172,7 @@ def connect(path: Path | None = None, *, interrupt_after_seconds: float | None =
     conn.row_factory = sqlite3.Row
     try:
         conn.executescript(_SCHEMA)
+        _add_missing_columns(conn)
     except sqlite3.Error:
         conn.close()
         raise
@@ -179,6 +180,19 @@ def connect(path: Path | None = None, *, interrupt_after_seconds: float | None =
         conn.interrupt_deadline = time.monotonic() + interrupt_after_seconds
         conn.set_progress_handler(lambda: deadline_passed(conn), _PROGRESS_HANDLER_OPCODES)
     return conn
+
+
+_COLUMNS_ADDED_AFTER_TABLE_CREATION = {"opinions": {"quote_length": "INTEGER"}}
+
+
+def _add_missing_columns(conn: sqlite3.Connection) -> None:
+    """CREATE TABLE IF NOT EXISTS leaves tables of an older db as they were; add the newer columns."""
+    for table, columns in _COLUMNS_ADDED_AFTER_TABLE_CREATION.items():
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for column, column_type in columns.items():
+            if column not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
+                conn.commit()
 
 
 LIKE_ESCAPE_CHAR = "!"
@@ -261,10 +275,10 @@ def replace_meeting_summary(conn, meeting_id: str, knesset_num: int, summary_pat
         [(meeting_id, knesset_num, i, t) for i, t in enumerate(topics)])
     conn.executemany(
         "INSERT INTO opinions(meeting_id, knesset_num, idx, speaker_label, speaker_name, mk_id, party, "
-        "opinion, quote, quote_verified, speech_idx, quote_offset) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        "opinion, quote, quote_verified, speech_idx, quote_offset, quote_length) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         [(meeting_id, knesset_num, i, o["speaker_label"], o["speaker_name"], o.get("mk_id"), o.get("party"),
           o["opinion"], o.get("quote") or "", int(bool(o.get("quote_verified"))),
-          o.get("speech_idx"), o.get("quote_offset"))
+          o.get("speech_idx"), o.get("quote_offset"), o.get("quote_length"))
          for i, o in enumerate(opinions)])
     conn.execute("UPDATE meetings SET summary_path = ?, is_protocol = ? WHERE meeting_id = ?",
                  (summary_path, int(is_protocol), meeting_id))
@@ -324,7 +338,7 @@ def get_topics(conn, meeting_id: str) -> list[dict]:
 def get_opinions(conn, meeting_id: str) -> list[dict]:
     return [dict(r) for r in conn.execute(
         "SELECT idx, speaker_label AS speaker, speaker_name, mk_id, party, opinion, quote, quote_verified, "
-        "speech_idx, quote_offset FROM opinions WHERE meeting_id = ? ORDER BY idx", (str(meeting_id),))]
+        "speech_idx, quote_offset, quote_length FROM opinions WHERE meeting_id = ? ORDER BY idx", (str(meeting_id),))]
 
 
 def get_attendance(conn, meeting_id: str) -> list[dict]:
@@ -346,7 +360,7 @@ PROTOCOL_SCOPES = ("topics", "opinions", "speeches")
 _SCOPE_COLUMNS = {
     "topics":   "x.idx, x.text AS topic",
     "opinions": ("x.idx, x.speaker_label AS speaker, x.speaker_name, x.mk_id, x.party, x.opinion, x.quote, "
-                 "x.speech_idx, x.quote_offset"),
+                 "x.speech_idx, x.quote_offset, x.quote_length"),
     "speeches": "x.idx AS speech_idx, x.speaker, x.mk_id, x.text",
 }
 

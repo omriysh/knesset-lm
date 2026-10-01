@@ -339,6 +339,7 @@ def _summary_sections(data: dict) -> list[dict]:
                 "quote_verified": bool(o.get("quote_verified")),
                 "speech_idx":     o.get("speech_idx"),
                 "quote_offset":   o.get("quote_offset"),
+                "quote_length":   o.get("quote_length"),
                 "mk_id":          o.get("mk_id"),
             })
     return [
@@ -586,7 +587,10 @@ class ResearchRespondRequest(BaseModel):
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+@app.get(config.RESEARCH_PAGE_PATH, response_class=HTMLResponse, include_in_schema=False)
+@app.get(config.PROTOCOLS_PAGE_PATH, response_class=HTMLResponse, include_in_schema=False)
 async def index(request: Request):
+    """One page for every tab; the path (and the reading tab's query parameters) pick the starting view."""
     return templates.TemplateResponse(request, "index.html")
 
 
@@ -1071,6 +1075,7 @@ class BrowseFilterRequest(BaseModel):
     guest:      str | None = None
     date_from:  str | None = None
     date_to:    str | None = None
+    meeting_ids: list[str] = []
 
 
 class BrowseSearchRequest(BaseModel):
@@ -1099,6 +1104,8 @@ def _validated_browse_filters(filters: BrowseFilterRequest | None) -> BrowseFilt
         guest=valid.name_filter(filters.guest, "guest"),
         date_from=valid.iso_date(filters.date_from, "date_from"),
         date_to=valid.iso_date(filters.date_to, "date_to"),
+        meeting_ids=[valid.meeting_id(m, "meeting_ids") for m in valid.list_param(filters.meeting_ids, "meeting_ids")
+                     if m],
     )
 
 
@@ -1221,6 +1228,9 @@ def _browse_search_meetings(query: str, sort: str, filters: BrowseFilterRequest,
             date_from=filters.date_from or None, date_to=filters.date_to or None,
             mk_ids=mk_ids or None, parties=list(filters.parties) or None, guest_name=guest_name,
         )
+        if filters.meeting_ids:
+            candidate_meeting_ids = [m for m in filters.meeting_ids
+                                     if candidate_meeting_ids is None or m in set(candidate_meeting_ids)]
         if not query:
             rows = store.recent_meetings(conn, knesset_num, limit=top_k,
                                          candidate_meeting_ids=candidate_meeting_ids)

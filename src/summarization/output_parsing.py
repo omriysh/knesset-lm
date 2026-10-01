@@ -120,16 +120,20 @@ class QuoteLocator:
     def __init__(self, text: str) -> None:
         self._haystack, self._positions = _normalize_with_map(text)
 
-    def find(self, quote: str) -> int | None:
-        """Raw character offset of the quote's first occurrence, or None."""
+    def find(self, quote: str) -> tuple[int, int] | None:
+        """(start, length) of the quote's first occurrence in the raw text, or None. The length is of the
+        matched raw text, which can differ from len(quote) by niqqud, punctuation and whitespace."""
         needle = normalize_for_match(quote)
         if not needle:
             return None
         pos = self._haystack.find(needle)
-        return self._positions[pos] if pos >= 0 else None
+        if pos < 0:
+            return None
+        start = self._positions[pos]
+        return start, self._positions[pos + len(needle) - 1] + 1 - start
 
 
-def locate_quote(quote: str, text: str) -> int | None:
+def locate_quote(quote: str, text: str) -> tuple[int, int] | None:
     return QuoteLocator(text).find(quote)
 
 

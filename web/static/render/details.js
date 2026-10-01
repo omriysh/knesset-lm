@@ -55,7 +55,7 @@ export function renderToolResultHtml(tr) {
       `<summary class="sub-summary"><span class="tool-summary-label">${esc(name)}</span>${timeStr}</summary>` +
       `<div class="sub-details-body">` +
       argsHtml +
-      `<div class="tool-result-slot"><div class="tool-result-placeholder">▼ לחץ להצגת תוצאה</div></div>` +
+      `<div class="tool-result-slot"><div class="tool-result-placeholder">▼ להצגת התוצאה</div></div>` +
       `</div></details>`
     );
   }

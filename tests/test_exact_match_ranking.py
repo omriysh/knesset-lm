@@ -57,9 +57,12 @@ def test_bm25_orders_rows_within_each_tier(real_db, real_conn):
         assert scores == sorted(scores)
 
 
-def test_agent_rows_rank_the_typed_word_first(real_db):
-    rows = handler_payload(tools.handle_query_protocols, {"query": TYPED_WORD, "search_in": ["speeches"],
-                                                          "top_k": 200, "offset": 800})["speeches"]
+def test_agent_rows_rank_the_typed_word_first(real_db, real_conn):
+    ranked = store.iter_protocol_rows(real_conn, "speeches", 25, match=tools._fts_match(TYPED_WORD, "speeches_fts"),
+                                      exact_match=tools._fts_exact_match(TYPED_WORD))
+    typed_word_rows = sum(TYPED_WORD in row_tokens("speeches", row) for row in ranked)
+    rows = handler_payload(tools.handle_query_protocols, {"query": TYPED_WORD, "search_in": ["speeches"], "top_k": 200,
+                                                          "offset": max(0, typed_word_rows - 100)})["speeches"]
     assert_typed_word_rows_first("speeches", rows)
 
 

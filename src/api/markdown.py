@@ -10,14 +10,15 @@ def _row_text(row: dict, field_name: str) -> str:
 def _protocol_row(scope: str, row: dict) -> str:
     where = f"[{row.get('meeting_id')}" + (f" #{row['speech_idx']}" if row.get("speech_idx") is not None else "") + "]"
     header = f"{where} {row.get('committee') or ''} · {row.get('date') or ''}"
+    link = f" ([source]({row['url']}))" if row.get("url") else ""
     if scope == "topics":
-        return f"- {header} — {_row_text(row, 'topic')}"
+        return f"- {header} — {_row_text(row, 'topic')}{link}"
     if scope == "opinions":
         speaker = row.get("speaker_name") or row.get("speaker") or ""
         party = f" ({row['party']})" if row.get("party") else ""
         quote = f" „{_row_text(row, 'quote')}”" if row.get("quote") else ""
-        return f"- {header} — {speaker}{party}: {_row_text(row, 'opinion')}{quote}"
-    return f"- {header} — {row.get('speaker', '')}: {_row_text(row, 'text')}"
+        return f"- {header} — {speaker}{party}: {_row_text(row, 'opinion')}{quote}{link}"
+    return f"- {header} — {row.get('speaker', '')}: {_row_text(row, 'text')}{link}"
 
 
 def _next_page_line(next_page: dict) -> str:
