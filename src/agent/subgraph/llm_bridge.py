@@ -234,6 +234,7 @@ class LLMBridge:
             kwargs["max_tokens"] = max_tokens
 
         text_parts: list[str] = []
+        finish_reason = ""
         try:
             for ev in backend.stream(**kwargs):
                 if isinstance(ev, ThinkingEvent):
@@ -244,6 +245,7 @@ class LLMBridge:
                     yield SubgraphEvent(kind="llm_token", name=phase_name,
                                         payload={"text": ev.text})
                 elif isinstance(ev, DoneEvent):
+                    finish_reason = ev.finish_reason
                     break
         except Exception as exc:
             elapsed = int((time.monotonic() - t0) * 1000)
@@ -259,7 +261,7 @@ class LLMBridge:
         yield SubgraphEvent(
             kind="llm_done",
             name=phase_name,
-            payload={"content": content, "elapsed_ms": elapsed},
+            payload={"content": content, "elapsed_ms": elapsed, "finish_reason": finish_reason},
         )
 
     def drain_events(self) -> list[SubgraphEvent]:

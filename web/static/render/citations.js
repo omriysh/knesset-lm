@@ -183,14 +183,23 @@ function citationSnippet(quoteRaw, uiMeta) {
 }
 
 function showCitationPopup(supEl, quoteRaw, uiMeta) {
-  const popup = getEvPopup();
   const { contentHtml, metaNote, anchor } = citationSnippet(quoteRaw, uiMeta);
   const noteHtml = metaNote ? `<div class="ev-citation-popup-source">${esc(metaNote)}</div>` : '';
   const linkHtml = openProtocolLinkHtml(_citeSid, anchor);
   const footerHtml = (noteHtml || linkHtml)
     ? `<div class="ev-citation-popup-footer">${noteHtml}${linkHtml}</div>`
     : '';
-  popup.innerHTML = contentHtml + footerHtml;
+  showPopupAt(supEl, contentHtml + footerHtml);
+}
+
+const MISSING_CITATION_HTML =
+  '<div class="ev-citation-empty">המקור של הפניה זו לא זמין</div>' +
+  '<div class="ev-citation-quote">הקישור בין ההפניות בתשובה למקורות אבד (תשובת המודל נקטעה או לא פוענחה). ' +
+  'המקורות שעליהם התשובה מבוססת מופיעים ברשימת המקורות שמתחת לתשובה.</div>';
+
+function showPopupAt(supEl, html) {
+  const popup = getEvPopup();
+  popup.innerHTML = html;
 
   popup.hidden = false;
   const sr = supEl.getBoundingClientRect();
@@ -206,6 +215,14 @@ function showCitationPopup(supEl, quoteRaw, uiMeta) {
   popup.style.left = left + 'px';
   popup.style.top  = top + 'px';
   popup.style.setProperty('--tail-left', tailLeft + 'px');
+}
+
+/** A [n] the answer cites without a matching citation (e.g. the synthesizer's citations were lost). */
+function missingCitationSup() {
+  const sup = document.createElement('sup');
+  sup.className = 'ev-cite ev-cite-missing';
+  sup.textContent = '[?]';
+  return sup;
 }
 
 function citationSup(evId, displayN) {
@@ -274,7 +291,7 @@ export function applyEvidenceCitations(bodyEl, footnotes, citations, sid) {
     replaceTextMarkers(bodyEl, /\[(\d+)\]/g, (match) => {
       const n   = parseInt(match[1], 10);
       const cit = citMap[n];
-      if (!cit) return null;
+      if (!cit) return missingCitationSup();
       const quoteStr = (typeof cit.quote === 'object' && cit.quote !== null)
         ? JSON.stringify(cit.quote)
         : (cit.quote || '');
@@ -284,8 +301,9 @@ export function applyEvidenceCitations(bodyEl, footnotes, citations, sid) {
       return sup;
     });
   } else {
-    // Fallback: old [ev_xxx] format
-    replaceTextMarkers(bodyEl, /\[ev_([0-9a-f]+)\]/g, (match) => {
+    // Old [ev_xxx] format; a numbered [n] with no citations list behind it is a lost citation
+    replaceTextMarkers(bodyEl, /\[(?:ev_([0-9a-f]+)|\d+)\]/g, (match) => {
+      if (!match[1]) return missingCitationSup();
       const evId = 'ev_' + match[1];
       const n = evIdToIdx[evId];
       return n ? citationSup(evId, n) : null;
@@ -295,6 +313,10 @@ export function applyEvidenceCitations(bodyEl, footnotes, citations, sid) {
   bodyEl.querySelectorAll('sup.ev-cite').forEach(sup => {
     sup.addEventListener('click', e => {
       e.stopPropagation();
+      if (sup.classList.contains('ev-cite-missing')) {
+        showPopupAt(sup, MISSING_CITATION_HTML);
+        return;
+      }
       const quoteRaw = sup.dataset.quote || '';
       if (quoteRaw) showCitationPopup(sup, quoteRaw, footnoteUiMeta(resolveFootnote(footnotes, sup.dataset.evId || '')));
     });
@@ -330,7 +352,7 @@ export function exportAnswerWithFootnotes(bodyEl, firstFootnoteNumber) {
   const answerCopy = bodyEl.cloneNode(true);
   const footnoteNumberByCitation = new Map();
   const footnoteItems = [];
-  answerCopy.querySelectorAll('sup.ev-cite').forEach(sup => {
+  answerCopy.querySelectorAll('sup.ev-cite:not(.ev-cite-missing)').forEach(sup => {
     const citationKey = sup.dataset.citeN || sup.dataset.evId || '';
     if (!footnoteNumberByCitation.has(citationKey)) {
       const footnoteNumber = firstFootnoteNumber + footnoteNumberByCitation.size;

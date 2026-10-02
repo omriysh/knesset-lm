@@ -28,6 +28,7 @@ LLAMA_SERVER        = "http://127.0.0.1:8080"
 CTX_SIZE            = 40000
 MAX_TOKENS          = 16384
 MAX_THINKING_TOKENS = 6000
+SYNTHESIZER_MAX_TOKENS = 2 ** 15   # the sourced answer + its citations' quotes, plus thinking (counts against it)
 CHARS_PER_TOK       = 2      # rough estimate for Hebrew
 
 API_RETRY_ATTEMPTS  = 5      # number of attempts for external API calls

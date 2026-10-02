@@ -1861,6 +1861,7 @@ sup.ev-cite {
   user-select: none;
 }
 sup.ev-cite:hover { color: var(--cite-strong); }
+sup.ev-cite.ev-cite-missing { color: var(--ink-muted); }
 
 .ev-citation-popup {
   position: fixed;

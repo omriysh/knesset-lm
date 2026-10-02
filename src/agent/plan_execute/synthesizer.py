@@ -257,20 +257,23 @@ def synthesize_gen(
     print(f"[synthesizer] synthesis turn after {expand_count} expand(s)", flush=True)
     text_parts: list[str] = []
     error_msg: str = ""
+    finish_reason: str = ""
     for sg_ev in llm_bridge.stream(
         model=model,
         messages=messages,
+        max_tokens=config.SYNTHESIZER_MAX_TOKENS,
         phase="synthesizer",
     ):
         if sg_ev.kind == "llm_token":
             text_parts.append(sg_ev.payload.get("text", ""))
-        elif sg_ev.kind == "llm_done" and sg_ev.payload.get("error"):
-            error_msg = sg_ev.payload["error"]
+        elif sg_ev.kind == "llm_done":
+            error_msg = sg_ev.payload.get("error") or error_msg
+            finish_reason = sg_ev.payload.get("finish_reason") or ""
         yield sg_ev
 
     raw_output = "".join(text_parts)
     print(
-        f"[synthesizer] done: raw_len={len(raw_output)} error={error_msg!r} "
+        f"[synthesizer] done: raw_len={len(raw_output)} finish={finish_reason or '?'} error={error_msg!r} "
         f"first_100={raw_output[:100]!r}",
         flush=True,
     )

@@ -48,6 +48,8 @@ class DoneEvent:
     # Set by GoogleBackend when the cloud call failed and we transparently
     # served the response from the local llama-server fallback instead.
     cloud_failed_used_local: bool = False
+    # Why the model stopped, as the backend reports it ("STOP", "MAX_TOKENS", ...); "" when unknown.
+    finish_reason: str = ""
 
 
 LLMEvent = TokenEvent | ThinkingEvent | ToolCallsEvent | DoneEvent
