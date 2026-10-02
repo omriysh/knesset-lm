@@ -34,6 +34,12 @@ function switchTab(name, { writeUrl = true, push = true } = {}) {
   const mobBtn = document.getElementById(`mob-tab-${name}`);
   if (mobBtn) mobBtn.classList.add('active');
 
+  const settingsButton = document.getElementById('settings-btn');
+  if (settingsButton) {
+    settingsButton.disabled = name !== 'research';
+    settingsButton.title = settingsButton.disabled ? 'ההגדרות זמינות בלשונית מחקר אוטומטי' : 'הגדרות';
+  }
+
   setActiveTab(name, { writeUrl, push });
   if (name === 'research' && typeof window.promptGeminiKeyIfMissing === 'function') window.promptGeminiKeyIfMissing();
 }

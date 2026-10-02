@@ -1419,6 +1419,7 @@ mark.keyword-highlight {
 }
 .chunk-pin:hover { opacity: 1; }
 .chunk-pin:disabled { opacity: 0.4; cursor: default; }
+#settings-btn:disabled { opacity: 0.35; cursor: default; background: none; color: inherit; }
 
 .chunk-text {
   font-size: 0.8rem;
