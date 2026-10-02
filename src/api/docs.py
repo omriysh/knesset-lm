@@ -21,6 +21,7 @@ from api.routes import TOOL_ENDPOINTS, public_tool_schema
 
 DOCS_ASSETS_DIR = Path(__file__).parent / "docs_assets"
 DOCS_ASSETS_URL = "/docs-assets"
+PUBLIC_API_PATH_PREFIX = "/v1/"
 
 API_VERSION = "1.0"
 SITE_DESCRIPTION = (
@@ -32,23 +33,14 @@ SITE_DESCRIPTION = (
     f"{', '.join(f'`https://{host}`' for host in config.MCP_SUBDOMAIN_HOSTS)}.\n\n"
     "All `/v1` routes are GET, need no key, and are rate-limited per IP "
     f"({config.API_RATE_LIMIT_UPSTREAM_PER_MINUTE}/min for routes that call the Knesset APIs, "
-    f"{config.API_RATE_LIMIT_DB_PER_MINUTE}/min for protocol search). Add `format=md` for compact markdown. "
-    "The `/api/*` routes serve this site's own UI and may change without notice."
+    f"{config.API_RATE_LIMIT_DB_PER_MINUTE}/min for protocol search). Add `format=md` for compact markdown."
 )
 
 TAG_PUBLIC_TOOLS = "Public API: tools"
 TAG_PUBLIC_META = "Public API: discovery"
-TAG_AGENT_INSTRUCTIONS = "Agent instructions"
-TAG_WEB_RESEARCH = "Web UI: research agent"
-TAG_WEB_READING = "Web UI: reading tab"
-TAG_WEB_SITE = "Web UI: site"
 TAG_DESCRIPTIONS = {
     TAG_PUBLIC_TOOLS: "One route per research tool; the same tools the site's research agent uses.",
     TAG_PUBLIC_META: "Tool listing, data coverage and health.",
-    TAG_AGENT_INSTRUCTIONS: "Plain-text instructions for AI agents (llms.txt convention).",
-    TAG_WEB_RESEARCH: "Auto-research tab. Needs the visitor's Gemini key in the X-Gemini-Api-Key header.",
-    TAG_WEB_READING: "Reading tab: protocol search, summaries, transcripts and questions about selected passages.",
-    TAG_WEB_SITE: "Site assets and health.",
 }
 
 API_PARAM_TO_TOOL_ARG = {"q": "query", "committee": "committees", "meeting_id": "meeting_ids"}
@@ -76,15 +68,7 @@ def first_sentence(text: str, max_chars: int = 90) -> str:
 def tag_for_path(path: str) -> str:
     if path in TOOL_ENDPOINTS.values():
         return TAG_PUBLIC_TOOLS
-    if path.startswith("/v1/") or path == "/health":
-        return TAG_PUBLIC_META
-    if path in ("/llms.txt", "/llms-full.txt", "/agent-instructions"):
-        return TAG_AGENT_INSTRUCTIONS
-    if path == "/api/research/start" or path.endswith(("/stream", "/respond", "/tool_result/{ref_id}")):
-        return TAG_WEB_RESEARCH
-    if path.startswith(("/api/browse", "/api/research/")):
-        return TAG_WEB_READING
-    return TAG_WEB_SITE
+    return TAG_PUBLIC_META
 
 
 def tool_parameter_description(tool_name: str, api_param: str, tool_properties: dict) -> str:
@@ -134,7 +118,8 @@ def install_public_docs(app: FastAPI, title: str) -> None:
     def cached_enriched_openapi() -> dict:
         if app.openapi_schema is None:
             app.openapi_schema = enrich_openapi_schema(get_openapi(
-                title=title, version=API_VERSION, description=SITE_DESCRIPTION, routes=app.routes))
+                title=title, version=API_VERSION, description=SITE_DESCRIPTION,
+                routes=[route for route in app.routes if getattr(route, "path", "").startswith(PUBLIC_API_PATH_PREFIX)]))
         return app.openapi_schema
 
     app.openapi = cached_enriched_openapi

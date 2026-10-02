@@ -96,6 +96,11 @@ class TestOpenApiContent:
         undocumented = [p["name"] for p in parameters if not p.get("description")]
         assert undocumented == []
 
+    def test_docs_explain_only_the_v1_api(self, docs_client):
+        spec, _ = openapi_operations(docs_client)
+        assert spec["paths"] and all(path.startswith("/v1/") for path in spec["paths"])
+        assert "/api/" not in spec["info"]["description"]
+
     def test_html_index_page_is_not_in_the_schema(self):
         import web.app as webapp
         webapp.app.openapi_schema = None
