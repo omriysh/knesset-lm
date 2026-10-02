@@ -10,6 +10,7 @@ attributes the routes read. Expected meetings come from SQL over the same db (co
 """
 
 import sys
+import time
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -220,6 +221,20 @@ class TestHits:
         r = client.get(f"/api/research/{session_id}/meeting/{real_db.meeting_id}/hits",
                        params={"q": real_db.meeting_first_topic[:150]})
         assert r.status_code == 200 and isinstance(r.json()["hits"], list)
+
+    def test_topic_query_on_the_biggest_meeting_is_fast(self, client, session_id, real_conn):
+        meeting_id, speech_count = real_conn.execute(
+            "SELECT meeting_id, COUNT(*) AS speech_count FROM speeches GROUP BY meeting_id "
+            "HAVING meeting_id IN (SELECT meeting_id FROM topics) ORDER BY speech_count DESC LIMIT 1").fetchone()
+        topic = real_conn.execute("SELECT text FROM topics WHERE meeting_id = ? ORDER BY idx LIMIT 1",
+                                  (meeting_id,)).fetchone()[0]
+        started = time.monotonic()
+        r = client.get(f"/api/research/{session_id}/meeting/{meeting_id}/hits", params={"q": topic})
+        elapsed = time.monotonic() - started
+        assert r.status_code == 200, r.text
+        hits = r.json()["hits"]
+        assert hits and all(h["ranges"] for h in hits)
+        assert elapsed < 3, f"{elapsed:.1f}s for a topic of meeting {meeting_id} ({speech_count} speeches)"
 
 
 def _find_counts(obj):

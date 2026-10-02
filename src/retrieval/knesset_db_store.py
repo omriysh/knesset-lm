@@ -646,26 +646,32 @@ def meeting_speech_hits(conn, word_matches: list[str], meeting_id: str,
     (how many of exact_word_matches, the words as typed, it contains), relevance (summed -bm25 over
     the matched words, higher = better), ordered by speech_idx.
     """
-    speech_id_range = conn.execute(
-        "SELECT MIN(id), MAX(id) FROM speeches WHERE meeting_id = ?", (str(meeting_id),)).fetchone()
-    if speech_id_range[0] is None:
+    speech_idx_by_rowid = _meeting_speech_idx_by_rowid(conn, meeting_id)
+    if not speech_idx_by_rowid:
         return []
-    sql = ("SELECT s.idx, -bm25(speeches_fts) FROM speeches_fts JOIN speeches s ON s.id = speeches_fts.rowid "
-           "WHERE speeches_fts MATCH ? AND speeches_fts.rowid BETWEEN ? AND ? AND s.meeting_id = ?")
+    sql = "SELECT rowid, -bm25(speeches_fts) FROM speeches_fts WHERE speeches_fts MATCH ? AND rowid BETWEEN ? AND ?"
+    rowid_range = (min(speech_idx_by_rowid), max(speech_idx_by_rowid))
     hits_by_speech: dict[int, dict] = {}
     for word_match in word_matches:
-        for speech_idx, relevance in conn.execute(
-                sql, (word_match, speech_id_range[0], speech_id_range[1], str(meeting_id))):
+        for rowid, relevance in conn.execute(sql, (word_match, *rowid_range)):
+            if rowid not in speech_idx_by_rowid:
+                continue
+            speech_idx = speech_idx_by_rowid[rowid]
             hit = hits_by_speech.setdefault(speech_idx, {"speech_idx": speech_idx, "matched_words": 0,
                                                          "exact_words": 0, "relevance": 0.0})
             hit["matched_words"] += 1
             hit["relevance"] += relevance
     for exact_word_match in exact_word_matches or []:
-        for speech_idx, _relevance in conn.execute(
-                sql, (exact_word_match, speech_id_range[0], speech_id_range[1], str(meeting_id))):
-            if speech_idx in hits_by_speech:
-                hits_by_speech[speech_idx]["exact_words"] += 1
+        for rowid, _relevance in conn.execute(sql, (exact_word_match, *rowid_range)):
+            if speech_idx_by_rowid.get(rowid) in hits_by_speech:
+                hits_by_speech[speech_idx_by_rowid[rowid]]["exact_words"] += 1
     return [hits_by_speech[idx] for idx in sorted(hits_by_speech)]
+
+
+def _meeting_speech_idx_by_rowid(conn, meeting_id: str) -> dict[int, int]:
+    """speeches_fts rowid -> speech idx of one meeting. The FTS queries filter by this meeting's rowid range
+    instead of joining speeches: with the join SQLite runs the MATCH once per speech of the meeting."""
+    return dict(conn.execute("SELECT id, idx FROM speeches WHERE meeting_id = ?", (str(meeting_id),)).fetchall())
 
 
 _HIGHLIGHT_OPEN, _HIGHLIGHT_CLOSE = "", ""
@@ -690,18 +696,17 @@ def meeting_speech_keyword_ranges(conn, word_matches: list[str], meeting_id: str
     speech text (the text the reading tab shows), ordered by offset."""
     if not word_matches:
         return {}
-    speech_id_range = conn.execute(
-        "SELECT MIN(id), MAX(id) FROM speeches WHERE meeting_id = ?", (str(meeting_id),)).fetchone()
-    if speech_id_range[0] is None:
+    speech_idx_by_rowid = _meeting_speech_idx_by_rowid(conn, meeting_id)
+    if not speech_idx_by_rowid:
         return {}
     any_word_match = " OR ".join(f"({word_match})" for word_match in word_matches)
-    sql = ("SELECT s.idx, highlight(speeches_fts, 0, ?, ?) FROM speeches_fts "
-           "JOIN speeches s ON s.id = speeches_fts.rowid "
-           "WHERE speeches_fts MATCH ? AND speeches_fts.rowid BETWEEN ? AND ? AND s.meeting_id = ?")
-    return {speech_idx: _ranges_between_markers(highlighted)
-            for speech_idx, highlighted in conn.execute(
+    sql = ("SELECT rowid, highlight(speeches_fts, 0, ?, ?) FROM speeches_fts "
+           "WHERE speeches_fts MATCH ? AND rowid BETWEEN ? AND ?")
+    return {speech_idx_by_rowid[rowid]: _ranges_between_markers(highlighted)
+            for rowid, highlighted in conn.execute(
                 sql, (_HIGHLIGHT_OPEN, _HIGHLIGHT_CLOSE, any_word_match,
-                      speech_id_range[0], speech_id_range[1], str(meeting_id)))}
+                      min(speech_idx_by_rowid), max(speech_idx_by_rowid)))
+            if rowid in speech_idx_by_rowid}
 
 
 def table_row_counts(conn, tables: tuple[str, ...] = ("meetings", "topics", "opinions", "speeches")) -> dict[str, int]:
