@@ -59,23 +59,33 @@ function applyUrlRoute() {
   else _openMeetingFromUrl(target, focus);
 }
 
+/* With a search in the link, the sidebar lists its results; the linked meeting is added on top when the
+   search does not return it. */
 async function _openMeetingFromUrl(target, focus) {
   _setBrowseLoading(true);
   try {
-    const data = await _browseSearch({ query: '', filters: { ...emptyProtocolFilters(), meeting_ids: [target.meeting] } });
+    const withSearch = hasProtocolSearch(target);
+    const [linked, searched] = await Promise.all([
+      _browseSearch({ query: '', filters: { ...emptyProtocolFilters(), meeting_ids: [target.meeting] } }),
+      withSearch ? _browseSearch({ query: target.query, filters: target.filters }) : null,
+    ]);
     const area = document.getElementById('reading-browser-area');
     area.innerHTML = '';
-    if (!data.meetings || !data.meetings.length) {
+    if (!linked.meetings || !linked.meetings.length) {
       _showBrowsePlaceholder('הישיבה לא נמצאה', 'ייתכן שהקישור שגוי או שהישיבה אינה זמינה.', 'link_off');
       return;
     }
+    const searchedMeetings = searched?.meetings || [];
+    const meetings = searchedMeetings.some(m => String(m.meeting_id) === String(target.meeting))
+      ? searchedMeetings : [...linked.meetings, ...searchedMeetings];
+    const data = { session_id: (searched || linked).session_id, meetings };
     const label = target.query || 'ישיבה מקישור';
     openProtocolBrowser(data.session_id, target.meeting, data.meetings, {
       originalQuestion: label,
       container:        area,
       standalone:       true,
       postCompletion:   true,
-      searchRequest:    hasProtocolSearch(target) ? { query: target.query, filters: target.filters } : null,
+      searchRequest:    withSearch ? { query: target.query, filters: target.filters } : null,
       focus,
       pushUrl:          false,
     });

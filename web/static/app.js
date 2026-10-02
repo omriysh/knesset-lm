@@ -31,6 +31,7 @@ import { configureUserInput } from './render/user_input.js';
 import { attachLazyToggleListener } from './render/lazy.js';
 import { attemptReconnect } from './reconnect.js';
 import { promptGeminiKeyIfMissing, refreshGeminiKeySettingsStatus } from './gemini_key.js';
+import { refreshModelSettings } from './models.js';
 
 // ── user_input → controller.submitResponse callback ────────────────────
 configureUserInput({ onSubmit: submitResponse });
@@ -66,6 +67,7 @@ function openSettings() {
   document.getElementById('toggle-stages-always').checked =
     localStorage.getItem('showStagesAlways') === 'true';
   refreshGeminiKeySettingsStatus();
+  refreshModelSettings();
 }
 function closeSettings() {
   document.getElementById('settings-overlay').classList.remove('open');

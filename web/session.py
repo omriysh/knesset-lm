@@ -38,6 +38,7 @@ class ResearchSession:
     error: str | None = None
     workspace_data: dict | None = None  # {selected_chunks}
     event_log: list | None = None       # selective SSE event log for reconnect replay
+    models: dict | None = None          # ResearchModels.to_dict() chosen at start; a resumed run reuses it
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

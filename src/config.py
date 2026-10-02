@@ -83,13 +83,14 @@ SUMMARY_OPINIONS_CHUNK_TARGET_CHARS    = 120_000
 
 # Models (cloud)
 GOOGLE_API_KEY_ENV   = "GOOGLE_API_KEY"
+# Defaults for runs without a web visitor (agent.model_choice.ResearchModels.from_config); the web visitor picks
+# each model in the settings (web/static/models.js holds the browser's defaults).
 PLANNER_MODEL        = "gemini-flash-latest"
-CRITIC_PRE_MODEL     = "gemini-2.5-flash-lite"
-CRITIC_POST_MODEL    = "gemini-2.5-flash-lite"
+CRITIC_MODEL         = "gemini-2.5-flash-lite"
 SYNTHESIZER_MODEL    = "gemini-flash-latest"
-EXECUTOR_MODEL_LIGHT = "gemini-2.5-flash-lite"
-EXECUTOR_MODEL_HEAVY = "gemini-2.5-flash-lite"
-INTENT_MODEL         = "local"            # always llama-server
+EXECUTOR_MODEL       = "gemini-2.5-flash-lite"
+INTENT_MODEL         = "gemini-2.5-flash-lite"   # outer machine's intent classification, plan validator
+ANSWER_EDITOR_MODEL  = "gemini-2.5-flash-lite"   # outer machine's final formatting of the answer
 
 # Fallback
 GOOGLE_API_FALLBACK_TO_LOCAL = False
@@ -217,11 +218,12 @@ API_RATE_LIMIT_ENABLED              = True
 API_RATE_LIMIT_UPSTREAM_PER_MINUTE  = 10   # per client IP, routes that call the Knesset APIs
 API_RATE_LIMIT_DB_PER_MINUTE        = 60   # per client IP, knesset.db-only routes
 API_TRUST_CLOUDFLARE_IP_HEADER      = True  # True only when the server is reachable solely through Cloudflare
-API_RATE_LIMIT_AGENT_PER_MINUTE     = 5    # per client IP, web routes that run an LLM (Gemini or the local llama-server)
+API_RATE_LIMIT_AGENT_PER_MINUTE     = 5    # per client IP, web routes that run an LLM
 WEB_REQUIRE_USER_GEMINI_KEY         = True   # web agent tab bills the visitor's key (X-Gemini-Api-Key), never the server's
 GEMINI_KEY_CHECK_TIMEOUT_SECONDS    = 10
 GEMINI_KEY_CHECK_CACHE_SECONDS      = 600
 GEMINI_KEY_CHECK_CACHE_MAX_ENTRIES  = 10_000
+GEMINI_MODEL_LIST_EXCLUDED_NAME_PARTS = ("-tts", "-image", "-audio", "-live", "embedding", "robotics", "computer-use", "omni", "transcribe")   # not text-chat models
 API_TRUSTED_PROXY_HOSTS             = ("127.0.0.1", "::1")  # cloudflared runs on this machine
 DB_QUERY_TIMEOUT_SECONDS            = 20
 
@@ -290,7 +292,7 @@ WEB_SESSION_CLEANUP_INTERVAL_SECONDS = 600
 WEB_RESEARCH_MAX_CONCURRENT_RUNS     = 5
 WEB_RESEARCH_MAX_QUEUED_RUNS         = 10
 WEB_RESEARCH_SLOT_WAIT_SECONDS       = 300
-WEB_LOCAL_LLM_MAX_CONCURRENT_ASKS    = 1      # workspace/ask on the owner's llama-server; more → 503 busy
+WEB_WORKSPACE_MAX_CONCURRENT_ASKS    = 4      # workspace/ask runs in flight; more → 503 busy
 WEB_WORKSPACE_ASK_MAX_TOKENS         = 1024
 WEB_WORKSPACE_ASK_MAX_CONTEXT_CHARS  = 8000
 WEB_SSE_KEEPALIVE_SECONDS            = 15.0

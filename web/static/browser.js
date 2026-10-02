@@ -47,7 +47,7 @@ let _pendingFocus = null;       // {speech, offset, length} or {speech, quote} t
 let _searchRequest = null;      // /api/browse/search body behind _meetings (null = no "load more")
 
 /* ── Heatmap state ──────────────────────────────────────────────── */
-let _hmChunks         = [];     // [{chunk_id, chars}] in transcript order
+let _hmHits           = [];     // /hits rows for the active query: {speech_idx, matched_words, query_words, ranges}
 let _activeHitsQuery  = null;   // topic text currently driving the heatmap (null = search query)
 
 /* ── Sidebar sort / filter / group state ────────────────────────── */
@@ -91,7 +91,7 @@ function openProtocolBrowser(sessionId, meetingId, meetings, opts = {}) {
   _filterPart        = '';
   _partCache         = {};
   _partLoadedCount   = 0;
-  _hmChunks          = [];
+  _hmHits            = [];
   _activeHitsQuery   = null;
   _searchRequest     = opts.searchRequest || null;
   _pendingFocus = opts.focus?.speech != null ? opts.focus : null;
@@ -313,9 +313,6 @@ function _groupedHtml(meetings) {
 /* ── Single meeting card HTML ───────────────────────────────────── */
 function _meetingCardHtml(m, inGroup) {
   const active    = m.meeting_id === _activeId;
-  const pct       = Math.round((m.score || 0) * 100);
-  const badgeCls  = pct >= 65 ? 'rel-green' : pct >= 50 ? 'rel-blue' : 'rel-grey';
-  const badgeHtml = m.score ? `<span class="rel-badge ${badgeCls}">${pct}%</span>` : '';
   const dateStr   = (m.date || m.meeting_id).replace(/_/g, '/');
   const commHtml  = inGroup ? '' :
     `<span class="sidebar-committee">${_esc((m.committee || '').replace(/_/g, ' '))}</span>`;
@@ -324,7 +321,6 @@ function _meetingCardHtml(m, inGroup) {
     <div class="sidebar-meeting-title">${_esc(dateStr)}</div>
     <div class="sidebar-meeting-meta">
       ${commHtml}
-      ${badgeHtml}
     </div>
   </div>`;
 }
@@ -424,7 +420,7 @@ async function _loadMeeting(meetingId, { pushUrl = true } = {}) {
   _activeId          = meetingId;
   if (_standalone) updateProtocolUrl({ meeting: meetingId }, { push: pushUrl });
   _activeHitsQuery   = null;
-  _hmChunks          = [];
+  _hmHits            = [];
   _summary           = null;
 
   const m = _meetings.find(x => x.meeting_id === meetingId);
@@ -463,8 +459,7 @@ async function _loadMeeting(meetingId, { pushUrl = true } = {}) {
     _wireSummaryJumps(col);
     _wireSummaryJumps(_panel?.querySelector('#browser-summary-bar'));
 
-    // Init heatmap with grey bands (no scores yet)
-    _initHeatmap(transcriptData.chunks || []);
+    _initHeatmap();
 
     // Heatmap strip click → proportional scroll.
     // Uses col.scrollHeight coordinates to match hm-viewport tracking.
@@ -518,7 +513,7 @@ function _bulletHtml(b, isTopic) {
   if (quote && verified) {
     quoteHtml = `<div class="summary-quote">„${_esc(quote)}”${jump}${approxSearch}</div>`;
   } else if (quote) {
-    quoteHtml = `<div class="summary-quote-unverified" title="הנוסח לא נמצא מילה במילה בפרוטוקול">
+    quoteHtml = `<div class="summary-quote-unverified" title="הנוסח המדויק לא נמצא בפרוטוקול">
       <div class="summary-quote-unverified-label"><span class="material-symbols-outlined">warning</span>ציטוט לא מאומת — ייתכן שאינו מדויק</div>
       <div class="summary-quote-unverified-text">${_esc(quote)}</div>
       ${approxSearch}
@@ -642,25 +637,30 @@ function _transcriptHtml(data) {
 }
 
 /* ── Heatmap: init, render, viewport indicator ───────────────────── */
+/* The strip marks where the query's words sit in the transcript column (by their rendered position),
+   stronger for speeches matching more of the words. */
 
-function _initHeatmap(chunks) {
-  _hmChunks = chunks.map(c => ({
-    chunk_id: c.chunk_id,
-    chars:    (c.text || '').length || 1,
-  }));
-  _renderHeatmap(_hmChunks.map(() => null));
+function _initHeatmap() {
+  _hmHits = [];
+  _renderHeatmap();
   requestAnimationFrame(_updateHeatmapViewport);
+  const inner = _panel?.querySelector('#browser-transcript-col .transcript-inner');
+  if (inner) new ResizeObserver(() => { _renderHeatmap(); _updateHeatmapViewport(); }).observe(inner);
 }
 
 function _searchQuery() {
   return (_searchRequest?.query || '').trim();
 }
 
-/* Color the heatmap by /hits for `query` (speech_idx → score in (0,1]); optionally scroll to the best hit */
+/* /hits for `query`: highlight its words in the transcript and mark them on the heatmap;
+   optionally scroll to the best speech */
 async function _loadHitsHeatmap(meetingId, query, scrollToBest = false) {
   const strip = _panel?.querySelector('#heatmap-strip');
+  const body  = _panel?.querySelector('#transcript-body');
   if (!query) {
-    _renderHeatmap(_hmChunks.map(() => null));
+    _unmarkText(body, 'keyword-highlight');
+    _hmHits = [];
+    _renderHeatmap();
     return;
   }
   strip?.classList.add('loading');
@@ -669,11 +669,15 @@ async function _loadHitsHeatmap(meetingId, query, scrollToBest = false) {
     const data = await res.json();
     if (meetingId !== _activeId) return;
     if (data.error) throw new Error(data.error);
-    const scoreBySpeech = new Map((data.hits || []).map(h => [String(h.speech_idx), h.score]));
-    const scores = _hmChunks.map(c => scoreBySpeech.has(String(c.chunk_id)) ? scoreBySpeech.get(String(c.chunk_id)) : null);
-    _renderHeatmap(scores);
+    _hmHits = data.hits || [];
+    _unmarkText(body, 'keyword-highlight');
+    for (const hit of _hmHits) {
+      const card = body?.querySelector(`.chunk-card[data-chunk-id="${CSS.escape(String(hit.speech_idx))}"]`);
+      _markTextRanges(card?.querySelector('.chunk-text'), hit.ranges || [], 'keyword-highlight');
+    }
+    _renderHeatmap();
     if (scrollToBest) {
-      const best = (data.hits || []).reduce((a, h) => (!a || h.score > a.score) ? h : a, null);
+      const best = _hmHits.reduce((a, h) => (!a || h.score > a.score) ? h : a, null);
       if (best) browserFocusSpeech(best.speech_idx);
     }
   } catch (err) {
@@ -683,35 +687,32 @@ async function _loadHitsHeatmap(meetingId, query, scrollToBest = false) {
   }
 }
 
-/* scores: array of float|null, same order as _hmChunks */
-function _renderHeatmap(scores) {
+const _HEATMAP_ROW_PX = 3;
+
+function _renderHeatmap() {
   const bandsEl = _panel?.querySelector('#hm-bands');
-  if (!bandsEl) return;
+  const col     = _panel?.querySelector('#browser-transcript-col');
+  if (!bandsEl || !col) return;
+  const stripHeight = bandsEl.clientHeight;
+  if (!_hmHits.length || !col.scrollHeight || !stripHeight) { bandsEl.innerHTML = ''; return; }
 
-  const total = _hmChunks.reduce((s, c) => s + c.chars, 0) || 1;
-
-  bandsEl.innerHTML = _hmChunks.map((c, i) => {
-    const flex = c.chars / total;
-    return `<div class="hm-band" style="flex:${flex}; background:${_heatColor(scores[i])}"
-                 title="${_heatLabel(scores[i])}"></div>`;
-  }).join('');
-}
-
-/* Salmon→yellow-green→green gradient: null→grey, 0→salmon, 1→interface green */
-function _heatColor(s) {
-  if (s == null) return '#e2e3df';
-  const t = Math.max(0, Math.min(1, s));
-  // hue: 12 (salmon-red) → 122 (green)
-  // sat: 80 → 45%
-  // lightness: 80 → 38%
-  const h = Math.round(12  + t * 110);
-  const sv = Math.round(80 - t * 35);
-  const l  = Math.round(80 - t * 42);
-  return `hsl(${h},${sv}%,${l}%)`;
-}
-
-function _heatLabel(s) {
-  return s == null ? '—' : Math.round(s * 100) + '%';
+  const scale    = stripHeight / col.scrollHeight;
+  const colTop   = col.getBoundingClientRect().top - col.scrollTop;
+  const strength = hit => (hit.matched_words || 1) / (hit.query_words || 1);
+  const strongestByRow = new Map();
+  for (const hit of _hmHits) {
+    const card = col.querySelector(`.transcript-body .chunk-card[data-chunk-id="${CSS.escape(String(hit.speech_idx))}"]`);
+    if (!card) continue;
+    const marks = card.querySelectorAll('mark.keyword-highlight');
+    for (const el of (marks.length ? marks : [card])) {
+      const row = Math.floor((el.getBoundingClientRect().top - colTop) * scale / _HEATMAP_ROW_PX);
+      const best = strongestByRow.get(row);
+      if (!best || strength(hit) > strength(best)) strongestByRow.set(row, hit);
+    }
+  }
+  bandsEl.innerHTML = [...strongestByRow].map(([row, hit]) =>
+    `<div class="hm-band" style="top:${row * _HEATMAP_ROW_PX}px; opacity:${0.35 + 0.65 * strength(hit)}"
+          title="${hit.matched_words} מתוך ${hit.query_words} מילות החיפוש"></div>`).join('');
 }
 
 function _updateHeatmapViewport() {
@@ -740,7 +741,8 @@ function browserFocusSpeech(speechIdx, range = null) {
 
   const textRange = range?.quote ? _quoteRangeInCard(card, range.quote)
     : (range?.offset != null && range?.length ? range : null);
-  const mark = _highlightInCard(card, textRange);
+  const marks = _highlightInCard(card, textRange);
+  const mark  = marks[0];
   if (_standalone) {
     updateProtocolUrl({ speech: Number(speechIdx), offset: mark ? textRange.offset : null,
                         length: mark ? textRange.length : null });
@@ -753,7 +755,7 @@ function browserFocusSpeech(speechIdx, range = null) {
     - col.clientHeight / 2
     + anchor.getBoundingClientRect().height / 2;
   const alreadyThere = Math.abs(col.scrollTop - Math.max(0, target)) < 4;
-  if (mark) _afterScrollSettles(col, alreadyThere, () => mark.classList.add('sweep'));
+  if (mark) _afterScrollSettles(col, alreadyThere, () => marks.forEach(m => m.classList.add('sweep')));
   col.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
 }
 
@@ -761,12 +763,41 @@ function browserFocusSpeech(speechIdx, range = null) {
 
 const _QUOTE_IGNORED_CHARS = /[֑-ׇ\s"'“”„״׳.,:;!?()\[\]\-–—…]/;
 
-function _clearHighlights(card) {
-  card.closest('.transcript-body')?.querySelectorAll('mark.quote-highlight').forEach(old => {
-    const parent = old.parentNode;
-    old.replaceWith(document.createTextNode(old.textContent));
+function _unmarkText(root, className) {
+  root?.querySelectorAll(`mark.${className}`).forEach(mark => {
+    const parent = mark.parentNode;
+    mark.replaceWith(...mark.childNodes);
     parent.normalize();
   });
+}
+
+/* Wrap each [offset, length] of textEl's text (sorted, not overlapping) in <mark class=className>; a range
+   crossing other marks is wrapped piece by piece. Returns the new marks in text order. */
+function _markTextRanges(textEl, ranges, className) {
+  const marks = [];
+  if (!textEl || !ranges.length) return marks;
+  const walker = document.createTreeWalker(textEl, NodeFilter.SHOW_TEXT);
+  const textNodes = [];
+  while (walker.nextNode()) textNodes.push(walker.currentNode);
+  let nodeStart = 0;
+  for (const node of textNodes) {
+    const nodeEnd = nodeStart + node.length;
+    const pieces = ranges.map(([offset, length]) => [Math.max(offset, nodeStart), Math.min(offset + length, nodeEnd)])
+                         .filter(([start, end]) => start < end);
+    const nodeMarks = [];
+    for (const [start, end] of pieces.reverse()) {
+      const domRange = document.createRange();
+      domRange.setStart(node, start - nodeStart);
+      domRange.setEnd(node, end - nodeStart);
+      const mark = document.createElement('mark');
+      mark.className = className;
+      domRange.surroundContents(mark);
+      nodeMarks.unshift(mark);
+    }
+    marks.push(...nodeMarks);
+    nodeStart = nodeEnd;
+  }
+  return marks;
 }
 
 /* {offset, length} of the quote in the card's text, or null */
@@ -786,22 +817,14 @@ function _quoteRangeInCard(card, quote) {
   return { offset, length: rawIndexOf[start + normalizedQuote.length - 1] + 1 - offset };
 }
 
-/* Wrap range ({offset, length} in the card's text) in <mark class="quote-highlight">, after removing the
-   previous highlight; null when there is no range or it falls outside the text. */
+/* Highlight range ({offset, length} in the card's text) as the quote, after removing the previous quote
+   highlight; [] when there is no range or it falls outside the text. */
 function _highlightInCard(card, range) {
-  _clearHighlights(card);
-  const textNode = card.querySelector('.chunk-text')?.firstChild;
-  if (!range || !textNode || textNode.nodeType !== Node.TEXT_NODE) return null;
-  const end = range.offset + range.length;
-  if (range.offset < 0 || range.length <= 0 || end > textNode.textContent.length) return null;
-
-  const domRange = document.createRange();
-  domRange.setStart(textNode, range.offset);
-  domRange.setEnd(textNode, end);
-  const mark = document.createElement('mark');
-  mark.className = 'quote-highlight';
-  domRange.surroundContents(mark);
-  return mark;
+  _unmarkText(card.closest('.transcript-body'), 'quote-highlight');
+  const textEl = card.querySelector('.chunk-text');
+  if (!range || !textEl) return [];
+  if (range.offset < 0 || range.length <= 0 || range.offset + range.length > textEl.textContent.length) return [];
+  return _markTextRanges(textEl, [[range.offset, range.length]], 'quote-highlight');
 }
 
 /* ── Sharing: a speech card click or a text selection inside one speech goes into the URL ── */
@@ -818,7 +841,16 @@ function _wireTranscriptSharing() {
   col.addEventListener('mouseup', onSelectionEnd);
   col.addEventListener('touchend', onSelectionEnd);
   col.addEventListener('keyup', onSelectionEnd);
+  document.addEventListener('selectionchange', _onSelectionHandleDrag);
   col.addEventListener('scroll', _hideSelectionShareButton, { passive: true });
+}
+
+/* Dragging the touch selection handles fires no touchend on the column: follow the selection once it settles */
+let _selectionSettleTimer = null;
+function _onSelectionHandleDrag() {
+  if (!_selectionShareButton || _selectionShareButton.style.display === 'none') return;
+  clearTimeout(_selectionSettleTimer);
+  _selectionSettleTimer = setTimeout(_onTranscriptSelection, 250);
 }
 
 /* Selection within one speech's text → its range in the URL and a floating share button */
@@ -853,8 +885,10 @@ function _showSelectionShareButton(selectionRect) {
   }
   const button = _selectionShareButton;
   button.style.display = 'flex';
-  const top = selectionRect.top - button.offsetHeight - 8;
-  button.style.top  = `${top > 8 ? top : selectionRect.bottom + 8}px`;
+  const gapClearingSelectionHandles = matchMedia('(pointer: coarse)').matches ? 32 : 8;
+  const below = selectionRect.bottom + gapClearingSelectionHandles;
+  const fitsBelow = below + button.offsetHeight + 8 <= window.innerHeight;
+  button.style.top  = `${fitsBelow ? below : Math.max(8, selectionRect.top - button.offsetHeight - 8)}px`;
   button.style.left = `${Math.max(8, Math.min(selectionRect.left + selectionRect.width / 2 - button.offsetWidth / 2,
                                               window.innerWidth - button.offsetWidth - 8))}px`;
 }
@@ -1047,7 +1081,7 @@ async function _streamWorkspaceAsk(question, meetingId) {
     const res = await fetch(`/api/research/${_sid}/workspace/ask`, {
       method:  'POST',
       headers: {'Content-Type': 'application/json', ...window.geminiKeyHeaders()},
-      body:    JSON.stringify({ question, meeting_id: meetingId }),
+      body:    JSON.stringify({ question, meeting_id: meetingId, model: window.meetingChatModel() }),
     });
     const rejection = await window.agentResponseError(res);
     if (rejection) throw rejection;

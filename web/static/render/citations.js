@@ -37,9 +37,9 @@ function findQuoteAnchor(obj) {
 }
 
 const PROTOCOL_SOURCE_NOTES = {
-  opinion: 'עמדה מפרוטוקול ועדה: ניסוח העמדה הוא סיכום AI, הציטוט מילה במילה מהפרוטוקול',
+  opinion: 'עמדה מפרוטוקול ועדה: מתוך סיכום AI, לצד ציטוט תומך מהפרוטוקול',
   topic:   'נושא דיון מתוך סיכום AI של פרוטוקול ועדה',
-  speech:  'ציטוט מילה במילה מפרוטוקול ועדה',
+  speech:  'ציטוט מפרוטוקול ועדה',
 };
 
 function protocolSourceKind(node) {
@@ -134,8 +134,10 @@ function renderQuoteObj(obj) {
       ? `<div class="ev-citation-meeting-header">${parts.join(' &middot; ')}</div>`
       : '';
     const text = obj.text || obj.topic || obj.opinion || obj.topic_text || obj.label || obj.summary || obj.full_text || '';
-    let textHtml = text ? `<div class="ev-citation-quote">${esc(String(text))}</div>` : '';
-    if (obj.opinion && obj.quote) textHtml += `<div class="ev-citation-quote">„${esc(String(obj.quote))}”</div>`;
+    const textIsVerbatim = protocolSourceKind(obj) === 'speech';
+    let textHtml = text
+      ? `<div class="ev-citation-quote${textIsVerbatim ? ' ev-citation-verbatim' : ''}">${esc(String(text))}</div>` : '';
+    if (obj.quote && obj.quote !== text) textHtml += `<blockquote class="ev-citation-quote ev-citation-verbatim">${esc(String(obj.quote))}</blockquote>`;
     if (Array.isArray(obj.chunks) && obj.chunks.length > 0) {
       const chunksHtml = obj.chunks.map(ch => renderQuoteObj(ch)).join('<hr class="ev-quote-sep">');
       return header + textHtml + chunksHtml;
@@ -156,9 +158,8 @@ function renderQuoteObj(obj) {
     : `<div class="ev-citation-quote">${esc(JSON.stringify(obj))}</div>`;
 }
 
-function showCitationPopup(supEl, quoteRaw, uiMeta) {
-  const popup = getEvPopup();
-
+/** The citation's snippet as the popup shows it: {contentHtml, metaNote, anchor}. */
+function citationSnippet(quoteRaw, uiMeta) {
   let quoteObj = null;
   if (typeof quoteRaw === 'object' && quoteRaw !== null) {
     quoteObj = quoteRaw;
@@ -178,6 +179,12 @@ function showCitationPopup(supEl, quoteRaw, uiMeta) {
   const toolNote = (uiMeta && uiMeta.meta_note) ? uiMeta.meta_note : (uiMeta && uiMeta.tool_name) || '';
   const metaNote = (quoteObj != null && protocolSourceNote(quoteObj)) || toolNote;
   const anchor   = quoteObj != null ? findQuoteAnchor(quoteObj) : null;
+  return { contentHtml, metaNote, anchor };
+}
+
+function showCitationPopup(supEl, quoteRaw, uiMeta) {
+  const popup = getEvPopup();
+  const { contentHtml, metaNote, anchor } = citationSnippet(quoteRaw, uiMeta);
   const noteHtml = metaNote ? `<div class="ev-citation-popup-source">${esc(metaNote)}</div>` : '';
   const linkHtml = openProtocolLinkHtml(_citeSid, anchor);
   const footerHtml = (noteHtml || linkHtml)
@@ -234,8 +241,23 @@ function replaceTextMarkers(bodyEl, pattern, buildElement) {
   }
 }
 
+/** The footnote an [n] points at; an `expand` entry resolves to the evidence it expanded. */
+function resolveFootnote(footnotes, evId) {
+  const fn = footnotes.find(f => f.id === evId);
+  if (!fn || fn.tool_name !== 'expand') return fn;
+  const origId = (fn.metadata && fn.metadata.evidence_id) || (fn.provenance && fn.provenance.evidence_id);
+  return (origId && footnotes.find(f => f.id === origId)) || fn;
+}
+
+function footnoteUiMeta(fn) {
+  return fn ? (fn.ui || { tool_name: fn.tool_name }) : {};
+}
+
+const _footnotesByAnswerBody = new WeakMap();
+
 export function applyEvidenceCitations(bodyEl, footnotes, citations, sid) {
   _citeSid = sid || '';
+  _footnotesByAnswerBody.set(bodyEl, footnotes);
   // Stash this answer's cited meetings so the viewer sidebar can be seeded with
   // them when the user opens a protocol from a citation or a source card.
   if (_citeSid) {
@@ -274,23 +296,65 @@ export function applyEvidenceCitations(bodyEl, footnotes, citations, sid) {
     sup.addEventListener('click', e => {
       e.stopPropagation();
       const quoteRaw = sup.dataset.quote || '';
-      const evId     = sup.dataset.evId  || '';
-      const fn       = footnotes.find(f => f.id === evId);
-      let resolvedFn = fn;
-      // For expand entries, resolve to the original evidence entry for display metadata.
-      if (fn && fn.tool_name === 'expand') {
-        const origId = (fn.metadata && fn.metadata.evidence_id) || (fn.provenance && fn.provenance.evidence_id);
-        if (origId) {
-          const origFn = footnotes.find(f => f.id === origId);
-          if (origFn) resolvedFn = origFn;
-        }
-      }
-      const uiMeta = resolvedFn ? (resolvedFn.ui || { tool_name: resolvedFn.tool_name }) : {};
-      if (quoteRaw) {
-        showCitationPopup(sup, quoteRaw, uiMeta);
-      }
+      if (quoteRaw) showCitationPopup(sup, quoteRaw, footnoteUiMeta(resolveFootnote(footnotes, sup.dataset.evId || '')));
     });
   });
+}
+
+function formatToolArgValue(value) {
+  if (Array.isArray(value)) return value.map(formatToolArgValue).join(', ');
+  if (value !== null && typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+/** The tool calls behind a footnote, without their results: "tool_name — key: value · key: value". */
+function footnoteToolQueryHtml(fn) {
+  if (!fn) return '';
+  const toolCalls = (fn.provenance && fn.provenance.tool_calls) || [{ name: fn.tool_name, args: {} }];
+  return toolCalls.map(call => {
+    const args = Object.entries(call.args || {})
+      .filter(([, value]) => value != null && value !== '' && !(Array.isArray(value) && !value.length))
+      .map(([key, value]) => `${esc(key)}: ${esc(formatToolArgValue(value))}`)
+      .join(' · ');
+    return `<div class="export-footnote-query" dir="ltr"><code>${esc(call.name || '')}</code>${args ? ' — ' + args : ''}</div>`;
+  }).join('');
+}
+
+/**
+ * A copy of an answer body for export: each distinct citation becomes a footnote numbered from
+ * firstFootnoteNumber in order of appearance, holding the popup's snippet and the tool query.
+ * Returns {answerHtml, footnotesHtml, footnoteCount}.
+ */
+export function exportAnswerWithFootnotes(bodyEl, firstFootnoteNumber) {
+  const footnotes = _footnotesByAnswerBody.get(bodyEl) || [];
+  const answerCopy = bodyEl.cloneNode(true);
+  const footnoteNumberByCitation = new Map();
+  const footnoteItems = [];
+  answerCopy.querySelectorAll('sup.ev-cite').forEach(sup => {
+    const citationKey = sup.dataset.citeN || sup.dataset.evId || '';
+    if (!footnoteNumberByCitation.has(citationKey)) {
+      const footnoteNumber = firstFootnoteNumber + footnoteNumberByCitation.size;
+      footnoteNumberByCitation.set(citationKey, footnoteNumber);
+      const fn = resolveFootnote(footnotes, sup.dataset.evId || '');
+      const { contentHtml, metaNote } = citationSnippet(sup.dataset.quote || '', footnoteUiMeta(fn));
+      footnoteItems.push(
+        `<li value="${footnoteNumber}" id="export-footnote-${footnoteNumber}">` +
+        contentHtml +
+        (metaNote && metaNote !== fn?.tool_name ? `<div class="ev-citation-popup-source">${esc(metaNote)}</div>` : '') +
+        footnoteToolQueryHtml(fn) +
+        `</li>`);
+    }
+    const footnoteNumber = footnoteNumberByCitation.get(citationKey);
+    const exportSup = document.createElement('sup');
+    exportSup.className = 'export-cite';
+    exportSup.textContent = `[${footnoteNumber}]`;
+    sup.replaceWith(exportSup);
+  });
+  return {
+    answerHtml:    answerCopy.innerHTML,
+    footnotesHtml: footnoteItems.length ? `<ol class="export-footnotes">${footnoteItems.join('')}</ol>` : '',
+    footnoteCount: footnoteItems.length,
+  };
 }
 
 export function buildSourcesHtml(footnotes, sid) {

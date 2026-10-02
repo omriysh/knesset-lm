@@ -16,15 +16,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import pytest
 
-# Skip the entire module if BM25 dbs are missing.
-_bm25_db = Path("C:/Work/Projects/KnessetLM/Data/bm25/25/mks.db")
-if not _bm25_db.exists():
-    pytest.skip(
-        f"BM25 dbs not built — expected {_bm25_db}",
-        allow_module_level=True,
-    )
 
 import config
+
+if not Path(config.KNESSET_DB).exists():
+    pytest.skip(f"knesset.db not built — expected {config.KNESSET_DB}", allow_module_level=True)
+from agent.model_choice import ResearchModels
 from agent.research_agent.agent import ResearchAgent
 from agent.plan_execute.agent import PlanExecuteAgent
 from agent.subgraph.llm_bridge import LLMBridge
@@ -55,6 +52,9 @@ _CRITIC_PRE_OK = json.dumps({"verdict": "ok", "reason": "Plan looks good."})
 _CRITIC_POST_SYNTHESIZE = json.dumps({"verdict": "synthesize", "reason": "Enough evidence."})
 _VALIDATOR_OK = json.dumps({"verdict": "ok", "reason": "Name is specific enough."})
 _SYNTHESIZER_ANSWER = "אבי דיכטר תמך בשירות חוץ בנאומים שונים בוועדה."
+E2E_MODELS = ResearchModels(intent="gemma-e2e-intent", planner="gemini-e2e-planner", critic="gemini-e2e-critic",
+                            executor="gemini-e2e-executor", synthesizer="gemini-e2e-synthesizer",
+                            answer_editor="gemini-e2e-editor")
 
 
 def _make_mock_llm_bridge():
@@ -66,17 +66,15 @@ def _make_mock_llm_bridge():
 
     def _text_response(model: str, prompt: str | None) -> str:
         prompt_text = prompt if isinstance(prompt, str) else ""
-        if model == config.PLANNER_MODEL or "plan_schema" in prompt_text:
+        if model == E2E_MODELS.planner or "plan_schema" in prompt_text:
             return _VALID_PLAN_JSON
-        if model == config.CRITIC_PRE_MODEL or "critic" in prompt_text.lower():
+        if model == E2E_MODELS.critic or "critic" in prompt_text.lower():
             if "evidence" in prompt_text.lower():
                 return _CRITIC_POST_SYNTHESIZE
             return _CRITIC_PRE_OK
-        if model == config.CRITIC_POST_MODEL:
-            return _CRITIC_POST_SYNTHESIZE
-        if model == config.SYNTHESIZER_MODEL:
+        if model == E2E_MODELS.synthesizer:
             return _SYNTHESIZER_ANSWER
-        if model == getattr(config, "INTENT_MODEL", "local"):
+        if model == E2E_MODELS.intent:
             return _VALIDATOR_OK
         return _CRITIC_PRE_OK
 
@@ -158,7 +156,7 @@ class TestResearchAgentE2E:
         """Helper: run the agent and collect all events."""
         mock_bridge = _make_mock_llm_bridge()
 
-        agent = ResearchAgent(llm_bridge=mock_bridge)
+        agent = ResearchAgent(llm_bridge=mock_bridge, models=E2E_MODELS)
         events = list(agent.run({"question": query}))
         return events
 
@@ -191,7 +189,7 @@ class TestResearchAgentE2E:
     def test_missing_query_returns_error_event(self):
         """Empty query should yield an error, not crash."""
         mock_bridge = _make_mock_llm_bridge()
-        agent = ResearchAgent(llm_bridge=mock_bridge)
+        agent = ResearchAgent(llm_bridge=mock_bridge, models=E2E_MODELS)
         events = list(agent.run({"query": ""}))
         kinds = [ev.kind for ev in events]
         assert "error" in kinds
@@ -228,3 +226,14 @@ class TestResearchAgentE2E:
             assert ev.kind in valid_kinds, (
                 f"Unexpected event kind {ev.kind!r} in event {ev!r}"
             )
+
+    def test_each_part_of_the_run_calls_its_own_model(self):
+        events = self._run_agent("מה דעתו של אבי דיכטר על שירות חוץ?")
+        models_by_phase = {(ev.payload.get("phase") or ev.name): ev.payload.get("model")
+                           for ev in events if ev.kind == "llm_start"}
+        role_of_phase = {"planner": "planner", "critic_pre": "critic", "critic_post": "critic",
+                         "executor": "executor", "synthesizer": "synthesizer"}
+        assert {phase.split(":")[0].removesuffix("_replan") for phase in models_by_phase} == set(role_of_phase)
+        for phase, model in models_by_phase.items():
+            role = role_of_phase[phase.split(":")[0].removesuffix("_replan")]
+            assert model == getattr(E2E_MODELS, role), phase

@@ -92,7 +92,7 @@
         </button>
       </div>
       <div class="max-w-5xl mx-auto mt-1.5 px-1 flex items-center gap-3">
-        <span class="text-xs text-on-surface-variant/50">Ctrl+Enter לשליחה</span>
+        <span class="hidden md:inline text-xs text-on-surface-variant/50">Ctrl+Enter לשליחה</span>
         <span id="query-error" class="input-error hidden"></span>
       </div>
     </div>
@@ -301,6 +301,16 @@
           <button data-click="replaceGeminiKeyFromSettings">החלפה</button>
           <button data-click="deleteGeminiKeyFromSettings">מחיקה</button>
         </div>
+      </div>
+      <div class="settings-section">
+        <div class="settings-section-header">
+          <div>
+            <div class="settings-label">מודלים</div>
+            <div class="settings-desc" id="model-settings-status"></div>
+          </div>
+          <button class="model-settings-reset" data-click="resetResearchModels">ברירת מחדל</button>
+        </div>
+        <div id="model-settings"></div>
       </div>
       <button id="settings-close" data-click="closeSettings">סגירה</button>
     </div>

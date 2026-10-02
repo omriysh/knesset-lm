@@ -21,6 +21,7 @@ from agent.subgraph.evidence import ToolEnvelope
 from api import validation as valid
 from api.routes import validated_tool_args
 from tests.test_web_gemini_key import KEY_HEADER, google_answers, web  # noqa: F401
+from tests.conftest import TEST_RESEARCH_MODELS
 from tests.test_web_security import load, save
 from utils.tools import ToolSpec, dispatch
 
@@ -120,7 +121,8 @@ class TestWebText:
         assert plain and [m["meeting_id"] for m in plain] == [m["meeting_id"] for m in hidden]
 
     def test_research_start_surrogate_is_400(self, web):
-        response = post_json(web, "/api/research/start", {"question": f"מה {LONE_SURROGATE}"}, KEY_HEADER)
+        response = post_json(web, "/api/research/start", {"question": f"מה {LONE_SURROGATE}", "models": TEST_RESEARCH_MODELS},
+                             KEY_HEADER)
         assert response.status_code == 400
 
     def test_workspace_select_surrogate_is_400_and_not_stored(self, web, real_db):
@@ -149,7 +151,8 @@ class TestWebText:
 
     def test_workspace_ask_surrogate_is_400(self, web):
         sid = save(web, status="done")
-        response = post_json(web, f"/api/research/{sid}/workspace/ask", {"question": f"מה {LONE_SURROGATE}"}, KEY_HEADER)
+        response = post_json(web, f"/api/research/{sid}/workspace/ask",
+                             {"question": f"מה {LONE_SURROGATE}", "model": TEST_RESEARCH_MODELS["intent"]}, KEY_HEADER)
         assert response.status_code == 400
 
 

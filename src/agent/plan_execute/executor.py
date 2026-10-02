@@ -212,12 +212,6 @@ def _normalise_tool_call(tc: object) -> dict:
     return {"name": name, "arguments": args}
 
 
-def _select_model(step: Step) -> str:
-    if (step.cost_hint or "").lower() == "expensive":
-        return config.EXECUTOR_MODEL_HEAVY
-    return config.EXECUTOR_MODEL_LIGHT
-
-
 def _max_tool_calls(step: Step) -> int:  # noqa: ARG001
     return int(getattr(config, "MAX_TOOL_CALLS_PER_STEP", 20))
 
@@ -343,6 +337,8 @@ def execute_step(
     llm_call: Callable,
     budget_tracker: Any = None,
     phase_prefix: str = "executor",
+    *,
+    model: str,
 ) -> ToolEnvelope:
     """Run one step and return its final :class:`ToolEnvelope`.
 
@@ -380,7 +376,6 @@ def execute_step(
         max_tool_calls=max_calls,
     )
 
-    model = _select_model(step)
     messages: list[dict] = [{"role": "user", "content": prompt}]
     collected: list[tuple[str, ToolEnvelope]] = []
     call_args: list[dict] = []   # [{name, args}] — tracked in parallel with collected

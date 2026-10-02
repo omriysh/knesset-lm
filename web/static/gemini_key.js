@@ -128,7 +128,7 @@ export async function agentResponseError(res) {
       : (body.message || 'השרת עמוס כרגע — נסו שוב בעוד כמה דקות'));
   }
   if (res.status === 429) return new Error('יותר מדי בקשות — נסו שוב בעוד דקה');
-  return new Error(body.error || body.message || ('HTTP ' + res.status));
+  return new Error(body.message || body.error || ('HTTP ' + res.status));
 }
 
 function replaceGeminiKeyFromSettings() {

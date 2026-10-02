@@ -2,7 +2,8 @@
 Fill protocol citations from the evidence they cite.
 
 The synthesizer LLM copies each citation's quote by hand and sometimes drops fields the UI
-needs to open and highlight the source (an opinion's verbatim `quote`, `speech_idx`). Each
+needs to show, open and highlight the source (the opinion or speech text, an opinion's verbatim
+`quote`, `speech_idx`). Each
 cited protocol row is matched to its query_protocols evidence row; missing fields are copied
 from it and `source_kind` (opinion / topic / speech) is added. Values the LLM wrote are kept.
 """
@@ -88,7 +89,7 @@ def backfill_protocol_citations(citations: list, store) -> None:
             if match is None:
                 continue
             source_kind, row = match
-            for field in BACKFILLED_FIELDS:
+            for field in (*BACKFILLED_FIELDS, TEXT_FIELD_BY_SOURCE_KIND[source_kind]):
                 if node.get(field) in (None, "") and row.get(field) not in (None, ""):
                     node[field] = row[field]
             node["source_kind"] = source_kind

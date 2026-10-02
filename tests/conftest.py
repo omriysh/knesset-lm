@@ -286,7 +286,29 @@ def upstream_down(monkeypatch):
     _clear_upstream_caches()
 
 
+# ── Research models ───────────────────────────────────────────────────────────
+
+TEST_RESEARCH_MODELS = {
+    "intent": "gemma-4-31b-it", "planner": "gemini-3.5-flash", "critic": "gemini-3.5-flash-lite",
+    "executor": "gemini-3.1-flash-lite", "synthesizer": "gemini-3.8-flash", "answer_editor": "gemini-3.1-flash-lite",
+}
+TEST_KEY_TEXT_MODELS = sorted(set(TEST_RESEARCH_MODELS.values()) | {"gemini-2.5-pro"})
+
+
 # ── Autouse ───────────────────────────────────────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def google_lists_test_models(monkeypatch):
+    """Every visitor key can call TEST_KEY_TEXT_MODELS; no test asks Google for a key's models. Yields the real
+    ask_google_for_text_models."""
+    import web.gemini_keys as gemini_keys
+    real_ask_google_for_text_models = gemini_keys.ask_google_for_text_models
+    monkeypatch.setattr(gemini_keys, "ask_google_for_text_models",
+                        lambda key: [{"id": model_id, "name": model_id} for model_id in TEST_KEY_TEXT_MODELS])
+    gemini_keys.forget_gemini_key_verdicts()
+    yield real_ask_google_for_text_models
+    gemini_keys.forget_gemini_key_verdicts()
+
 
 @pytest.fixture(autouse=True)
 def _no_rate_limit(monkeypatch):

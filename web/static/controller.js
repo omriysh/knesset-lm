@@ -17,8 +17,10 @@ import {
 } from './render/chat.js';
 import { appendStagesCard, wireStatusToggle } from './render/stages.js';
 import { applyEvidenceCitations, buildSourcesHtml } from './render/citations.js';
+import { addAnswerExportButton } from './render/export.js';
 import { scheduleReconnect } from './reconnect.js';
 import { requireGeminiKey } from './gemini_key.js';
+import { getResearchModels } from './models.js';
 
 export async function startQuery() {
   const question = queryInput.value.trim();
@@ -44,7 +46,7 @@ export async function startQuery() {
   state.currentStagesEl = stagesEl;
   wireStatusToggle(statusEl, stagesEl);
 
-  await runSession('/api/research/start', { question }, statusEl, stagesEl);
+  await runSession('/api/research/start', { question, models: getResearchModels() }, statusEl, stagesEl);
 }
 
 export async function submitResponse(outputVar, value) {
@@ -90,6 +92,7 @@ function finalize(session, statusEl) {
       body.innerHTML = renderMarkdown(session.rawAnswer);
       const cursor = session.agentEl.querySelector('.stream-cursor');
       if (cursor) cursor.remove();
+      addAnswerExportButton(session.agentEl);
       if (session.pendingFootnotes.length > 0) {
         applyEvidenceCitations(body, session.pendingFootnotes, session.pendingCitations, state.sessionId);
         session.agentEl.insertAdjacentHTML(

@@ -26,6 +26,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 import pytest
 
 import config
+from agent.model_choice import ResearchModels
+from tests.conftest import TEST_RESEARCH_MODELS
 from retrieval import knesset_db_store as store
 from tests.test_web_gemini_key import KEY_HEADER, FakeRunner, google_answers, sse_events, web  # noqa: F401
 
@@ -34,12 +36,13 @@ STATIC_DIR = WEB_DIR / "static"
 WELL_FORMED_MEETING_ID = "2199065"
 
 
-def save(web, status="awaiting_user", checkpoint=None, workspace_data=None) -> str:
+def save(web, status="awaiting_user", checkpoint=None, workspace_data=None, models=TEST_RESEARCH_MODELS) -> str:
     from web.session import ResearchSession, save_session
     sid = str(uuid.uuid4())
     save_session(ResearchSession(session_id=sid, status=status, original_question="שאלה",
                                  created_at="2026-09-26T00:00:00.000Z", updated_at="2026-09-26T00:00:00.000Z",
-                                 machine_checkpoint=checkpoint, workspace_data=workspace_data), web.sessions)
+                                 machine_checkpoint=checkpoint, workspace_data=workspace_data, models=models),
+                 web.sessions)
     return sid
 
 
@@ -127,6 +130,14 @@ class TestMkPhoto:
 
 
 # ── H2 request body limit + workspace/select ─────────────────────────────────
+
+class TestStaticFiles:
+    def test_static_files_are_revalidated_so_a_deploy_reaches_open_browsers(self, web):
+        response = web.client.get("/static/render/export.js")
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-cache"
+        assert response.headers.get("etag")
+
 
 class TestBodyLimit:
     def test_oversized_body_is_413(self, web):
@@ -226,10 +237,15 @@ class FakeLocalBackend:
 
 
 @pytest.fixture()
-def local_llm(web):
+def local_llm(web, monkeypatch):
     backend = FakeLocalBackend()
-    web.app.app.state.backend = backend
+    backend.requested_models = []
+    monkeypatch.setattr(web.app, "research_llm_backend",
+                        lambda gemini_api_key, model: backend.requested_models.append(model) or backend)
     return backend
+
+
+ASK_BODY = {"question": "מה נאמר?", "model": TEST_RESEARCH_MODELS["intent"]}
 
 
 def ask_url(sid):
@@ -237,19 +253,35 @@ def ask_url(sid):
 
 
 class TestWorkspaceAsk:
+    def test_answers_with_the_model_the_visitor_sent(self, web, local_llm):
+        body = {**ASK_BODY, "model": "gemini-2.5-pro"}
+        r = web.client.post(ask_url(save(web, status="done")), json=body, headers=KEY_HEADER)
+        assert r.status_code == 200
+        assert local_llm.requested_models == ["gemini-2.5-pro"]
+
+    def test_requires_a_model(self, web, local_llm):
+        r = web.client.post(ask_url(save(web, status="done")), json={"question": "מה נאמר?"}, headers=KEY_HEADER)
+        assert r.status_code == 400 and local_llm.stream_calls == []
+
+    def test_model_the_key_cannot_call_is_400(self, web, local_llm):
+        body = {**ASK_BODY, "model": "gemini-9-ultra"}
+        r = web.client.post(ask_url(save(web, status="done")), json=body, headers=KEY_HEADER)
+        assert r.status_code == 400 and r.json()["error"] == "gemini_model_unavailable"
+        assert local_llm.stream_calls == []
+
     def test_requires_a_valid_gemini_key(self, web, local_llm):
         sid = save(web, status="done")
-        r = web.client.post(ask_url(sid), json={"question": "מה נאמר?"})
+        r = web.client.post(ask_url(sid), json=ASK_BODY)
         assert r.status_code == 401
         assert local_llm.stream_calls == []
 
     def test_rejected_key_is_401(self, web, local_llm, google_answers):
         google_answers.verdict = False
-        r = web.client.post(ask_url(save(web, status="done")), json={"question": "מה נאמר?"}, headers=KEY_HEADER)
+        r = web.client.post(ask_url(save(web, status="done")), json=ASK_BODY, headers=KEY_HEADER)
         assert r.status_code == 401 and local_llm.stream_calls == []
 
     def test_answers_with_capped_tokens_and_no_thinking(self, web, local_llm):
-        r = web.client.post(ask_url(save(web, status="done")), json={"question": "מה נאמר?"}, headers=KEY_HEADER)
+        r = web.client.post(ask_url(save(web, status="done")), json=ASK_BODY, headers=KEY_HEADER)
         assert r.status_code == 200
         assert sse_events(r.text) == ["token", "token", "done"]
         assert local_llm.stream_calls == [config.WEB_WORKSPACE_ASK_MAX_TOKENS]
@@ -257,26 +289,26 @@ class TestWorkspaceAsk:
 
     def test_busy_local_llm_is_503(self, web, local_llm, monkeypatch):
         slots = threading.BoundedSemaphore(1)
-        monkeypatch.setattr(web.app, "_LOCAL_LLM_ASK_SLOTS", slots)
+        monkeypatch.setattr(web.app, "_WORKSPACE_ASK_SLOTS", slots)
         assert slots.acquire(blocking=False)
-        r = web.client.post(ask_url(save(web, status="done")), json={"question": "מה נאמר?"}, headers=KEY_HEADER)
+        r = web.client.post(ask_url(save(web, status="done")), json=ASK_BODY, headers=KEY_HEADER)
         assert r.status_code == 503 and r.json()["error"] == "busy"
         assert local_llm.stream_calls == []
         slots.release()
 
     def test_slot_is_released_after_the_answer(self, web, local_llm, monkeypatch):
         slots = threading.BoundedSemaphore(1)
-        monkeypatch.setattr(web.app, "_LOCAL_LLM_ASK_SLOTS", slots)
+        monkeypatch.setattr(web.app, "_WORKSPACE_ASK_SLOTS", slots)
         for _ in range(2):
-            assert web.client.post(ask_url(save(web, status="done")), json={"question": "מה נאמר?"},
+            assert web.client.post(ask_url(save(web, status="done")), json=ASK_BODY,
                                    headers=KEY_HEADER).status_code == 200
         assert slots.acquire(blocking=False)
 
     @pytest.mark.parametrize("body", [
-        {"question": "מה נאמר?", "meeting_id": "١٢٣"},
-        {"question": "מה נאמר?", "meeting_id": "../x"},
-        {"question": "<script>alert(1)</script>"},
-        {"question": "א" * 2001},
+        {**ASK_BODY, "meeting_id": "١٢٣"},
+        {**ASK_BODY, "meeting_id": "../x"},
+        {**ASK_BODY, "question": "<script>alert(1)</script>"},
+        {**ASK_BODY, "question": "א" * 2001},
     ])
     def test_invalid_input_is_400(self, web, local_llm, body):
         r = web.client.post(ask_url(save(web, status="done")), json=body, headers=KEY_HEADER)
@@ -295,7 +327,7 @@ class TestWorkspaceAsk:
 
         slots = threading.BoundedSemaphore(1)
         slots.acquire()
-        webapp._stream_local_llm_answer(backend, [], emit, stop_requested, slots)
+        webapp._stream_workspace_answer(backend, [], emit, stop_requested, slots)
         tokens = [item for item in emitted if not isinstance(item, tuple) and item is not webapp._SENTINEL]
         assert len(tokens) <= 1
         assert backend.closed
@@ -404,7 +436,7 @@ class TestRespondRace:
 
 # ── M6 research slots + stop on disconnect ───────────────────────────────────
 
-START = ("/api/research/start", {"question": "מה אמרו על דיור ציבורי?"})
+START = ("/api/research/start", {"question": "מה אמרו על דיור ציבורי?", "models": TEST_RESEARCH_MODELS})
 
 
 class TestResearchSlots:
@@ -465,8 +497,8 @@ def research_run(web, sid, stop_requested, emit, **overrides):
     import web.app as webapp
     from web.concurrency import ResearchRunSlots
     fields = dict(session_id=sid, question="שאלה", created_at="2026-09-26T00:00:00.000Z",
-                  sessions_dir=web.sessions, machine=None, backend=None, tool_registry={}, gemini_api_key=None,
-                  resume=None, user_response=None, workspace_data=None, install_llm_event_sink=False,
+                  sessions_dir=web.sessions, machine=None, tool_registry={}, gemini_api_key=None,
+                  models=ResearchModels.from_dict(TEST_RESEARCH_MODELS), resume=None, user_response=None, workspace_data=None, install_llm_event_sink=False,
                   log_prefix="test", emit=emit, stop_requested=stop_requested,
                   slots=ResearchRunSlots(max_running=1))
     fields.update(overrides)
@@ -474,7 +506,7 @@ def research_run(web, sid, stop_requested, emit, **overrides):
 
 
 class TestStopOnDisconnect:
-    def test_run_stops_and_session_is_marked(self, web, monkeypatch):
+    def test_run_stops_and_session_is_marked(self, web, local_llm, monkeypatch):
         import web.app as webapp
         monkeypatch.setattr(webapp, "MachineRunner", EndlessRunner)
         EndlessRunner.closed = False
@@ -495,7 +527,7 @@ class TestStopOnDisconnect:
         assert load(web, sid).status == "error"
         assert run.slots.acquire(threading.Event(), on_queued=lambda: None)
 
-    def test_paused_run_is_saved_awaiting_user_even_after_disconnect(self, web, monkeypatch):
+    def test_paused_run_is_saved_awaiting_user_even_after_disconnect(self, web, local_llm, monkeypatch):
         import web.app as webapp
         monkeypatch.setattr(webapp, "MachineRunner", PausingRunner)
         sid = save(web, status="running")
@@ -638,7 +670,6 @@ class TestWebProcessSettings:
         monkeypatch.setattr(config, "API_RETRY_ATTEMPTS", 5)
         monkeypatch.setattr(config, "WEB_REQUIRE_USER_GEMINI_KEY", False)
         monkeypatch.setattr(webapp, "StateMachine", lambda path: SimpleNamespace(name="m", version=1))
-        monkeypatch.setattr(webapp, "GemmaLlamaBackend", lambda url: None)
         monkeypatch.setattr(webapp, "build_tool_registry", lambda machine, **kwargs: {})
         monkeypatch.setattr(settings, "SESSIONS_DIR", tmp_path / "lifespan_sessions")
 

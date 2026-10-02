@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 from typing import Generator
@@ -158,19 +159,12 @@ _GOOGLE_SEM = threading.Semaphore(5)  # cap concurrent Google API generations
 
 
 def _model_supports_thinking(model: str) -> bool:
-    """True for Gemini 2.5+ models that can emit thought tokens.
-
-    Explicit 2.5+ versions and alias names (e.g. gemini-flash-latest) that
-    Google routes to the current-generation thinking-capable model are both
-    accepted.  Gemini 2.0 and Gemma models do not support thinking.
-    """
-    if model.startswith("gemini-2.5"):
-        return True
-    # "*-latest" aliases (gemini-flash-latest, gemini-pro-latest, …) resolve
-    # to the current generation which is 2.5+ and supports thinking.
+    """True for Gemini 2.5 and later, and for the "*-latest" aliases Google routes to a current
+    (thinking) Gemini. Gemini 2.0 and Gemma models do not think."""
     if model.startswith("gemini-") and model.endswith("-latest"):
         return True
-    return False
+    version = re.match(r"gemini-(\d+)(?:\.(\d+))?", model)
+    return bool(version) and (int(version.group(1)), int(version.group(2) or 0)) >= (2, 5)
 
 
 class GoogleBackend(LLMBackend):

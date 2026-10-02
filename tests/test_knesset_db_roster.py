@@ -179,3 +179,18 @@ def test_get_mk_positions_groups_odata_rows(monkeypatch):
 
 def test_mk_full_name_joins_first_and_last():
     assert knesset_db.mk_full_name(OKNESSET_MEMBER) == "אביחי אברהם בוארון"
+
+
+def test_committee_position_is_the_role_not_knessets_truncated_duty_text(monkeypatch):
+    """OData's DutyDesc repeats the committee name after the role and is cut off for long names."""
+    truncated_row = {"PersonID": 30106, "PositionID": 41, "CommitteeID": 4400,
+                     "CommitteeName": "הוועדה המשותפת של ועדת הכנסת וועדת הכספים לתקציב הכנסת לפי סעיף 3 לחוק",
+                     "DutyDesc": 'יו"ר הוועדה המשותפת של ועדת הכנסת וועדת הכספים לתקציב הכנסת לפ',
+                     "StartDate": "2023-07-18T00:00:00+03:00", "FinishDate": None, "IsCurrent": True}
+    monkeypatch.setattr(knesset_db, "_fetch_person_positions", lambda knesset_num: (truncated_row,))
+    monkeypatch.setattr(knesset_db, "_position_names", lambda: {41: 'יו"ר ועדה'})
+
+    committee_position = knesset_db.get_mk_positions(30106, 25)["committee_positions"][0]
+
+    assert committee_position["position"] == 'יו"ר ועדה'
+    assert committee_position["committee_name"] == truncated_row["CommitteeName"]

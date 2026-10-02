@@ -179,9 +179,11 @@ def get_mk_positions(person_id, knesset_num: int) -> dict:
         period = {"start_date": row.get("StartDate"), "finish_date": row.get("FinishDate"),
                   "is_current": row.get("IsCurrent"), "knesset": knesset_num}
         if row.get("CommitteeName"):
+            # DutyDesc is the role followed by the committee name, cut off for long names
+            committee_role = position_names.get(row.get("PositionID")) or position
             grouped["committee_positions"].append({"committee_id": row.get("CommitteeID"),
                                                    "committee_name": row["CommitteeName"].strip(),
-                                                   "position": position, **period})
+                                                   "position": committee_role, **period})
         elif row.get("GovMinistryName"):
             grouped["govministries"].append({"govministry_name": row["GovMinistryName"].strip(),
                                              "position_name": position, **period})

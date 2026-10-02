@@ -180,6 +180,34 @@ class TestHits:
         scores = [h["score"] for h in hits]
         assert all(0 < s <= 1 for s in scores) and max(scores) == pytest.approx(1.0)
 
+    def test_hits_carry_the_keyword_ranges_in_the_speech(self, client, session_id, real_db, real_conn):
+        word = "הוועדה"
+        hits = client.get(f"/api/research/{session_id}/meeting/{real_db.meeting_id}/hits",
+                          params={"q": word}).json()["hits"]
+        assert hits
+        text_by_idx = {r["idx"]: r["text"] for r in real_conn.execute(
+            "SELECT idx, text FROM speeches WHERE meeting_id = ?", (real_db.meeting_id,))}
+        for hit in hits:
+            text = text_by_idx[hit["speech_idx"]]
+            assert hit["ranges"] and hit["matched_words"] == 1 and hit["query_words"] == 1
+            for offset, length in hit["ranges"]:
+                assert 0 <= offset and length > 0 and offset + length <= len(text)
+                assert "ועד" in text[offset:offset + length]
+            assert hit["ranges"] == sorted(hit["ranges"])
+
+    def test_every_query_word_is_marked(self, client, session_id, real_db, real_conn):
+        query = "הוועדה חבר"
+        hits = client.get(f"/api/research/{session_id}/meeting/{real_db.meeting_id}/hits",
+                          params={"q": query}).json()["hits"]
+        both = [h for h in hits if h["matched_words"] == 2]
+        if not both:
+            pytest.skip("no speech with both words")
+        text = real_conn.execute("SELECT text FROM speeches WHERE meeting_id = ? AND idx = ?",
+                                 (real_db.meeting_id, both[0]["speech_idx"])).fetchone()[0]
+        marked = [text[o:o + n] for o, n in both[0]["ranges"]]
+        assert any("ועד" in m for m in marked) and any("חבר" in m for m in marked)
+        assert all(h["query_words"] == 2 for h in hits)
+
     def test_empty_q(self, client, session_id, real_db):
         r = client.get(f"/api/research/{session_id}/meeting/{real_db.meeting_id}/hits", params={"q": ""})
         assert r.status_code == 200 and r.json() == {"hits": []}

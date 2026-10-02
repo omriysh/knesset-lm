@@ -22,11 +22,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 import config
+from tests.conftest import TEST_RESEARCH_MODELS
 
 VISITOR_KEY = "AIzaSyVisitorKeyForTests_0123456789abc"
 KEY_HEADER = {"X-Gemini-Api-Key": VISITOR_KEY}
 AGENT_POSTS = [
-    ("/api/research/start", {"question": "מה אמרו על דיור ציבורי?"}),
+    ("/api/research/start", {"question": "מה אמרו על דיור ציבורי?", "models": TEST_RESEARCH_MODELS}),
 ]
 
 
@@ -50,8 +51,10 @@ class FakeRunner:
     created: list["FakeRunner"] = []
     events: list[tuple] = [("token", "תשובה"), ("done", {})]
 
-    def __init__(self, machine, backend, tool_registry, gemini_api_key=None):
+    def __init__(self, machine, backend, tool_registry, gemini_api_key=None, models=None, backend_by_model_role=None):
         self.gemini_api_key = gemini_api_key
+        self.models = models
+        self.backend_by_model_role = backend_by_model_role
         FakeRunner.created.append(self)
 
     def run_stream(self, question, resume=None, user_response=None):
@@ -67,7 +70,6 @@ def web(real_db, tmp_path, monkeypatch):
     webapp.app.state.settings = settings
     webapp.app.state.sessions_dir = sessions
     webapp.app.state.machine = SimpleNamespace(name="test_machine", version=2)
-    webapp.app.state.backend = None
     webapp.app.state.tool_registry = {}
     monkeypatch.setattr(webapp, "MachineRunner", FakeRunner)
     FakeRunner.created = []
@@ -81,7 +83,7 @@ def awaiting_session(web) -> str:
     save_session(ResearchSession(session_id=sid, status="awaiting_user", original_question="שאלה",
                                  created_at="2026-09-26T00:00:00.000Z", updated_at="2026-09-26T00:00:00.000Z",
                                  machine_checkpoint={"question": "שאלה", "pending_ui_event": {
-                                     "ui": "text_input", "output_var": "x"}}), web.sessions)
+                                     "ui": "text_input", "output_var": "x"}}, models=TEST_RESEARCH_MODELS), web.sessions)
     return sid
 
 
@@ -239,6 +241,40 @@ class TestKeyReachesGemini:
         agent = runner.make_subgraph_agent(RecordingAgent)
         assert agent.llm_bridge._api_key == VISITOR_KEY
 
+    def test_runner_gives_subgraph_agent_the_runs_models(self, minimal_machine_path):
+        from agent.machine import StateMachine
+        from agent.model_choice import ResearchModels
+        from agent.runner import MachineRunner
+
+        class RecordingAgent:
+            def __init__(self, llm_bridge=None, models=None):
+                self.models = models
+
+        models = ResearchModels.from_dict(TEST_RESEARCH_MODELS)
+        runner = MachineRunner(StateMachine(minimal_machine_path), backend=None, tool_registry={},
+                               gemini_api_key=VISITOR_KEY, models=models)
+        assert runner.make_subgraph_agent(RecordingAgent).models == models
+
+    @pytest.mark.parametrize("model_role,expected_answer", [("answer_editor", "gemini-editor"), (None, "gemma-default")])
+    def test_llm_node_runs_on_the_backend_of_its_model_role(self, minimal_machine_path, model_role, expected_answer):
+        from agent.llm.base import TokenEvent
+        from agent.llm.google import GoogleBackend
+        from agent.machine import StateMachine
+        from agent.runner import MachineRunner
+
+        class AnswersWithItsModelName(GoogleBackend):
+            def stream(self, messages, tools=None, temperature=None, max_tokens=None):
+                yield TokenEvent(self._model)
+
+        runner = MachineRunner(StateMachine(minimal_machine_path),
+                               backend=AnswersWithItsModelName(model="gemma-default", api_key=VISITOR_KEY),
+                               tool_registry={}, gemini_api_key=VISITOR_KEY,
+                               backend_by_model_role={"answer_editor": AnswersWithItsModelName(
+                                   model="gemini-editor", api_key=VISITOR_KEY)})
+        node = {"id": "llm", "type": "llm_call", "data": {"model_role": model_role} if model_role else {}}
+        node_done = [data for kind, data in runner._run_node(node, "שאלה", "system", []) if kind == "node_done"]
+        assert node_done[0]["content"] == expected_answer
+
 
 class TestServerKeyNeverUsed:
     def test_fallback_to_local_is_off(self):
@@ -294,3 +330,127 @@ class TestSessionsCannotBeDeleted:
 
 def test_legacy_query_route_is_gone(web):
     assert web.client.post("/api/query", json=AGENT_POSTS[0][1], headers=KEY_HEADER).status_code in (404, 405)
+
+
+class TestResearchModelChoice:
+    """The visitor picks every model; the server has no defaults and checks them against the key's model list."""
+
+    def start(self, web, **body_overrides):
+        body = {**AGENT_POSTS[0][1], **body_overrides}
+        return web.client.post("/api/research/start", json=body, headers=KEY_HEADER)
+
+    def test_start_without_models_is_400_and_runs_nothing(self, web):
+        body = {key: value for key, value in AGENT_POSTS[0][1].items() if key != "models"}
+        r = web.client.post("/api/research/start", json=body, headers=KEY_HEADER)
+        assert r.status_code == 400 and "models" in r.json()["error"]
+        assert FakeRunner.created == []
+
+    def test_start_missing_one_role_is_400(self, web):
+        models = {role: model for role, model in TEST_RESEARCH_MODELS.items() if role != "critic"}
+        r = self.start(web, models=models)
+        assert r.status_code == 400 and "critic" in r.json()["error"]
+        assert FakeRunner.created == []
+
+    @pytest.mark.parametrize("bad_model", ["gpt-4o", "gemini-", "gemini-3.5-flash; drop", "GEMINI-3.5-FLASH",
+                                           "gemini-" + "x" * 61, "models/gemini-3.5-flash"])
+    def test_malformed_model_id_is_400(self, web, bad_model):
+        r = self.start(web, models={**TEST_RESEARCH_MODELS, "planner": bad_model})
+        assert r.status_code == 400
+        assert FakeRunner.created == []
+
+    def test_model_the_key_cannot_call_is_400_naming_it(self, web):
+        r = self.start(web, models={**TEST_RESEARCH_MODELS, "synthesizer": "gemini-9-ultra"})
+        assert r.status_code == 400
+        assert r.json()["error"] == "gemini_model_unavailable"
+        assert r.json()["models"] == ["gemini-9-ultra"] and "gemini-9-ultra" in r.json()["message"]
+        assert FakeRunner.created == []
+
+    def test_unreachable_model_list_is_503(self, web, monkeypatch):
+        import web.gemini_keys as gemini_keys
+        monkeypatch.setattr(gemini_keys, "ask_google_for_text_models", lambda key: None)
+        r = self.start(web)
+        assert r.status_code == 503 and r.json()["error"] == "gemini_models_unverified"
+        assert FakeRunner.created == []
+
+    def test_runner_gets_each_role_its_model(self, web):
+        from agent.model_choice import ResearchModels
+        assert self.start(web).status_code == 200
+        runner = FakeRunner.created[0]
+        assert runner.models == ResearchModels.from_dict(TEST_RESEARCH_MODELS)
+        backend_models = {role: backend._model for role, backend in runner.backend_by_model_role.items()}
+        assert backend_models == {"intent": TEST_RESEARCH_MODELS["intent"],
+                                  "answer_editor": TEST_RESEARCH_MODELS["answer_editor"]}
+
+    def test_session_keeps_the_models_and_respond_reuses_them(self, web):
+        from agent.model_choice import ResearchModels
+        from web.session import load_session
+        body = self.start(web).text
+        sid = json.loads(body.split("data: ", 1)[1].split("\n", 1)[0])["session_id"]
+        assert load_session(sid, web.sessions).models == TEST_RESEARCH_MODELS
+
+        paused_sid = awaiting_session(web)
+        r = web.client.post(f"/api/research/{paused_sid}/respond", json={"output_var": "x", "value": "כן"},
+                            headers=KEY_HEADER)
+        assert r.status_code == 200
+        assert FakeRunner.created[-1].models == ResearchModels.from_dict(TEST_RESEARCH_MODELS)
+
+    def test_respond_to_a_session_saved_without_models_is_409(self, web):
+        from dataclasses import replace
+        from web.session import load_session, save_session
+        sid = awaiting_session(web)
+        save_session(replace(load_session(sid, web.sessions), models=None), web.sessions)
+        r = web.client.post(f"/api/research/{sid}/respond", json={"output_var": "x", "value": "כן"},
+                            headers=KEY_HEADER)
+        assert r.status_code == 409
+        assert FakeRunner.created == []
+
+
+class TestKeyModelList:
+    def test_lists_the_keys_text_models(self, web):
+        from tests.conftest import TEST_KEY_TEXT_MODELS
+        r = web.client.get("/api/gemini/models", headers=KEY_HEADER)
+        assert r.status_code == 200
+        assert [model["id"] for model in r.json()["models"]] == TEST_KEY_TEXT_MODELS
+
+    def test_requires_a_key(self, web):
+        assert web.client.get("/api/gemini/models").status_code == 401
+
+    def test_list_is_cached_per_key(self, web, monkeypatch):
+        import web.gemini_keys as gemini_keys
+        asked = []
+        monkeypatch.setattr(gemini_keys, "ask_google_for_text_models",
+                            lambda key: asked.append(key) or [{"id": "gemini-3.5-flash", "name": "Gemini 3.5 Flash"}])
+        for _ in range(2):
+            assert web.client.get("/api/gemini/models", headers=KEY_HEADER).status_code == 200
+        assert asked == [VISITOR_KEY]
+
+    def test_google_listing_keeps_text_generation_models_across_pages(self, monkeypatch, google_lists_test_models):
+        import web.gemini_keys as gemini_keys
+        pages = {
+            None: {"models": [
+                {"name": "models/gemini-3.5-flash", "displayName": "Gemini 3.5 Flash",
+                 "supportedGenerationMethods": ["generateContent", "countTokens"]},
+                {"name": "models/text-embedding-004", "supportedGenerationMethods": ["embedContent"]},
+                {"name": "models/gemini-embedding-001", "supportedGenerationMethods": ["generateContent"]},
+                {"name": "models/gemini-3.1-flash-tts", "supportedGenerationMethods": ["generateContent"]},
+                {"name": "models/gemini-3-omni", "supportedGenerationMethods": ["generateContent"]},
+                {"name": "models/gemini-3-transcribe", "supportedGenerationMethods": ["generateContent"]},
+                {"name": "models/imagen-4", "supportedGenerationMethods": ["predict"]},
+            ], "nextPageToken": "page2"},
+            "page2": {"models": [
+                {"name": "models/gemma-4-31b-it", "displayName": "Gemma 4 31B",
+                 "supportedGenerationMethods": ["generateContent"]},
+            ]},
+        }
+        requested = []
+
+        def fake_get(url, headers, params, timeout):
+            requested.append((headers["x-goog-api-key"], params.get("pageToken")))
+            return SimpleNamespace(raise_for_status=lambda: None, json=lambda: pages[params.get("pageToken")])
+
+        monkeypatch.setattr(gemini_keys.requests, "get", fake_get)
+        assert google_lists_test_models(VISITOR_KEY) == [
+            {"id": "gemini-3.5-flash", "name": "Gemini 3.5 Flash"},
+            {"id": "gemma-4-31b-it", "name": "Gemma 4 31B"},
+        ]
+        assert requested == [(VISITOR_KEY, None), (VISITOR_KEY, "page2")]

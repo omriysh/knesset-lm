@@ -21,6 +21,7 @@ import {
   appendStatus, setStatusMsg, appendAgentCard, appendErrorMsg,
 } from './render/chat.js';
 import { applyEvidenceCitations, buildSourcesHtml } from './render/citations.js';
+import { addAnswerExportButton } from './render/export.js';
 import { renderUserInputPanel } from './render/user_input.js';
 import { mapToolResults } from './transforms.js';
 import { esc } from './util.js';
@@ -205,6 +206,7 @@ function replayDone(data, replay) {
       body.innerHTML = replay.rawAnswer ? renderMarkdown(replay.rawAnswer) : '';
       const cursor = replay.agentEl.querySelector('.stream-cursor');
       if (cursor) cursor.remove();
+      if (replay.rawAnswer) addAnswerExportButton(replay.agentEl);
       if (replay.pendingFootnotes.length) {
         applyEvidenceCitations(body, replay.pendingFootnotes, replay.pendingCitations, replay.sid);
         replay.agentEl.insertAdjacentHTML(

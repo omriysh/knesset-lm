@@ -167,7 +167,7 @@ class TestExecuteStepCallsTool:
         step = _make_step()
         llm_call = _make_llm_call_tool_then_record("find_mk")
 
-        result = execute_step(step, registry, store, llm_call)
+        result = execute_step(step, registry, store, llm_call, model="executor-model")
 
         assert isinstance(result, ToolEnvelope)
 
@@ -177,7 +177,7 @@ class TestExecuteStepCallsTool:
         step = _make_step()
         llm_call = _make_llm_call_tool_then_record("find_mk")
 
-        result = execute_step(step, registry, store, llm_call)
+        result = execute_step(step, registry, store, llm_call, model="executor-model")
 
         # The result envelope should have a summary from record_evidence turn
         assert isinstance(result.summary, str)
@@ -188,7 +188,7 @@ class TestExecuteStepCallsTool:
         step = _make_step()
         llm_call = _make_llm_call_skip()
 
-        result = execute_step(step, registry, store, llm_call)
+        result = execute_step(step, registry, store, llm_call, model="executor-model")
 
         assert isinstance(result, ToolEnvelope)
         assert result.error == "skip"
@@ -199,7 +199,7 @@ class TestExecuteStepCallsTool:
         step = _make_step()
         llm_call = _make_llm_call_abort()
 
-        result = execute_step(step, registry, store, llm_call)
+        result = execute_step(step, registry, store, llm_call, model="executor-model")
 
         assert isinstance(result, ToolEnvelope)
         assert result.error is not None
@@ -211,7 +211,7 @@ class TestExecuteStepCallsTool:
         def dummy_llm(**kwargs):
             return {"content": "", "tool_calls": []}
 
-        result = execute_step(None, registry, store, dummy_llm)
+        result = execute_step(None, registry, store, dummy_llm, model="executor-model")
         assert isinstance(result, ToolEnvelope)
         assert result.error is not None
 
@@ -223,7 +223,7 @@ class TestExecuteStepCallsTool:
         step = _make_step(allowed_tools=("find_mk",))
         llm_call = _make_llm_call_tool_then_record("deep_dive_meeting")
 
-        result = execute_step(step, registry, store, llm_call)
+        result = execute_step(step, registry, store, llm_call, model="executor-model")
 
         assert isinstance(result, ToolEnvelope)
         assert result.error is not None
@@ -247,7 +247,7 @@ class TestExecuteStepBudgetEnforcement:
 
         # execute_step calls _charge(budget_tracker, "tool_call") first
         # With max_tool_calls=0, the first call (1 > 0) should trigger cap
-        result = execute_step(step, registry, store, dummy_llm, budget_tracker=budget)
+        result = execute_step(step, registry, store, dummy_llm, budget_tracker=budget, model="executor-model")
 
         assert isinstance(result, ToolEnvelope)
         assert result.error is not None
@@ -283,7 +283,7 @@ class TestExecuteStepBudgetEnforcement:
         # So this should NOT raise — it runs the step normally (cap check returns True
         # because the exception is swallowed).
         result = execute_step(step, registry, store, dummy_llm,
-                              budget_tracker=AlwaysExplodingBudget())
+                              budget_tracker=AlwaysExplodingBudget(), model="executor-model")
         assert isinstance(result, ToolEnvelope)
 
     def test_none_budget_tracker_no_error(self, tmp_path):
@@ -293,7 +293,7 @@ class TestExecuteStepBudgetEnforcement:
         step = _make_step()
         llm_call = _make_llm_call_tool_then_record("find_mk")
 
-        result = execute_step(step, registry, store, llm_call, budget_tracker=None)
+        result = execute_step(step, registry, store, llm_call, budget_tracker=None, model="executor-model")
 
         assert isinstance(result, ToolEnvelope)
 
@@ -310,7 +310,7 @@ class TestExecuteStepLLMErrorHandling:
         def failing_llm(**kwargs):
             raise RuntimeError("LLM unavailable")
 
-        result = execute_step(step, registry, store, failing_llm)
+        result = execute_step(step, registry, store, failing_llm, model="executor-model")
 
         assert isinstance(result, ToolEnvelope)
         assert result.error is not None
@@ -324,7 +324,7 @@ class TestExecuteStepLLMErrorHandling:
         def no_tool_llm(**kwargs):
             return {"content": "I don't know what to do", "tool_calls": []}
 
-        result = execute_step(step, registry, store, no_tool_llm)
+        result = execute_step(step, registry, store, no_tool_llm, model="executor-model")
 
         assert isinstance(result, ToolEnvelope)
         assert result.error is not None

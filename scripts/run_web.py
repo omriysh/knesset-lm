@@ -22,7 +22,6 @@ peer stays the local cloudflared and CF-Connecting-IP gives the real client IP.
 Prerequisites
 -------------
   - Data/knesset.db built (scripts/build_knesset_db.py)
-  - llama-server running for agent answers (not needed to start the server)
 """
 
 import argparse
@@ -73,8 +72,6 @@ def main() -> None:
     )
     ap.add_argument("--machine",     type=Path, default=None,
                     help="Path to machine JSON (default: machines/knesset_agent.json)")
-    ap.add_argument("--llama-server", default=None,
-                    help=f"llama-server URL (default: {_cfg.LLAMA_SERVER})")
     ap.add_argument("--top-k-browse", dest="top_k_browse", type=int, default=None,
                     help=f"Meetings per reading-tab search (default: {_cfg.TOP_K_BROWSE})")
     ap.add_argument("--port",        type=int, default=5000,
@@ -96,8 +93,6 @@ def main() -> None:
     # Must mutate os.environ before the call — a copied dict has no effect.
     if args.machine:
         os.environ["KNESSET_MACHINE_PATH"] = str(args.machine.resolve())
-    if args.llama_server:
-        os.environ["KNESSET_LLAMA_SERVER"] = args.llama_server
     if args.top_k_browse is not None:
         os.environ["KNESSET_TOP_K_BROWSE"] = str(args.top_k_browse)
     os.environ["KNESSET_PORT"] = str(args.port)

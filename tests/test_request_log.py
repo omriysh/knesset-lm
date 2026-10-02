@@ -19,6 +19,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import config
+from tests.conftest import TEST_RESEARCH_MODELS
 from api import request_log
 
 VISITOR_KEY = "AIzaSyVisitorKeyForTests_0123456789abc"
@@ -49,7 +50,7 @@ def google_answers(monkeypatch):
 class FakeRunner:
     events: list = []
 
-    def __init__(self, machine, backend, tool_registry, gemini_api_key=None):
+    def __init__(self, machine, backend, tool_registry, gemini_api_key=None, **model_choice):
         pass
 
     def run_stream(self, question, resume=None, user_response=None):
@@ -68,7 +69,6 @@ def web(real_db, tmp_path, monkeypatch, google_answers, log_dir):
     webapp.app.state.settings = settings
     webapp.app.state.sessions_dir = sessions
     webapp.app.state.machine = SimpleNamespace(name="test_machine", version=2)
-    webapp.app.state.backend = None
     webapp.app.state.tool_registry = {}
     monkeypatch.setattr(webapp, "MachineRunner", FakeRunner)
     FakeRunner.events = [("token", "תשובה"), ("done", {})]
@@ -157,7 +157,7 @@ class TestRejectedRequestsAreLogged:
 
 class TestGeminiKey:
     def test_key_value_never_logged(self, web):
-        web.client.post("/api/research/start", json={"question": QUESTION}, headers=KEY_HEADER)
+        web.client.post("/api/research/start", json={"question": QUESTION, "models": TEST_RESEARCH_MODELS}, headers=KEY_HEADER)
         web.client.get("/api/help", headers=KEY_HEADER)
         log_files = [path for path in web.logs.rglob("*") if path.is_file()]
         assert log_files
@@ -173,18 +173,18 @@ class TestGeminiKey:
     ])
     def test_key_check_outcome_is_recorded(self, web, verdict, headers, outcome):
         web.google.verdict = verdict
-        web.client.post("/api/research/start", json={"question": QUESTION}, headers=headers)
+        web.client.post("/api/research/start", json={"question": QUESTION, "models": TEST_RESEARCH_MODELS}, headers=headers)
         assert log_lines(web.logs, "requests.jsonl")[0]["gemini_key_outcome"] == outcome
 
     def test_key_rejected_mid_run_is_recorded(self, web):
         FakeRunner.events = [("status", "ClientError: 400 API key not valid. reason: API_KEY_INVALID"), ("done", {})]
-        web.client.post("/api/research/start", json={"question": QUESTION}, headers=KEY_HEADER)
+        web.client.post("/api/research/start", json={"question": QUESTION, "models": TEST_RESEARCH_MODELS}, headers=KEY_HEADER)
         assert log_lines(web.logs, "requests.jsonl")[0]["gemini_key_outcome"] == "rejected_mid_run"
 
 
 class TestQuestions:
     def test_research_start_question_is_logged(self, web):
-        body = web.client.post("/api/research/start", json={"question": QUESTION}, headers=KEY_HEADER).text
+        body = web.client.post("/api/research/start", json={"question": QUESTION, "models": TEST_RESEARCH_MODELS}, headers=KEY_HEADER).text
         session_id = sse_events(body)[0][1]["session_id"]
         questions = log_lines(web.logs, "questions.jsonl")
         assert len(questions) == 1
@@ -198,7 +198,7 @@ class TestQuestions:
 class TestErrorsStayServerSide:
     def test_failed_run_sends_generic_message_and_logs_traceback(self, web):
         FakeRunner.events = [("token", "חלק"), RuntimeError(f"boom in {SECRET_PATH_FRAGMENT}")]
-        response = web.client.post("/api/research/start", json={"question": QUESTION}, headers=KEY_HEADER)
+        response = web.client.post("/api/research/start", json={"question": QUESTION, "models": TEST_RESEARCH_MODELS}, headers=KEY_HEADER)
         request_id = response.headers["X-Request-Id"]
         events = sse_events(response.text)
         session_id = events[0][1]["session_id"]

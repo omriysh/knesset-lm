@@ -18,6 +18,8 @@ const PAGE_ACTIONS = {
   onStagesAlwaysToggle:         (el) => window.onStagesAlwaysToggle(el),
   replaceGeminiKeyFromSettings: () => window.replaceGeminiKeyFromSettings(),
   deleteGeminiKeyFromSettings:  () => window.deleteGeminiKeyFromSettings(),
+  setResearchModel:             (el) => window.setResearchModel(el.dataset.role, el.value),
+  resetResearchModels:          () => window.resetResearchModels(),
   saveGeminiKeyFromDialog:      () => window.saveGeminiKeyFromDialog(),
   cancelGeminiKeyDialog:        () => window.cancelGeminiKeyDialog(),
   cancelGeminiKeyOnBackdrop:    (el, event) => { if (event.target === el) window.cancelGeminiKeyDialog(); },

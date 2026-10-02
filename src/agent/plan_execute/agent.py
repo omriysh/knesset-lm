@@ -41,6 +41,7 @@ import config
 from agent.plan_execute.budget import BudgetExceeded, BudgetTracker, estimate_plan_seconds
 from agent.plan_execute.citation_backfill import backfill_protocol_citations
 from agent.plan_execute.concurrency import DAGExecutor
+from agent.model_choice import ResearchModels
 from agent.plan_execute.critics import CriticResult, critic_post, critic_pre, critic_post_gen, critic_pre_gen
 from agent.plan_execute.executor import execute_step
 from agent.plan_execute.plan import PLAN_JSON_SCHEMA, Plan, Step
@@ -191,13 +192,14 @@ class PlanExecuteAgent(SubgraphAgent):
 
     # ── Construction ────────────────────────────────────────────────────
 
-    def __init__(self, *, llm_bridge: LLMBridge | None = None):
+    def __init__(self, *, llm_bridge: LLMBridge | None = None, models: ResearchModels | None = None):
         # Lazily-resolved fields — populated inside :meth:`run`.
         self._plan: Plan | None = None
         self._store: EvidenceStore | None = None
         self._budget: BudgetTracker | None = None
 
         self._inputs: dict | None = None
+        self._models: ResearchModels = models or ResearchModels.from_config()
         self._llm: LLMBridge = llm_bridge or LLMBridge(
             fallback_to_local=getattr(config, "GOOGLE_API_FALLBACK_TO_LOCAL", True)
         )
@@ -322,7 +324,7 @@ class PlanExecuteAgent(SubgraphAgent):
         self._plan = plan
 
         # ─── Critic-pre on v1 ───────────────────────────────────────────
-        cp = yield from critic_pre_gen(plan, self._llm, registry=registry)
+        cp = yield from critic_pre_gen(plan, self._llm, registry=registry, model=self._models.critic)
         if cp.verdict in ("revise", "replan"):
             yield SubgraphEvent(
                 kind="progress",
@@ -344,7 +346,7 @@ class PlanExecuteAgent(SubgraphAgent):
             self._plan = plan
 
         # ─── Validator ──────────────────────────────────────────────────
-        vr = validate_plan(plan, registry, self._phased_llm("validator"))
+        vr = validate_plan(plan, registry, self._phased_llm("validator"), helper_model=self._models.intent)
         yield from self._llm.drain_events()  # no-op when sink is set; keeps CLI path working
         replan_attempts = 0
         while not vr.ok and replan_attempts < int(getattr(config, "RESEARCH_MAX_REPLANS", 3)):
@@ -369,7 +371,7 @@ class PlanExecuteAgent(SubgraphAgent):
                 )
                 return
             self._plan = plan
-            vr = validate_plan(plan, registry, self._phased_llm("validator"))
+            vr = validate_plan(plan, registry, self._phased_llm("validator"), helper_model=self._models.intent)
             yield from self._llm.drain_events()  # no-op when sink is set
 
         if not vr.ok:
@@ -451,7 +453,7 @@ class PlanExecuteAgent(SubgraphAgent):
                 name="critic_post_started",
                 payload={"plan_version": plan.version},
             )
-            cpost: CriticResult = yield from critic_post_gen(plan, self._store, self._llm)
+            cpost: CriticResult = yield from critic_post_gen(plan, self._store, self._llm, model=self._models.critic)
 
             if cpost.verdict != "replan":
                 break
@@ -658,6 +660,7 @@ class PlanExecuteAgent(SubgraphAgent):
             store=self._store,
             llm_call=self._llm,
             budget_tracker=self._budget,
+            model=self._models.executor,
         )
         events = self._llm.drain_events()
         return envelope, events
@@ -751,7 +754,7 @@ class PlanExecuteAgent(SubgraphAgent):
         text_parts: list[str] = []
         error_seen = False
         for sg_ev in self._llm.stream(
-            model=config.PLANNER_MODEL,
+            model=self._models.planner,
             prompt=prompt,
             response_format={"type": "json_object"},
             phase=phase,
@@ -781,6 +784,7 @@ class PlanExecuteAgent(SubgraphAgent):
         from agent.plan_execute.synthesizer import synthesize_gen
         return (yield from synthesize_gen(
             query, plan, store, self._llm,
+            model=self._models.synthesizer,
             registry=self.tool_registry(),
         ))
 

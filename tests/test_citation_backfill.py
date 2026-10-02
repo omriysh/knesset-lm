@@ -56,6 +56,18 @@ class TestBackfillProtocolCitations:
         assert quote["committee"] == opinion_row["committee"] and quote["date"] == opinion_row["date"]
         assert quote["source_kind"] == "opinion"
 
+    def test_citation_without_text_gets_the_opinion_text(self, rotman_store):
+        store, rows_by_scope = rotman_store
+        opinion_row = rows_by_scope["opinions"][0]
+        citations = [{"n": 1, "ev_id": "ev_1", "quote": {
+            "meeting_id": opinion_row["meeting_id"], "speech_idx": opinion_row["speech_idx"],
+            "speaker": opinion_row["speaker"]}}]
+        backfill_protocol_citations(citations, store)
+        quote = citations[0]["quote"]
+        assert quote["source_kind"] == "opinion"
+        assert quote["opinion"] == opinion_row["opinion"]
+        assert quote["quote"] == opinion_row["quote"]
+
     def test_llm_values_are_kept(self, rotman_store):
         store, rows_by_scope = rotman_store
         opinion_row = rows_by_scope["opinions"][0]

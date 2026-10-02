@@ -668,5 +668,41 @@ def meeting_speech_hits(conn, word_matches: list[str], meeting_id: str,
     return [hits_by_speech[idx] for idx in sorted(hits_by_speech)]
 
 
+_HIGHLIGHT_OPEN, _HIGHLIGHT_CLOSE = "", ""
+
+
+def _ranges_between_markers(highlighted: str) -> list[list[int]]:
+    ranges, plain_length, open_at = [], 0, None
+    for char in highlighted:
+        if char == _HIGHLIGHT_OPEN:
+            open_at = plain_length
+        elif char == _HIGHLIGHT_CLOSE:
+            if open_at is not None and plain_length > open_at:
+                ranges.append([open_at, plain_length - open_at])
+            open_at = None
+        else:
+            plain_length += 1
+    return ranges
+
+
+def meeting_speech_keyword_ranges(conn, word_matches: list[str], meeting_id: str) -> dict[int, list[list[int]]]:
+    """speech_idx -> [[offset, length], ...] of the tokens any of word_matches matches, in the stored
+    speech text (the text the reading tab shows), ordered by offset."""
+    if not word_matches:
+        return {}
+    speech_id_range = conn.execute(
+        "SELECT MIN(id), MAX(id) FROM speeches WHERE meeting_id = ?", (str(meeting_id),)).fetchone()
+    if speech_id_range[0] is None:
+        return {}
+    any_word_match = " OR ".join(f"({word_match})" for word_match in word_matches)
+    sql = ("SELECT s.idx, highlight(speeches_fts, 0, ?, ?) FROM speeches_fts "
+           "JOIN speeches s ON s.id = speeches_fts.rowid "
+           "WHERE speeches_fts MATCH ? AND speeches_fts.rowid BETWEEN ? AND ? AND s.meeting_id = ?")
+    return {speech_idx: _ranges_between_markers(highlighted)
+            for speech_idx, highlighted in conn.execute(
+                sql, (_HIGHLIGHT_OPEN, _HIGHLIGHT_CLOSE, any_word_match,
+                      speech_id_range[0], speech_id_range[1], str(meeting_id)))}
+
+
 def table_row_counts(conn, tables: tuple[str, ...] = ("meetings", "topics", "opinions", "speeches")) -> dict[str, int]:
     return {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in tables}

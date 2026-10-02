@@ -7,7 +7,6 @@ Startup
 -------
 The lifespan context manager loads the singletons once:
   - StateMachine       (agent graph)
-  - GemmaLlamaBackend  (LLM client)
   - tool_registry      (raises at startup if any machine tool_name is unknown)
 
 Protocol search is keyword-only (FTS5 over Data/knesset.db); no embedding
@@ -43,7 +42,7 @@ from dataclasses import dataclass, field
 from dataclasses import replace as dataclass_replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Annotated, Any, Callable
 
 # Bootstrap sys.path before importing knesset-lm modules
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -65,9 +64,11 @@ from api.docs import install_public_docs
 from api.mcp_server import McpSubdomainMiddleware, install_mcp_endpoint, running_mcp_sessions
 from api.validation import install_error_handlers
 from web.concurrency import ResearchRunSlots
-from web.gemini_keys import forget_server_gemini_keys, stop_on_rejected_gemini_key, visitor_gemini_key_or_error
+from web.gemini_keys import (forget_server_gemini_keys, gemini_text_models, stop_on_rejected_gemini_key,
+                              unavailable_models_error, visitor_gemini_key_or_error)
 from web.middleware import RequestBodyLimitMiddleware, SecurityHeadersMiddleware
-from agent.llm.gemma import GemmaLlamaBackend
+from agent.llm.google import GoogleBackend
+from agent.model_choice import MODEL_ID_PATTERN, ResearchModels
 
 # ── Tool-result lazy-load cache ───────────────────────────────────────────────
 # Maps ref_id → full tool result text.  Populated when subgraph step_completed
@@ -77,7 +78,7 @@ _TOOL_RESULT_LOCK = threading.Lock()
 _TOOL_RESULT_CAP  = 5000
 
 _RESEARCH_SLOTS = ResearchRunSlots(max_running=config.WEB_RESEARCH_MAX_CONCURRENT_RUNS)
-_LOCAL_LLM_ASK_SLOTS = threading.BoundedSemaphore(config.WEB_LOCAL_LLM_MAX_CONCURRENT_ASKS)
+_WORKSPACE_ASK_SLOTS = threading.BoundedSemaphore(config.WEB_WORKSPACE_MAX_CONCURRENT_ASKS)
 _SENTINEL = object()
 _KEEP_ALIVE = object()
 BUSY_MESSAGE = "השרת עמוס כרגע. נסו שוב בעוד כמה דקות."
@@ -117,6 +118,10 @@ def _ok_numeric_id(value: str) -> bool:
 def _ok_meeting_id(value: str) -> bool:
     """A committee meeting id (digits) or a plenum session id ("p" + digits)."""
     return _ok_numeric_id(value[1:] if value.startswith(config.PLENUM_MEETING_ID_PREFIX) else value)
+
+
+def research_llm_backend(gemini_api_key: str | None, model: str) -> GoogleBackend:
+    return GoogleBackend(model=model, api_key=gemini_api_key)
 
 
 def _busy_response() -> JSONResponse:
@@ -370,8 +375,6 @@ async def lifespan(app: FastAPI):
     machine = StateMachine(settings.MACHINE_PATH)
     print(f"[web]   Machine: '{machine.name}' (v{machine.version})", flush=True)
 
-    backend = GemmaLlamaBackend(url=settings.LLAMA_SERVER)
-
     # ── Summary tools (look up paths via global meeting registry) ────────────
 
     def _summary_executor(name: str, args: dict) -> str:
@@ -419,7 +422,6 @@ async def lifespan(app: FastAPI):
 
     # ── Store all state on app ────────────────────────────────────────────────
     app.state.machine       = machine
-    app.state.backend       = backend
     app.state.tool_registry = tool_registry
     app.state.settings      = settings
     app.state.sessions_dir  = settings.SESSIONS_DIR
@@ -446,7 +448,16 @@ app.add_middleware(RequestBodyLimitMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(McpSubdomainMiddleware)
 app.add_middleware(RequestLogMiddleware)
-app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+class RevalidatedStaticFiles(StaticFiles):
+    """Static files the browser revalidates (ETag) on every load, so new JS/CSS reaches open browsers."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.mount("/static", RevalidatedStaticFiles(directory=str(_STATIC_DIR)), name="static")
 app.include_router(api_router)
 install_mcp_endpoint(app, rate_limiter)
 install_public_docs(app, WEB_API_TITLE)
@@ -575,8 +586,25 @@ def mk_photo(name: str):
 
 # ── Models ────────────────────────────────────────────────────────────────────
 
+ModelId = Annotated[str, Field(pattern=MODEL_ID_PATTERN.pattern)]
+
+
+class ResearchModelsChoice(BaseModel):
+    """The visitor's model for each part of the run (no server defaults)."""
+    intent: ModelId
+    planner: ModelId
+    critic: ModelId
+    executor: ModelId
+    synthesizer: ModelId
+    answer_editor: ModelId
+
+    def research_models(self) -> ResearchModels:
+        return ResearchModels(**self.model_dump())
+
+
 class ResearchStartRequest(BaseModel):
     question: str = Field(max_length=_MAX_QUESTION)
+    models: ResearchModelsChoice
 
 
 class ResearchRespondRequest(BaseModel):
@@ -669,9 +697,9 @@ class ResearchRun:
     created_at: str
     sessions_dir: Path
     machine: Any
-    backend: Any
     tool_registry: Any
     gemini_api_key: str | None
+    models: ResearchModels
     resume: dict | None
     user_response: dict | None
     workspace_data: dict | None
@@ -696,7 +724,7 @@ def run_research(run: ResearchRun) -> None:
         nonlocal final_state_saved
         save_session(ResearchSession(
             session_id=run.session_id, status=status, original_question=run.question,
-            created_at=run.created_at, updated_at=_now_iso(), **fields,
+            created_at=run.created_at, updated_at=_now_iso(), models=run.models.to_dict(), **fields,
         ), run.sessions_dir)
         final_state_saved = True
 
@@ -722,11 +750,17 @@ def run_research(run: ResearchRun) -> None:
     final_token = ""
     event_log: list[dict] = []  # selective event log for reconnect replay
     try:
+        intent_backend = research_llm_backend(run.gemini_api_key, run.models.intent)
         runner = MachineRunner(
             machine        = run.machine,
-            backend        = run.backend,
+            backend        = intent_backend,
             tool_registry  = run.tool_registry,
             gemini_api_key = run.gemini_api_key,
+            models         = run.models,
+            backend_by_model_role = {
+                "intent":        intent_backend,
+                "answer_editor": research_llm_backend(run.gemini_api_key, run.models.answer_editor),
+            },
         )
         runner_events = runner.run_stream(question=run.question, resume=run.resume, user_response=run.user_response)
         key_guarded_events = stop_on_rejected_gemini_key(
@@ -797,7 +831,6 @@ def _start_research_thread(request: Request, queue: asyncio.Queue, **run_fields)
     run = ResearchRun(
         sessions_dir   = request.app.state.sessions_dir,
         machine        = request.app.state.machine,
-        backend        = request.app.state.backend,
         tool_registry  = request.app.state.tool_registry,
         emit           = _thread_safe_emitter(queue),
         stop_requested = threading.Event(),
@@ -869,13 +902,30 @@ def _log_visitor_question(request: Request, session_id: str | None, question: An
         print(f"[web] logging the question of session {session_id} failed: {exc}", flush=True)
 
 
-def _save_new_running_session(session_id: str, question: str, created_at: str, sessions_dir: Path) -> None:
+def _save_new_running_session(session_id: str, question: str, created_at: str, models: ResearchModels,
+                              sessions_dir: Path) -> None:
     from web.session import ResearchSession, maybe_cleanup_stale_sessions, save_session
     maybe_cleanup_stale_sessions(sessions_dir)
     save_session(ResearchSession(
         session_id=session_id, status="running",
-        original_question=question, created_at=created_at, updated_at=created_at,
+        original_question=question, created_at=created_at, updated_at=created_at, models=models.to_dict(),
     ), sessions_dir)
+
+
+@app.get("/api/gemini/models")
+async def gemini_models(request: Request):
+    """The Gemini/Gemma text models the visitor's key can call: [{id, name}] for the settings' model choices."""
+    gemini_api_key, gemini_key_error = await asyncio.to_thread(visitor_gemini_key_or_error, request)
+    if gemini_key_error is not None:
+        return gemini_key_error
+    if gemini_api_key is None:
+        return {"models": []}
+    text_models = await asyncio.to_thread(gemini_text_models, gemini_api_key)
+    if text_models is None:
+        return JSONResponse({"error": "gemini_models_unverified",
+                             "message": "לא ניתן לקבל כרגע את רשימת המודלים מ-Google. נסו שוב בעוד רגע."},
+                            status_code=503)
+    return {"models": text_models}
 
 
 @app.post("/api/research/start")
@@ -896,6 +946,10 @@ async def research_start(req: ResearchStartRequest, request: Request):
     gemini_api_key, gemini_key_error = await asyncio.to_thread(visitor_gemini_key_or_error, request)
     if gemini_key_error is not None:
         return gemini_key_error
+    models = req.models.research_models()
+    models_error = await asyncio.to_thread(unavailable_models_error, gemini_api_key, models.model_ids())
+    if models_error is not None:
+        return models_error
     if not _RESEARCH_SLOTS.can_admit():
         return _busy_response()
 
@@ -903,13 +957,13 @@ async def research_start(req: ResearchStartRequest, request: Request):
     request.state.session_id = session_id
     _log_visitor_question(request, session_id, question)
     created_at = _now_iso()
-    await asyncio.to_thread(_save_new_running_session, session_id, question, created_at,
+    await asyncio.to_thread(_save_new_running_session, session_id, question, created_at, models,
                             request.app.state.sessions_dir)
     queue: asyncio.Queue = asyncio.Queue()
     run = _start_research_thread(
         request, queue,
         session_id=session_id, question=question, created_at=created_at, gemini_api_key=gemini_api_key,
-        resume=None, user_response=None, workspace_data=None,
+        models=models, resume=None, user_response=None, workspace_data=None,
         install_llm_event_sink=True, log_prefix="research_start",
     )
     return _sse_response(_research_sse_events(run, queue, announce_session_id=True))
@@ -1030,6 +1084,12 @@ async def research_respond(
     user_response, invalid_reason = _validated_user_response(pending_ui_event, req.output_var, req.value)
     if invalid_reason is not None:
         return JSONResponse({"error": invalid_reason}, status_code=400)
+    if session.models is None:
+        return JSONResponse({"error": "המחקר הזה התחיל בלי בחירת מודלים. אפשר להתחיל מחקר חדש."}, status_code=409)
+    models = ResearchModels.from_dict(session.models)
+    models_error = await asyncio.to_thread(unavailable_models_error, gemini_api_key, models.model_ids())
+    if models_error is not None:
+        return models_error
     if isinstance(user_response["value"], str):
         _log_visitor_question(request, session_id, user_response["value"])
     if not _RESEARCH_SLOTS.can_admit():
@@ -1043,7 +1103,8 @@ async def research_respond(
     run = _start_research_thread(
         request, queue,
         session_id=session_id, question=claimed.original_question, created_at=claimed.created_at,
-        gemini_api_key=gemini_api_key, resume=claimed.machine_checkpoint or {}, user_response=user_response,
+        gemini_api_key=gemini_api_key, models=models, resume=claimed.machine_checkpoint or {},
+        user_response=user_response,
         workspace_data=claimed.workspace_data, install_llm_event_sink=False, log_prefix="research_respond",
     )
     return _sse_response(_research_sse_events(run, queue, announce_session_id=False))
@@ -1332,6 +1393,7 @@ class WorkspaceSelectRequest(BaseModel):
 
 class WorkspaceAskRequest(BaseModel):
     question: str = Field(max_length=_MAX_QUESTION)
+    model: ModelId
     meeting_id: str | None = Field(default=None, max_length=config.API_MAX_ID_DIGITS + 1)
 
 
@@ -1404,7 +1466,9 @@ def research_meeting_transcript(session_id: str, meeting_id: str, request: Reque
 
 @app.get("/api/research/{session_id}/meeting/{meeting_id}/hits")
 def research_meeting_hits(session_id: str, meeting_id: str, q: str = ""):
-    """Speeches of the meeting matching q (keyword FTS) with score in (0, 1], 1 = best. Feeds the heatmap."""
+    """Speeches of the meeting matching q (keyword FTS): score in (0, 1] (1 = best, for ordering),
+    matched_words of query_words, and ranges ([offset, length] of each matched word in the speech text).
+    Feeds the heatmap and the keyword highlights."""
     if (invalid := _invalid_meeting_route(session_id, meeting_id)) is not None:
         return invalid
     query = valid.keyword_query(q, config.WEB_MAX_HITS_QUERY_CHARS, config.WEB_MAX_HITS_QUERY_WORDS)
@@ -1418,11 +1482,12 @@ def research_meeting_hits(session_id: str, meeting_id: str, q: str = ""):
     conn = _connect_for_query()
     try:
         rows = store.meeting_speech_hits(conn, word_matches, meeting_id, exact_word_matches)
+        ranges_by_speech = store.meeting_speech_keyword_ranges(conn, word_matches, meeting_id)
     except sqlite3.Error as exc:
         print(f"[hits] FTS query failed for meeting {meeting_id}, {word_matches!r}: {exc}", flush=True)
         if store.deadline_passed(conn):
             return JSONResponse({"error": QUERY_TIMEOUT_MESSAGE}, status_code=503)
-        rows = []
+        rows, ranges_by_speech = [], {}
     finally:
         conn.close()
     # Rank by words matched as typed, then matched word count; bm25 relevance only breaks ties.
@@ -1431,7 +1496,9 @@ def research_meeting_hits(session_id: str, meeting_id: str, q: str = ""):
     rank_keys = {r["speech_idx"]: r["exact_words"] * word_count_weight + r["matched_words"]
                  + 0.5 * max(r["relevance"], 0.0) / best_relevance for r in rows}
     best_rank_key = max(rank_keys.values(), default=1.0)
-    return {"hits": [{"speech_idx": idx, "score": key / best_rank_key} for idx, key in rank_keys.items()]}
+    return {"hits": [{"speech_idx": r["speech_idx"], "score": rank_keys[r["speech_idx"]] / best_rank_key,
+                      "matched_words": r["matched_words"], "query_words": len(word_matches),
+                      "ranges": ranges_by_speech.get(r["speech_idx"], [])} for r in rows]}
 
 
 @app.get("/api/research/{session_id}/meeting/{meeting_id}/participants")
@@ -1523,11 +1590,11 @@ def _workspace_context(session, meeting_id: str | None) -> str:
     return "\n\n---\n\n".join(context_parts) if context_parts else "(אין מידע נבחר)"
 
 
-def _stream_local_llm_answer(backend, prepared_messages: list[dict], emit: Callable[[object], None],
+def _stream_workspace_answer(backend, prepared_messages: list[dict], emit: Callable[[object], None],
                              stop_requested: threading.Event, slots: threading.BoundedSemaphore,
                              request_id: str | None = None) -> None:
-    """Relay the local model's events through emit until done or stop_requested; closing the backend
-    stream drops the llama-server connection so generation stops too. Releases one of slots."""
+    """Relay the model's events through emit until done or stop_requested; closing the backend
+    stream drops the model connection so generation stops too. Releases one of slots."""
     answer_events = None
     try:
         answer_events = backend.stream(prepared_messages, tools=None, temperature=0.7,
@@ -1579,8 +1646,8 @@ async def _workspace_answer_sse_events(queue: asyncio.Queue, stop_requested: thr
 @app.post("/api/research/{session_id}/workspace/ask")
 async def workspace_ask(session_id: str, req: WorkspaceAskRequest, request: Request):
     """
-    Ask the local LLM a question grounded in the session's selected workspace chunks.
-    Needs a valid visitor Gemini key (the abuse gate, although the answer runs on llama-server).
+    Ask the visitor's chosen model a question grounded in the session's selected workspace chunks,
+    with the visitor's Gemini key.
 
     Streams SSE token/done/error events.
     """
@@ -1594,9 +1661,12 @@ async def workspace_ask(session_id: str, req: WorkspaceAskRequest, request: Requ
     if req.meeting_id is not None and not _ok_meeting_id(req.meeting_id):
         return JSONResponse({"error": "Invalid meeting ID"}, status_code=400)
 
-    _gemini_api_key, gemini_key_error = await asyncio.to_thread(visitor_gemini_key_or_error, request)
+    gemini_api_key, gemini_key_error = await asyncio.to_thread(visitor_gemini_key_or_error, request)
     if gemini_key_error is not None:
         return gemini_key_error
+    models_error = await asyncio.to_thread(unavailable_models_error, gemini_api_key, {req.model})
+    if models_error is not None:
+        return models_error
 
     from web.session import load_session
 
@@ -1614,15 +1684,15 @@ async def workspace_ask(session_id: str, req: WorkspaceAskRequest, request: Requ
         {"role": "system", "content": system_prompt},
         {"role": "user",   "content": f"הקשר:\n{context}\n\n---\n\nשאלה: {question}"},
     ]
-    backend = request.app.state.backend
+    backend = research_llm_backend(gemini_api_key, req.model)
     prepared = backend.prepare_messages(messages, suppress_thinking=True)
 
-    slots = _LOCAL_LLM_ASK_SLOTS
+    slots = _WORKSPACE_ASK_SLOTS
     if not slots.acquire(blocking=False):
         return _busy_response()
     queue: asyncio.Queue = asyncio.Queue()
     stop_requested = threading.Event()
-    threading.Thread(target=_stream_local_llm_answer,
+    threading.Thread(target=_stream_workspace_answer,
                      args=(backend, prepared, _thread_safe_emitter(queue), stop_requested, slots,
                            request_id_of(request)),
                      daemon=True).start()

@@ -163,6 +163,7 @@ def synthesize_gen(
     store: EvidenceStore,
     llm_bridge: Any,
     *,
+    model: str,
     registry: Any = None,
 ) -> Generator:
     """Yield SubgraphEvents and return (answer_str, citations_list).
@@ -204,7 +205,7 @@ def synthesize_gen(
     while expand_count < max_expands:
         try:
             raw = llm_bridge(
-                model=config.SYNTHESIZER_MODEL,
+                model=model,
                 messages=messages,
                 tools=[EXPAND_TOOL_SCHEMA],
                 phase="synthesizer:expand",
@@ -257,7 +258,7 @@ def synthesize_gen(
     text_parts: list[str] = []
     error_msg: str = ""
     for sg_ev in llm_bridge.stream(
-        model=config.SYNTHESIZER_MODEL,
+        model=model,
         messages=messages,
         phase="synthesizer",
     ):
@@ -291,6 +292,7 @@ def synthesize(
     store: EvidenceStore,
     llm_call: Callable,
     *,
+    model: str,
     registry: Any = None,
 ) -> str:
     """Produce the final Hebrew answer string (synchronous, no streaming).
@@ -307,7 +309,7 @@ def synthesize(
     """
     prompt = _build_prompt(query, plan, store, registry)
     try:
-        raw = llm_call(model=config.SYNTHESIZER_MODEL, prompt=prompt)
+        raw = llm_call(model=model, prompt=prompt)
     except Exception as exc:  # noqa: BLE001
         return (
             "אירעה שגיאה ביצירת התשובה הסופית. "
