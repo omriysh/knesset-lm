@@ -9,9 +9,10 @@ export const GEMINI_KEY_HEADER = 'X-Gemini-Api-Key';
 const STORAGE_KEY = 'geminiApiKey';
 const KEY_PATTERN = /^[A-Za-z0-9_\-]{30,100}$/;
 
+export const GEMINI_KEY_CHANGED_EVENT = 'gemini-key-changed';
+
 let keyWhenStorageUnavailable = '';
-let pendingDialogResolvers   = [];
-let promptedOnThisPage       = false;
+let pendingKeyResolvers      = [];
 
 export function getGeminiKey() {
   try {
@@ -39,6 +40,24 @@ export function clearGeminiKey() {
     console.error('[gemini_key] localStorage remove failed:', exc);
   }
   refreshGeminiKeySettingsStatus();
+  document.dispatchEvent(new Event(GEMINI_KEY_CHANGED_EVENT));
+}
+
+/** Stores a typed key; returns an error message for the visitor, or '' when saved. */
+export function saveGeminiKey(rawKey) {
+  const key = rawKey.trim();
+  if (!KEY_PATTERN.test(key)) return 'המפתח לא נראה תקין — העתיקו אותו במלואו מ-Google AI Studio.';
+  storeGeminiKey(key);
+  refreshGeminiKeySettingsStatus();
+  resolvePendingKeyRequests(key);
+  document.dispatchEvent(new Event(GEMINI_KEY_CHANGED_EVENT));
+  return '';
+}
+
+function resolvePendingKeyRequests(savedKey) {
+  const resolvers = pendingKeyResolvers;
+  pendingKeyResolvers = [];
+  resolvers.forEach(resolve => resolve(savedKey));
 }
 
 function dialogElement(id) {
@@ -58,42 +77,36 @@ export function openGeminiKeyDialog(errorMessage = '') {
   dialogElement('gemini-key-input').focus();
 }
 
-function closeGeminiKeyDialog(savedKey) {
-  dialogElement('gemini-key-overlay').classList.remove('open');
-  const resolvers = pendingDialogResolvers;
-  pendingDialogResolvers = [];
-  resolvers.forEach(resolve => resolve(savedKey));
-}
-
 function saveGeminiKeyFromDialog() {
-  const key = dialogElement('gemini-key-input').value.trim();
-  if (!KEY_PATTERN.test(key)) {
-    showDialogError('המפתח לא נראה תקין — העתיקו אותו במלואו מ-Google AI Studio.');
-    return;
-  }
-  storeGeminiKey(key);
-  refreshGeminiKeySettingsStatus();
-  closeGeminiKeyDialog(key);
+  const error = saveGeminiKey(dialogElement('gemini-key-input').value);
+  showDialogError(error);
+  if (!error) dialogElement('gemini-key-overlay').classList.remove('open');
 }
 
 function cancelGeminiKeyDialog() {
-  closeGeminiKeyDialog(null);
+  dialogElement('gemini-key-overlay').classList.remove('open');
+  resolvePendingKeyRequests(null);
 }
 
-/** Resolves to the stored key, or asks for one; null when the visitor dismisses the dialog. */
+/**
+ * Resolves to the stored key, or asks for one: in the research tab's key card when it is on screen,
+ * otherwise in the dialog. Resolves to null when the visitor dismisses the dialog.
+ */
 export function requireGeminiKey() {
   const key = getGeminiKey();
   if (key) return Promise.resolve(key);
   return new Promise(resolve => {
-    pendingDialogResolvers.push(resolve);
-    openGeminiKeyDialog();
+    pendingKeyResolvers.push(resolve);
+    const keyCard = dialogElement('research-key-card');
+    if (keyCard && !keyCard.hidden && keyCard.offsetParent) {
+      keyCard.classList.remove('attention');
+      void keyCard.offsetWidth;
+      keyCard.classList.add('attention');
+      dialogElement('inline-key-input')?.focus();
+    } else {
+      openGeminiKeyDialog();
+    }
   });
-}
-
-export function promptGeminiKeyIfMissing() {
-  if (promptedOnThisPage || getGeminiKey()) return;
-  promptedOnThisPage = true;
-  openGeminiKeyDialog();
 }
 
 export function refreshGeminiKeySettingsStatus() {
@@ -143,7 +156,6 @@ window.saveGeminiKeyFromDialog     = saveGeminiKeyFromDialog;
 window.cancelGeminiKeyDialog       = cancelGeminiKeyDialog;
 window.replaceGeminiKeyFromSettings = replaceGeminiKeyFromSettings;
 window.deleteGeminiKeyFromSettings = deleteGeminiKeyFromSettings;
-window.promptGeminiKeyIfMissing    = promptGeminiKeyIfMissing;
 window.requireGeminiKey            = requireGeminiKey;
 window.geminiKeyHeaders            = geminiKeyHeaders;
 window.agentResponseError          = agentResponseError;

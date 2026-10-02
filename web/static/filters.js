@@ -280,12 +280,8 @@ function _rfBadge(type, count) {
   }
 }
 
-/* ── Active filter chips row ────────────────────────────────────── */
-function _rfRenderChips() {
-  const row      = document.getElementById('rf-active-chips');
-  const clearBtn = document.getElementById('rf-clear-btn');
-  if (!row) return;
-
+/* ── Active filter chips (filter bar row, and the collapsed bar after a search) ── */
+function _rfActiveChips() {
   const chips = [];
   _rfState.committees.forEach(v => chips.push({ label: v,                           type: 'committee', value: v }));
   _rfState.mks.forEach(v        => chips.push({ label: `ח"כ ${v}`,                 type: 'mk',        value: v }));
@@ -297,16 +293,25 @@ function _rfRenderChips() {
     if (_rfState.dateTo)   parts.push(_fmtDate(_rfState.dateTo));
     chips.push({ label: parts.join(' — '), type: 'date', value: 'date' });
   }
+  return chips;
+}
 
-  const has = chips.length > 0;
+function rfChipHtml(label, removeAction, { type = '', value = '', extraClass = '' } = {}) {
+  return `<span class="chip ${extraClass}" title="${_rfEsc(label)}">${_rfEsc(label)}<button class="chip-remove" data-type="${_rfEsc(type)}" data-value="${_rfEsc(value)}" data-click="${_rfEsc(removeAction)}" title="הסרה"><span class="material-symbols-outlined">close</span></button></span>`;
+}
+
+function rfActiveChipsHtml(removeAction) {
+  return _rfActiveChips().map(c => rfChipHtml(c.label, removeAction, { type: c.type, value: c.value })).join('');
+}
+
+function _rfRenderChips() {
+  const row      = document.getElementById('rf-active-chips');
+  const clearBtn = document.getElementById('rf-clear-btn');
+  if (!row) return;
+  const has = _rfActiveChips().length > 0;
   row.classList.toggle('hidden', !has);
   clearBtn?.classList.toggle('hidden', !has);
-
-  if (has) {
-    row.innerHTML = chips.map(c =>
-      `<span class="rfb-chip">${_rfEsc(c.label)}<button class="rfb-chip-remove" data-type="${_rfEsc(c.type)}" data-value="${_rfEsc(c.value)}" data-click="rfRemoveFilter" title="הסרה"><span class="material-symbols-outlined" style="font-size:13px">close</span></button></span>`
-    ).join('');
-  }
+  row.innerHTML = has ? rfActiveChipsHtml('rfRemoveFilter') : '';
 }
 
 function _fmtDate(iso) {

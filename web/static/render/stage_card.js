@@ -20,7 +20,7 @@ function buildHeaderHtml({ label, stage, loop, live, timeHtml = '', toolsHtml = 
     : `${timeHtml}${toolsHtml}${loopHtml}`;
   return (
     `<div class="stage-header">` +
-      `<span class="stage-arrow">▶</span>` +
+      `<span class="stage-arrow">◀</span>` +
       `<span class="stage-dot ${esc(stage)}"></span>` +
       `<span class="stage-name">${esc(label)}</span>` +
       `<span class="stage-meta">${metaHtml}</span>` +

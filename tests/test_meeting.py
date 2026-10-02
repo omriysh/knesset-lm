@@ -501,3 +501,25 @@ class TestParseFullTextSpeechesRealData:
     def test_committee_meetings_that_parsed_before_do_not_lose_turns(self, meeting_id, turns_before_rewrite):
         from utils.meeting import parse_full_text_speeches
         assert len(parse_full_text_speeches(_real_full_text(meeting_id)) or []) >= turns_before_rewrite
+
+
+def test_format_meeting_chunks_replaces_box_glyphs_one_for_one():
+    from utils.meeting import format_meeting_chunks
+    raw = "סעיף 11א.\x07 בסעיף\x0bשני  פריט\x1f-"
+    meeting = {"full_text": raw}
+    text = format_meeting_chunks(meeting)[0]["text"]
+    assert len(text) == len(raw)
+    assert text == "סעיף 11א.  בסעיף\nשני • פריט -"
+
+
+def test_count_header_chunks_stops_at_the_first_speaker():
+    from utils.meeting import count_header_chunks
+    speakers = ["", "סדר-היום", "נכחו", "חבר הכנסת", "מוזמנים (באמצעים מקוונים)", "משתתפים באמצעים מקוונים",
+                "ייעוץ משפטי", "מנהלות הוועדה", "רישום פרלמנטרי", 'היו"ר יוסף טייב', "מוזמנים"]
+    assert count_header_chunks([{"speaker": s, "text": "x"} for s in speakers]) == 9
+
+
+def test_count_header_chunks_ignores_interjections_and_untitled_paragraphs():
+    from utils.meeting import count_header_chunks
+    assert count_header_chunks([{"speaker": "קריאה", "text": "x"}, {"speaker": "נכחו", "text": "x"}]) == 0
+    assert count_header_chunks([{"speaker": "", "text": "x"}, {"speaker": "", "text": "y"}]) == 1

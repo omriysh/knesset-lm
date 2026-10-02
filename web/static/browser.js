@@ -54,9 +54,6 @@ let _activeHitsQuery  = null;   // topic text currently driving the heatmap (nul
 let _sortMode        = 'relevance'; // 'relevance' | 'date_asc' | 'date_desc'
 let _groupByComm     = false;
 let _collapsedGroups = new Set();   // committee names that are collapsed
-let _filterPart      = '';          // participant name filter string
-let _partCache       = {};          // meeting_id → string[] (lowercase speaker names)
-let _partLoadedCount = 0;           // how many participant fetches completed
 
 /* ── Main entry point ───────────────────────────────────────────── */
 /**
@@ -85,12 +82,9 @@ function openProtocolBrowser(sessionId, meetingId, meetings, opts = {}) {
   });
   _activeId          = meetingId;
   _origQ             = opts.originalQuestion || '';
-  _sortMode          = 'relevance';
+  _sortMode          = opts.sortMode || 'relevance';
   _groupByComm       = false;
   _collapsedGroups   = new Set();
-  _filterPart        = '';
-  _partCache         = {};
-  _partLoadedCount   = 0;
   _hmHits            = [];
   _activeHitsQuery   = null;
   _searchRequest     = opts.searchRequest || null;
@@ -113,7 +107,6 @@ function openProtocolBrowser(sessionId, meetingId, meetings, opts = {}) {
   if (meetingId) _loadMeeting(meetingId, { pushUrl: opts.pushUrl !== false });
   else _panel.querySelector('#browser-transcript-col').innerHTML =
     '<div class="browser-loading">לא נמצאו ישיבות</div>';
-  _loadAllParticipants();
   const loadMoreBtn = _panel.querySelector('.sidebar-load-more');
   if (loadMoreBtn && !_searchRequest) loadMoreBtn.style.display = 'none';
 
@@ -193,6 +186,24 @@ function _shellHtml(postCompletion) {
         <div class="hm-bands" id="hm-bands"></div>
         <div class="hm-viewport" id="hm-viewport"></div>
       </div>
+      <div class="hm-tip" id="hm-tip" hidden></div>
+      <div class="proto-nav" id="proto-nav">
+        <button class="proto-nav-btn" data-click="browserNav" data-arg="start" title="לתחילת הפרוטוקול">
+          <span class="material-symbols-outlined">vertical_align_top</span>
+        </button>
+        <div class="proto-nav-hits" id="proto-nav-hits" hidden>
+          <button class="proto-nav-btn" data-click="browserNav" data-arg="prev" title="להתאמה הקודמת">
+            <span class="material-symbols-outlined">keyboard_arrow_up</span>
+          </button>
+          <span class="proto-nav-count" id="proto-nav-count"></span>
+          <button class="proto-nav-btn" data-click="browserNav" data-arg="next" title="להתאמה הבאה">
+            <span class="material-symbols-outlined">keyboard_arrow_down</span>
+          </button>
+        </div>
+        <button class="proto-nav-btn" data-click="browserNav" data-arg="end" title="לסוף הפרוטוקול">
+          <span class="material-symbols-outlined">vertical_align_bottom</span>
+        </button>
+      </div>
     </div>
     <div class="browser-sidebar" id="browser-sidebar">
       <!-- Desktop: collapse button above meeting list -->
@@ -204,20 +215,14 @@ function _shellHtml(postCompletion) {
       </div>
       <div class="sidebar-inner">
         <div class="sidebar-controls">
-          <div class="sidebar-sort-row">
-            <label class="sort-label">מיון:</label>
-            <select id="sort-select" class="sort-select" data-change="browserSetSort">
-              <option value="relevance">רלוונטיות</option>
-              <option value="date_desc">תאריך ↓</option>
-              <option value="date_asc">תאריך ↑</option>
-            </select>
-            <button id="sort-grp" class="sort-btn" data-click="browserToggleGroup">קיבוץ לפי ועדה</button>
+          <div class="seg seg--sm seg--block" id="sidebar-sort">
+            <button class="seg-btn" data-click="browserSetSort" data-arg="relevance">רלוונטיות</button>
+            <button class="seg-btn" data-click="browserSetSort" data-arg="date_desc">מהחדש</button>
+            <button class="seg-btn" data-click="browserSetSort" data-arg="date_asc">מהישן</button>
           </div>
-          <div class="sidebar-filter-row">
-            <input id="sidebar-part-input" class="sidebar-part-input"
-                   placeholder="טעינת משתתפים…"
-                   data-input="browserFilterParticipant"
-                   disabled />
+          <div class="seg seg--sm seg--block" id="sidebar-group">
+            <button class="seg-btn" data-click="browserSetGroup" data-arg="list">רשימה</button>
+            <button class="seg-btn" data-click="browserSetGroup" data-arg="committee">לפי ועדה</button>
           </div>
         </div>
         <div class="sidebar-list" id="sidebar-list"></div>
@@ -241,16 +246,7 @@ function _renderSidebar() {
   const list = _panel.querySelector('#sidebar-list');
   if (!list) return;
 
-  // Apply participant filter
-  let meetings = [..._meetings];
-  const q = _filterPart.toLowerCase().trim();
-  if (q) {
-    meetings = meetings.filter(m => {
-      const parts = _partCache[m.meeting_id];
-      if (parts === undefined) return true; // not yet loaded — keep visible
-      return parts.some(p => p.includes(q));
-    });
-  }
+  const meetings = [..._meetings];
 
   // Apply sort
   if (_sortMode === 'date_asc') {
@@ -262,11 +258,16 @@ function _renderSidebar() {
 
   list.innerHTML = _groupByComm ? _groupedHtml(meetings) : _flatHtml(meetings);
 
-  // Sync sort controls
-  const sel = _panel.querySelector('#sort-select');
-  if (sel) sel.value = _sortMode;
-  const grpBtn = _panel.querySelector('#sort-grp');
-  if (grpBtn) grpBtn.classList.toggle('sort-active', _groupByComm);
+  const hasQuery = !!_searchRequest?.query;
+  _panel.querySelectorAll('#sidebar-sort .seg-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.arg === _sortMode);
+    if (btn.dataset.arg === 'relevance') {
+      btn.disabled = !hasQuery;
+      btn.title = hasQuery ? '' : 'דירוג לפי רלוונטיות זמין בחיפוש מילות מפתח';
+    }
+  });
+  _panel.querySelectorAll('#sidebar-group .seg-btn').forEach(btn =>
+    btn.classList.toggle('active', (btn.dataset.arg === 'committee') === _groupByComm));
 }
 
 /* ── Flat meeting list HTML ─────────────────────────────────────── */
@@ -300,8 +301,8 @@ function _groupedHtml(meetings) {
     const collapsed = _collapsedGroups.has(comm);
     const cards     = collapsed ? '' : groups[comm].map(m => _meetingCardHtml(m, true)).join('');
     return `<div class="sidebar-group">
-      <div class="sidebar-group-header" data-committee="${_esc(comm)}" data-click="browserToggleCommGroup">
-        <span class="group-arrow">${collapsed ? '▶' : '▼'}</span>
+      <div class="sidebar-group-header${collapsed ? ' collapsed' : ''}" data-committee="${_esc(comm)}" data-click="browserToggleCommGroup">
+        <span class="group-arrow">◀</span>
         <span class="group-name">${_esc(comm)}</span>
         <span class="group-count">${groups[comm].length}</span>
       </div>
@@ -314,14 +315,13 @@ function _groupedHtml(meetings) {
 function _meetingCardHtml(m, inGroup) {
   const active    = m.meeting_id === _activeId;
   const dateStr   = (m.date || m.meeting_id).replace(/_/g, '/');
-  const commHtml  = inGroup ? '' :
-    `<span class="sidebar-committee">${_esc((m.committee || '').replace(/_/g, ' '))}</span>`;
+  const committee = (m.committee || '').replace(/_/g, ' ');
+  const title     = inGroup || !committee ? dateStr : committee;
+  const meta      = inGroup || !committee ? '' : `<span class="sidebar-date">${_esc(dateStr)}</span>`;
   return `<div class="sidebar-meeting ${active ? 'active' : ''} ${inGroup ? 'in-group' : ''}"
-               data-meeting-id="${_esc(m.meeting_id)}" data-click="browserSwitchMeeting">
-    <div class="sidebar-meeting-title">${_esc(dateStr)}</div>
-    <div class="sidebar-meeting-meta">
-      ${commHtml}
-    </div>
+               data-meeting-id="${_esc(m.meeting_id)}" data-click="browserSwitchMeeting" title="${_esc(committee)}">
+    <div class="sidebar-meeting-title">${_esc(title)}</div>
+    ${meta ? `<div class="sidebar-meeting-meta">${meta}</div>` : ''}
   </div>`;
 }
 
@@ -339,8 +339,8 @@ function browserSetSort(mode) {
   _renderSidebar();
 }
 
-function browserToggleGroup() {
-  _groupByComm = !_groupByComm;
+function browserSetGroup(mode) {
+  _groupByComm = mode === 'committee';
   _collapsedGroups.clear();
   _renderSidebar();
 }
@@ -348,11 +348,6 @@ function browserToggleGroup() {
 function browserToggleCommGroup(comm) {
   if (_collapsedGroups.has(comm)) _collapsedGroups.delete(comm);
   else _collapsedGroups.add(comm);
-  _renderSidebar();
-}
-
-function browserFilterParticipant(value) {
-  _filterPart = value;
   _renderSidebar();
 }
 
@@ -382,37 +377,6 @@ function browserToggleSummary() {
   const open = bar.classList.toggle('open');
   const btn = _panel?.querySelector('#browser-summary-btn span:not(.material-symbols-outlined)');
   if (btn) btn.textContent = open ? 'סגירה' : 'סיכום';
-}
-
-/* ── Participant loading ─────────────────────────────────────────── */
-async function _loadAllParticipants() {
-  const toLoad = [..._meetings];
-  _partLoadedCount = 0;
-  await Promise.all(toLoad.map(m => _loadParticipantsFor(m.meeting_id, toLoad.length)));
-}
-
-async function _loadParticipantsFor(meetingId, total) {
-  if (_partCache[meetingId] !== undefined) { // already cached
-    _onParticipantLoaded(total);
-    return;
-  }
-  try {
-    const res  = await fetch(`/api/research/${_sid}/meeting/${encodeURIComponent(meetingId)}/participants`);
-    const data = await res.json();
-    _partCache[meetingId] = (data.participants || []).map(p => p.toLowerCase());
-  } catch {
-    _partCache[meetingId] = [];
-  }
-  _onParticipantLoaded(total);
-}
-
-function _onParticipantLoaded(total) {
-  _partLoadedCount++;
-  if (_partLoadedCount >= total) {
-    const inp = _panel?.querySelector('#sidebar-part-input');
-    if (inp) { inp.disabled = false; inp.placeholder = 'סנן לפי משתתף…'; }
-    if (_filterPart) _renderSidebar(); // re-render now all data is available
-  }
 }
 
 /* ── Load meeting (summary + transcript) ─────────────────────────── */
@@ -461,26 +425,13 @@ async function _loadMeeting(meetingId, { pushUrl = true } = {}) {
 
     _initHeatmap();
 
-    // Heatmap strip click → proportional scroll.
-    // Uses col.scrollHeight coordinates to match hm-viewport tracking.
-    const strip = _panel.querySelector('#heatmap-strip');
-    strip.addEventListener('click', e => {
-      const rect = strip.getBoundingClientRect();
-      const pct  = (e.clientY - rect.top) / rect.height;
-      col.scrollTo({ top: Math.max(0, pct * col.scrollHeight), behavior: 'smooth' });
-    });
+    _wireHeatmapStrip(col);
+    col.addEventListener('scroll', () => { _updateHeatmapViewport(); _updateNavCount(); }, { passive: true });
 
-    // Scroll listener → update viewport indicator
-    col.addEventListener('scroll', _updateHeatmapViewport, { passive: true });
-
-    // Async: color the heatmap by the speeches matching the search query
-    _loadHitsHeatmap(meetingId, _searchQuery());
-
-    if (_pendingFocus) {
-      const focus = _pendingFocus;
-      _pendingFocus = null;
-      requestAnimationFrame(() => browserFocusSpeech(focus.speech, focus));
-    }
+    const focus = _pendingFocus;
+    _pendingFocus = null;
+    _loadHitsHeatmap(meetingId, _searchQuery(), focus ? null : 'first');
+    if (focus) requestAnimationFrame(() => browserFocusSpeech(focus.speech, focus));
 
   } catch (err) {
     col.innerHTML = `<div class="browser-loading"><div class="browser-error">שגיאה בטעינה: ${_esc(err.message)}</div></div>`;
@@ -542,23 +493,21 @@ function _summarySectionsHtml(topics) {
 }
 
 function _summaryHtml(data, m) {
-  const topics = data.topics || [];
-  if (!topics.length) return '';
-
-  const metaParts = [];
-  if (m?.committee) metaParts.push(_esc((m.committee + '').replace(/_/g, ' ').trim()));
-  if (m?.date)      metaParts.push(_esc((m.date + '').replace(/_/g, '/')));
-  const metaHtml = metaParts.length
-    ? `<span class="summary-toggle-sep">|</span><span class="summary-toggle-meta">${metaParts.join(' | ')}</span>`
-    : '';
+  const topics    = data.topics || [];
+  const committee = _esc(String(m?.committee || '').replace(/_/g, ' ').trim());
+  const date      = _esc(String(m?.date || '').replace(/_/g, '/'));
+  const titleHtml = `<span class="meeting-heading"><span class="meeting-title">${committee || date}</span>${committee && date ? `<span class="meeting-date">${date}</span>` : ''}</span>`;
+  if (!topics.length) return `<div class="summary-panel"><div class="summary-toggle">${titleHtml}</div></div>`;
 
   return `
 <details class="summary-panel">
   <summary class="summary-toggle">
-    <span class="summary-toggle-arrow">▼</span>
-    <span class="material-symbols-outlined summary-toggle-icon">auto_awesome</span>
-    <span>סיכום</span>
-    ${metaHtml}
+    <span class="summary-toggle-label">
+      <span class="summary-toggle-arrow">▼</span>
+      <span class="material-symbols-outlined summary-toggle-icon">auto_awesome</span>
+      <span>סיכום AI</span>
+    </span>
+    ${titleHtml}
   </summary>
   <div class="summary-body">${_summarySectionsHtml(topics)}</div>
 </details>`;
@@ -585,7 +534,7 @@ function _wireSummaryJumps(root) {
   root?.querySelectorAll('.summary-approx-btn[data-approx-quote], .summary-bullet-btn[data-approx-quote]').forEach(btn => {
     btn.addEventListener('click', e => {
       e.stopPropagation();
-      _loadHitsHeatmap(_activeId, btn.dataset.approxQuote, true);
+      _loadHitsHeatmap(_activeId, btn.dataset.approxQuote, 'best');
     });
   });
 }
@@ -605,9 +554,30 @@ function _wireTopicHits(root) {
 }
 
 /* ── Transcript ──────────────────────────────────────────────────── */
+function _meetingHeaderHtml(headerChunks) {
+  if (!headerChunks.length) return '';
+  const agenda = headerChunks.find(c => c.speaker.trim() === 'סדר היום') || headerChunks[0];
+  const rows = headerChunks.map(c => `
+    <div class="chunk-card chunk-card--header" data-chunk-id="${_esc(c.chunk_id)}">
+      ${c.speaker ? `<span class="chunk-speaker">${_esc(c.speaker)}</span>` : ''}
+      <div class="chunk-text">${_esc(c.text)}</div>
+    </div>`).join('');
+  return `
+<details class="meeting-header">
+  <summary class="meeting-header-summary">
+    <span class="material-symbols-outlined meeting-header-arrow">chevron_left</span>
+    <b>פרטי הישיבה</b>
+    <span class="meeting-header-hint">${_esc(agenda.text)}</span>
+  </summary>
+  <div class="meeting-header-body">${rows}</div>
+</details>`;
+}
+
 function _transcriptHtml(data) {
-  const chunks = data.chunks || [];
-  if (!chunks.length) return '<div class="browser-empty">אין תמלול זמין</div>';
+  const allChunks = data.chunks || [];
+  if (!allChunks.length) return '<div class="browser-empty">אין תמלול זמין</div>';
+  const headerCount = data.header_count || 0;
+  const chunks = allChunks.slice(headerCount);
 
   const rows = chunks.map(c => {
     const color    = topicColor(c.topic_index);
@@ -633,7 +603,7 @@ function _transcriptHtml(data) {
 </div>`;
   }).join('');
 
-  return `<div class="transcript-body" id="transcript-body" data-meeting-id="${_esc(data.meeting_id)}">${rows}</div>`;
+  return `<div class="transcript-body" id="transcript-body" data-meeting-id="${_esc(data.meeting_id)}">${_meetingHeaderHtml(allChunks.slice(0, headerCount))}${rows}</div>`;
 }
 
 /* ── Heatmap: init, render, viewport indicator ───────────────────── */
@@ -653,14 +623,15 @@ function _searchQuery() {
 }
 
 /* /hits for `query`: highlight its words in the transcript and mark them on the heatmap;
-   optionally scroll to the best speech */
-async function _loadHitsHeatmap(meetingId, query, scrollToBest = false) {
+   scrollTo 'best' goes to the best matching speech, 'first' to the first match */
+async function _loadHitsHeatmap(meetingId, query, scrollTo = null) {
   const strip = _panel?.querySelector('#heatmap-strip');
   const body  = _panel?.querySelector('#transcript-body');
   if (!query) {
     _unmarkText(body, 'keyword-highlight');
     _hmHits = [];
     _renderHeatmap();
+    _updateNavCount();
     return;
   }
   strip?.classList.add('loading');
@@ -676,9 +647,14 @@ async function _loadHitsHeatmap(meetingId, query, scrollToBest = false) {
       _markTextRanges(card?.querySelector('.chunk-text'), hit.ranges || [], 'keyword-highlight');
     }
     _renderHeatmap();
-    if (scrollToBest) {
+    _updateNavCount();
+    if (scrollTo === 'best') {
       const best = _hmHits.reduce((a, h) => (!a || h.score > a.score) ? h : a, null);
       if (best) browserFocusSpeech(best.speech_idx);
+    } else if (scrollTo === 'first') {
+      const anchors = _hitAnchors();
+      const first = anchors.find(a => !a.closest('.meeting-header')) || anchors[0];
+      if (first) _scrollColTo(first);
     }
   } catch (err) {
     console.error('[browser] hits failed:', err);
@@ -704,15 +680,111 @@ function _renderHeatmap() {
     const card = col.querySelector(`.transcript-body .chunk-card[data-chunk-id="${CSS.escape(String(hit.speech_idx))}"]`);
     if (!card) continue;
     const marks = card.querySelectorAll('mark.keyword-highlight');
-    for (const el of (marks.length ? marks : [card])) {
+    const folded = card.closest('details:not([open])');
+    for (const el of (folded ? [folded] : (marks.length ? marks : [card]))) {
       const row = Math.floor((el.getBoundingClientRect().top - colTop) * scale / _HEATMAP_ROW_PX);
       const best = strongestByRow.get(row);
       if (!best || strength(hit) > strength(best)) strongestByRow.set(row, hit);
     }
   }
   bandsEl.innerHTML = [...strongestByRow].map(([row, hit]) =>
-    `<div class="hm-band" style="top:${row * _HEATMAP_ROW_PX}px; opacity:${0.35 + 0.65 * strength(hit)}"
-          title="${hit.matched_words} מתוך ${hit.query_words} מילות החיפוש"></div>`).join('');
+    `<div class="hm-band" data-speech-idx="${_esc(hit.speech_idx)}" style="top:${row * _HEATMAP_ROW_PX}px; opacity:${0.35 + 0.65 * strength(hit)}"></div>`).join('');
+}
+
+/* Hovering the strip names the nearest match (speaker, matched words); clicking goes to it, or scrolls
+   proportionally away from the matches. */
+const _HEATMAP_HOVER_PX = 5;
+
+function _bandNear(strip, clientY) {
+  let nearest = null, nearestDistance = _HEATMAP_HOVER_PX;
+  strip.querySelectorAll('.hm-band').forEach(band => {
+    const rect = band.getBoundingClientRect();
+    const distance = Math.abs(rect.top + rect.height / 2 - clientY);
+    if (distance <= nearestDistance) { nearest = band; nearestDistance = distance; }
+  });
+  return nearest;
+}
+
+function _wireHeatmapStrip(col) {
+  const strip = _panel.querySelector('#heatmap-strip');
+  const tip   = _panel.querySelector('#hm-tip');
+  strip.addEventListener('click', e => {
+    const band = _bandNear(strip, e.clientY);
+    if (band) { browserFocusSpeech(band.dataset.speechIdx); return; }
+    const rect = strip.getBoundingClientRect();
+    const pct  = (e.clientY - rect.top) / rect.height;
+    col.scrollTo({ top: Math.max(0, pct * col.scrollHeight), behavior: 'smooth' });
+  });
+  strip.addEventListener('mousemove', e => {
+    const band = _bandNear(strip, e.clientY);
+    const hit  = band && _hmHits.find(h => String(h.speech_idx) === band.dataset.speechIdx);
+    if (!hit) { tip.hidden = true; return; }
+    const card    = col.querySelector(`.chunk-card[data-chunk-id="${CSS.escape(String(hit.speech_idx))}"]`);
+    const speaker = card?.querySelector('.chunk-speaker')?.textContent || '';
+    tip.innerHTML = `<b>${_esc(speaker)}</b><span>${_esc(hit.matched_words)} מתוך ${_esc(hit.query_words)} מילות החיפוש</span>`;
+    tip.style.top = `${e.clientY - strip.parentElement.getBoundingClientRect().top}px`;
+    tip.hidden = false;
+  });
+  strip.addEventListener('mouseleave', () => { tip.hidden = true; });
+}
+
+/* ── Transcript navigation: start / end, previous / next search match ── */
+/* Matches are the speeches with highlighted words, anchored at their first highlighted word. */
+function _hitAnchors() {
+  const body = _panel?.querySelector('#transcript-body');
+  if (!body || !_hmHits.length) return [];
+  const hitIdx = new Set(_hmHits.map(h => String(h.speech_idx)));
+  return [...body.querySelectorAll('.chunk-card')]
+    .filter(card => hitIdx.has(card.dataset.chunkId))
+    .map(card => card.querySelector('mark.keyword-highlight') || card);
+}
+
+function _shownElement(el) {
+  return el.closest('details:not([open])')?.querySelector('summary') || el;
+}
+
+function _reveal(el) {
+  const folded = el.closest('details:not([open])');
+  if (folded) folded.open = true;
+}
+
+function _anchorCenterInCol(col, anchor) {
+  const rect = _shownElement(anchor).getBoundingClientRect();
+  return col.scrollTop + rect.top - col.getBoundingClientRect().top + rect.height / 2;
+}
+
+function _scrollColTo(anchor) {
+  const col = _panel?.querySelector('#browser-transcript-col');
+  if (!col) return;
+  _reveal(anchor);
+  col.scrollTo({ top: Math.max(0, _anchorCenterInCol(col, anchor) - col.clientHeight / 2), behavior: 'smooth' });
+}
+
+function browserNav(where) {
+  const col = _panel?.querySelector('#browser-transcript-col');
+  if (!col) return;
+  if (where === 'start') { col.scrollTo({ top: 0, behavior: 'smooth' }); return; }
+  if (where === 'end')   { col.scrollTo({ top: col.scrollHeight, behavior: 'smooth' }); return; }
+  const anchors    = _hitAnchors();
+  const viewCenter = col.scrollTop + col.clientHeight / 2;
+  const centers    = anchors.map(a => _anchorCenterInCol(col, a));
+  const index = where === 'next'
+    ? centers.findIndex(c => c > viewCenter + 2)
+    : centers.findLastIndex(c => c < viewCenter - 2);
+  if (index >= 0) _scrollColTo(anchors[index]);
+}
+
+function _updateNavCount() {
+  const hitsEl  = _panel?.querySelector('#proto-nav-hits');
+  const countEl = _panel?.querySelector('#proto-nav-count');
+  const col     = _panel?.querySelector('#browser-transcript-col');
+  if (!hitsEl || !countEl || !col) return;
+  const anchors = _hitAnchors();
+  hitsEl.hidden = !anchors.length;
+  if (!anchors.length) return;
+  const viewCenter = col.scrollTop + col.clientHeight / 2;
+  const passed = anchors.filter(a => _anchorCenterInCol(col, a) <= viewCenter + 2).length;
+  countEl.textContent = `${Math.max(passed, 1)}/${anchors.length}`;
 }
 
 function _updateHeatmapViewport() {
@@ -738,6 +810,7 @@ function browserFocusSpeech(speechIdx, range = null) {
   const col  = _panel?.querySelector('#browser-transcript-col');
   const card = col?.querySelector(`.chunk-card[data-chunk-id="${CSS.escape(String(speechIdx))}"]`);
   if (!col || !card) return;
+  _reveal(card);
 
   const textRange = range?.quote ? _quoteRangeInCard(card, range.quote)
     : (range?.offset != null && range?.length ? range : null);
@@ -748,15 +821,10 @@ function browserFocusSpeech(speechIdx, range = null) {
                         length: mark ? textRange.length : null });
   }
 
-  const anchor = mark || card;
-  const target = col.scrollTop
-    + anchor.getBoundingClientRect().top
-    - col.getBoundingClientRect().top
-    - col.clientHeight / 2
-    + anchor.getBoundingClientRect().height / 2;
-  const alreadyThere = Math.abs(col.scrollTop - Math.max(0, target)) < 4;
+  const target = Math.max(0, _anchorCenterInCol(col, mark || card) - col.clientHeight / 2);
+  const alreadyThere = Math.abs(col.scrollTop - target) < 4;
   if (mark) _afterScrollSettles(col, alreadyThere, () => marks.forEach(m => m.classList.add('sweep')));
-  col.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+  col.scrollTo({ top: target, behavior: 'smooth' });
 }
 
 /* ── Quote highlight ─────────────────────────────────────────────── */
@@ -845,10 +913,14 @@ function _wireTranscriptSharing() {
   col.addEventListener('scroll', _hideSelectionShareButton, { passive: true });
 }
 
-/* Dragging the touch selection handles fires no touchend on the column: follow the selection once it settles */
+/* A long-press selection and dragging its touch handles fire no touchend on the column:
+   follow the selection once it settles */
 let _selectionSettleTimer = null;
 function _onSelectionHandleDrag() {
-  if (!_selectionShareButton || _selectionShareButton.style.display === 'none') return;
+  const buttonShown = _selectionShareButton && _selectionShareButton.style.display !== 'none';
+  const selection = document.getSelection();
+  const inTranscript = selection?.anchorNode && _panel?.querySelector('#browser-transcript-col')?.contains(selection.anchorNode);
+  if (!buttonShown && !inTranscript) return;
   clearTimeout(_selectionSettleTimer);
   _selectionSettleTimer = setTimeout(_onTranscriptSelection, 250);
 }
@@ -981,7 +1053,6 @@ async function browserLoadMore() {
     const newOnes = (data.meetings || []).filter(m => !existingIds.has(m.meeting_id));
     _meetings = [..._meetings, ...newOnes];
     _renderSidebar();
-    if (newOnes.length) _loadNewParticipants(newOnes);
     if ((data.meetings || []).length < requested) btn.style.display = 'none';
     else btn.textContent = 'טעינת ישיבות נוספות';
   } catch (err) {
@@ -1013,11 +1084,6 @@ async function openProtocolBrowserWithSearch(sessionId, searchRequest, opts = {}
   }
 }
 
-/* called after browserLoadMore adds new meetings to _meetings */
-async function _loadNewParticipants(newMeetings) {
-  await Promise.all(newMeetings.map(m => _loadParticipantsFor(m.meeting_id, newMeetings.length)));
-  if (_filterPart) _renderSidebar();
-}
 
 
 /* ── Panel chat (ask about current meeting) ──────────────────────── */

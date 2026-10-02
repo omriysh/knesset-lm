@@ -624,6 +624,52 @@ def speaker_turn_starts(transcript_text: str) -> list[int]:
     return [match.end() for match in re.finditer(r"\n[ \t]*\n", transcript_text)]
 
 
+_INTERJECTION_LABELS = {"קריאה", "קריאות", "קריאת ביניים"}
+# Header section labels besides the attendance ones, after _header_label_base() normalization
+_HEADER_SECTION_LABELS = {
+    "סדר היום", "על סדר היום", "הצעה לסדר היום בנושא", "הצעה לדיון מהיר בנושא", "דיון מהיר בנושא",
+    "דיון בנושא", "הצעת חוק יסוד", "הערות", "מנהלי הוועדות", "מנהלות הוועדות", "מנהלות ועדה",
+    "נכחו", "נוכחים", "משתתפים", "משתתף", "משתתפת", "מוזמנים",
+    "חברי הכנסת", "חבר הכנסת", "חברת הכנסת", "חברי הוועדה", "חברי הועדה",
+}
+_ONLINE_SUFFIX_RE = re.compile(r"\s*באמצעים (מקוונים|דיגיטליים)\s*$")
+
+
+def _header_label_base(label: str) -> str:
+    """ "מוזמנים (באמצעים מקוונים)", "נכחו באמצעים מקוונים", "סדר-היום:" → the section name alone."""
+    text = re.sub(r"\(([^)]*)\)", r" \1 ", label).replace("-", " ").rstrip(":")
+    text = re.sub(r"\s+", " ", text).strip()
+    return _ONLINE_SUFFIX_RE.sub("", text).strip()
+
+
+def count_header_chunks(chunks: list[dict]) -> int:
+    """
+    How many of the meeting's first chunks are its header rather than speeches: the untitled protocol
+    heading (first chunk only) and the agenda / attendance / staff sections ("סדר היום", "נכחו",
+    "מוזמנים באמצעים מקוונים", "רישום פרלמנטרי", ...), up to the first person speaking.
+    """
+    count = 0
+    for idx, chunk in enumerate(chunks[:_MAX_HEADER_SPEECHES]):
+        speaker = chunk["speaker"].strip()
+        base = _header_label_base(speaker)
+        is_heading = idx == 0 and not speaker
+        is_section = (bool(base) and speaker not in _INTERJECTION_LABELS
+                      and (base in _HEADER_SECTION_LABELS or _is_attendance_header_label(base)))
+        if not (is_heading or is_section):
+            break
+        count += 1
+    return count
+
+
+# Word/PDF leftovers that browsers draw as boxes (BEL cell markers, form feeds, Symbol-font bullets).
+# Replaced one-for-one so opinion quote offsets into the speech stay valid.
+_DISPLAY_CHAR_REPLACEMENTS = {
+    **{code: " " for code in (*range(0x00, 0x09), 0x0C, *range(0x0E, 0x20), 0x7F, 0xFEFF)},
+    0x0B: "\n",
+    **{code: "•" for code in range(0xF000, 0xF900)},
+}
+
+
 def format_meeting_chunks(meeting: dict) -> list[dict]:
     """
     The meeting's speeches as the web UI shows them and knesset.db stores them (speeches table,
@@ -674,4 +720,6 @@ def format_meeting_chunks(meeting: dict) -> list[dict]:
                     "speaker":  "",
                     "text":     para,
                 })
+    for chunk in chunks:
+        chunk["text"] = chunk["text"].translate(_DISPLAY_CHAR_REPLACEMENTS)
     return chunks

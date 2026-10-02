@@ -297,13 +297,11 @@ WEB_WORKSPACE_ASK_MAX_TOKENS         = 1024
 WEB_WORKSPACE_ASK_MAX_CONTEXT_CHARS  = 8000
 WEB_SSE_KEEPALIVE_SECONDS            = 15.0
 WEB_META_CACHE_SECONDS               = 3600
-# script-src names the exact CDN files index.html loads. The Tailwind play CDN sends no CORS headers, so it
-# cannot carry SRI: it is pinned to one version URL instead (the unversioned URL redirects, and CSP ignores
-# the path after a redirect). It injects its generated CSS as <style>, hence style-src 'unsafe-inline'.
+# script-src names the exact CDN files index.html loads. style-src 'unsafe-inline' is for the style=""
+# attributes the page and its scripts set (Tailwind is prebuilt into static/tailwind.css, scripts/build_css.py).
 WEB_CONTENT_SECURITY_POLICY = (
     "default-src 'self'; "
-    "script-src 'self' https://cdn.tailwindcss.com/3.4.17 "
-    "https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js "
+    "script-src 'self' https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js "
     "https://cdn.jsdelivr.net/npm/dompurify@3.4.16/dist/purify.min.js; "
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
     "font-src 'self' https://fonts.gstatic.com; "

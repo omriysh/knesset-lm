@@ -1444,7 +1444,7 @@ def research_meeting_transcript(session_id: str, meeting_id: str, request: Reque
     if load_session(session_id, request.app.state.sessions_dir) is None:
         return JSONResponse({"error": "Session not found"}, status_code=404)
 
-    from utils.meeting import load_meeting, format_meeting_chunks
+    from utils.meeting import load_meeting, format_meeting_chunks, count_header_chunks
     transcript_path = get_transcript_path_from_id(meeting_id)
     if not transcript_path or not transcript_path.exists():
         print(f"[transcript] no transcript file for meeting {meeting_id}: {transcript_path}", flush=True)
@@ -1456,11 +1456,13 @@ def research_meeting_transcript(session_id: str, meeting_id: str, request: Reque
     date = f"{parts[0]}/{parts[1]}/{parts[2]}" if len(parts) >= 4 else ""
     committee = transcript_path.parent.name
 
+    chunks = format_meeting_chunks(meeting)
     return {
-        "meeting_id": meeting_id,
-        "date":       date,
-        "committee":  committee,
-        "chunks":     format_meeting_chunks(meeting),
+        "meeting_id":   meeting_id,
+        "date":         date,
+        "committee":    committee,
+        "chunks":       chunks,
+        "header_count": count_header_chunks(chunks),
     }
 
 

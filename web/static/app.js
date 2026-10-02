@@ -30,7 +30,8 @@ import { startQuery, submitResponse } from './controller.js';
 import { configureUserInput } from './render/user_input.js';
 import { attachLazyToggleListener } from './render/lazy.js';
 import { attemptReconnect } from './reconnect.js';
-import { promptGeminiKeyIfMissing, refreshGeminiKeySettingsStatus } from './gemini_key.js';
+import { refreshGeminiKeySettingsStatus } from './gemini_key.js';
+import './research_intro.js';
 import { refreshModelSettings } from './models.js';
 
 // ── user_input → controller.submitResponse callback ────────────────────
@@ -66,6 +67,7 @@ function openSettings() {
   document.getElementById('settings-overlay').classList.add('open');
   document.getElementById('toggle-stages-always').checked =
     localStorage.getItem('showStagesAlways') === 'true';
+  document.getElementById('toggle-share-search').checked = window.shareIncludesSearch();
   refreshGeminiKeySettingsStatus();
   refreshModelSettings();
 }
@@ -87,7 +89,7 @@ async function openHelp() {
     _helpLoaded = true;
   } catch (exc) {
     console.error('[app] help load failed:', exc);
-    document.getElementById('help-content').textContent = 'שגיאה בטעינת העזרה.';
+    document.getElementById('help-content').innerHTML = '<p>שגיאה בטעינת העזרה.</p>';
   }
 }
 function closeHelp() {
@@ -101,4 +103,3 @@ window.openHelp             = openHelp;
 window.closeHelp            = closeHelp;
 window.onStagesAlwaysToggle = onStagesAlwaysToggle;
 
-if (!document.getElementById('tab-research')?.classList.contains('hidden')) promptGeminiKeyIfMissing();

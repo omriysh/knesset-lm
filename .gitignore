@@ -15,3 +15,6 @@ temp_*.py
 exp_*.py
 batch_state_*.json
 pilot*.json
+
+# Tailwind standalone CLI (downloaded by scripts/build_css.py)
+tools/tailwind/

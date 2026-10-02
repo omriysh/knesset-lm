@@ -34,22 +34,21 @@ function switchTab(name, { writeUrl = true, push = true } = {}) {
   const mobBtn = document.getElementById(`mob-tab-${name}`);
   if (mobBtn) mobBtn.classList.add('active');
 
-  const settingsButton = document.getElementById('settings-btn');
-  if (settingsButton) {
-    settingsButton.disabled = name !== 'research';
-    settingsButton.title = settingsButton.disabled ? 'ההגדרות זמינות בלשונית מחקר אוטומטי' : 'הגדרות';
-  }
+  if (name === 'reading' && writeUrl && !_readingTabHasResults()) browseSearch({ push: false });
+
+  const researchSettings = document.getElementById('settings-research');
+  if (researchSettings) researchSettings.disabled = name !== 'research';
 
   setActiveTab(name, { writeUrl, push });
-  if (name === 'research' && typeof window.promptGeminiKeyIfMissing === 'function') window.promptGeminiKeyIfMissing();
 }
 
 /* ── URL routing: /research, /protocols?… (url_state.js); back/forward re-applies the URL ── */
 function applyUrlRoute() {
   if (location.pathname === RESEARCH_PATH) { switchTab('research', { writeUrl: false }); return; }
   if (location.pathname !== PROTOCOLS_PATH) {
-    setActiveTab(document.getElementById('tab-research')?.classList.contains('hidden') ? 'reading' : 'research',
-                 { writeUrl: false });
+    const tab = document.getElementById('tab-research')?.classList.contains('hidden') ? 'reading' : 'research';
+    setActiveTab(tab, { writeUrl: false });
+    if (tab === 'reading' && !_readingTabHasResults()) browseSearch({ push: false });
     return;
   }
   switchTab('reading', { writeUrl: false });
@@ -58,7 +57,10 @@ function applyUrlRoute() {
   const input = document.getElementById('reading-search-input');
   if (input) input.value = target.query;
   rfSetFilters(target.filters);
-  if (!target.meeting) return;
+  if (!target.meeting) {
+    browseSearch({ push: false });
+    return;
+  }
   const focus = { speech: target.speech, offset: target.offset, length: target.length };
   if (browserShowsMeeting(target.meeting)) browserFocusSpeech(target.speech, focus);
   else if (browserListsMeeting(target.meeting)) browserSwitchMeeting(target.meeting, { focus, pushUrl: false });
@@ -95,7 +97,7 @@ async function _openMeetingFromUrl(target, focus) {
       focus,
       pushUrl:          false,
     });
-    _collapseRfb(label);
+    _collapseRfb();
   } catch (err) {
     console.error('[tabs] opening the linked meeting failed:', err);
     _showBrowseError('שגיאה בפתיחת הקישור: ' + err.message);
@@ -108,7 +110,12 @@ window.addEventListener('popstate', applyUrlRoute);
 document.addEventListener('DOMContentLoaded', applyUrlRoute);
 
 /* ── Browse search (keyword; empty = newest meetings) ────────────── */
-async function browseSearch() {
+function _readingTabHasResults() {
+  return !!document.querySelector('#reading-browser-area .browser-standalone-wrapper, #browse-loading-overlay');
+}
+
+/* push: false when the search only loads what the current URL already says (a link, the first visit). */
+async function browseSearch({ push = true } = {}) {
   const input = document.getElementById('reading-search-input');
   const btn   = document.getElementById('reading-search-btn');
   if (!input || !btn) return;
@@ -116,7 +123,7 @@ async function browseSearch() {
   const query   = input.value.trim();
   const filters = rfGetFilters();
   const searchRequest = { query, filters };
-  updateProtocolUrl({ query, filters, meeting: null }, { push: true });
+  updateProtocolUrl({ query, filters, meeting: null }, { push });
 
   _setBrowseLoading(true);
   try {
@@ -155,10 +162,11 @@ async function browseSearch() {
         postCompletion:   true,
         searchRequest,
         pushUrl:          false,
+        sortMode:         query ? 'relevance' : 'date_desc',
       }
     );
 
-    _collapseRfb(query || 'ישיבות אחרונות');
+    _collapseRfb();
 
   } catch (err) {
     console.error('[tabs] browse search failed:', err);
@@ -169,20 +177,48 @@ async function browseSearch() {
 }
 
 /* ── Filter bar collapse ─────────────────────────────────────────── */
+/* The collapsed bar shows the search as chips; removing one searches again without it. */
 function rfbExpand() {
   document.querySelector('.rfb')?.classList.remove('rfb-collapsed');
+  _scrolledSinceExpand = 0;
 }
 
 function rfbCollapse() {
-  const q = document.getElementById('rfb-collapsed-query')?.textContent || '';
-  _collapseRfb(q);
+  _collapseRfb();
 }
 
-function _collapseRfb(queryText) {
+function _collapseRfb() {
   document.querySelector('.rfb')?.classList.add('rfb-collapsed', 'rfb-has-results');
-  const q = document.getElementById('rfb-collapsed-query');
-  if (q) q.textContent = queryText;
+  const chips = document.getElementById('rfb-collapsed-chips');
+  if (!chips) return;
+  const query = document.getElementById('reading-search-input')?.value.trim() || '';
+  const queryChip = query
+    ? rfChipHtml(`"${query}"`, 'rfClearQueryAndSearch', { extraClass: 'chip--query' })
+    : '<span class="rfb-collapsed-label">ישיבות אחרונות</span>';
+  chips.innerHTML = queryChip + rfActiveChipsHtml('rfRemoveFilterAndSearch');
 }
+
+function rfClearQueryAndSearch() {
+  const input = document.getElementById('reading-search-input');
+  if (input) input.value = '';
+  browseSearch();
+}
+
+/* Reading the results folds an open filter bar away (after a short scroll, so a small nudge doesn't). */
+const _AUTO_COLLAPSE_SCROLL_PX = 160;
+let _scrolledSinceExpand = 0;
+const _lastScrollTop = new WeakMap();
+document.addEventListener('scroll', (event) => {
+  const scroller = event.target;
+  if (!(scroller instanceof Element) || !scroller.closest('#reading-browser-area')) return;
+  const previous = _lastScrollTop.get(scroller) ?? scroller.scrollTop;
+  _lastScrollTop.set(scroller, scroller.scrollTop);
+  const rfb = document.querySelector('.rfb');
+  if (!rfb?.classList.contains('rfb-has-results') || rfb.classList.contains('rfb-collapsed')) return;
+  if (document.querySelector('.rfb-dropdown:not(.hidden)')) return;
+  _scrolledSinceExpand += Math.abs(scroller.scrollTop - previous);
+  if (_scrolledSinceExpand > _AUTO_COLLAPSE_SCROLL_PX) _collapseRfb();
+}, true);
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
 function _setBrowseLoading(on) {

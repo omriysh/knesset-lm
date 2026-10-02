@@ -7,10 +7,10 @@
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="icon" href="/favicon.ico" sizes="any">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
-  <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Assistant:wght@300;400;600;700&family=Heebo:wght@300;400;500;700;800&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"/>
   <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
-  <script src="https://cdn.tailwindcss.com/3.4.17?plugins=forms@0.5.10,container-queries@0.1.1"></script>
-  <script src="/static/tailwind_config.js"></script>
+  <link rel="stylesheet" href="/static/components.css">
+  <link rel="stylesheet" href="/static/tailwind.css">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body class="bg-surface text-on-surface h-[100dvh] flex flex-col overflow-hidden show-welcome">
@@ -25,30 +25,24 @@
           <span class="material-symbols-outlined text-on-primary" style="font-size:20px;font-variation-settings:'FILL' 1">account_balance</span>
         </div>
         <div class="flex flex-col justify-center h-9 -mt-1">
-          <div class="text-base sm:text-lg font-bold text-primary leading-tight" style="font-family:'Be Vietnam Pro',sans-serif">מעורב ירושלמי</div>
-          <div class="hidden sm:block text-xs text-on-surface-variant opacity-70 leading-none mt-0.5" style="font-family:'Assistant',sans-serif">כלי מחקר על פעולות הכנסת</div>
+          <div class="text-base sm:text-lg font-bold text-primary leading-tight">מעורב ירושלמי</div>
+          <div class="hidden sm:block text-xs text-on-surface-variant opacity-70 leading-none mt-0.5">כלי מחקר על פעולות הכנסת</div>
         </div>
       </div>
 
       <!-- Desktop tab navigation (center) -->
-      <nav class="hidden md:flex items-center gap-1 bg-surface-container-low p-1.5 rounded-lg">
-        <button data-click="switchTab" data-arg="research" id="dt-tab-research"
-          class="app-tab-btn px-5 py-1.5 rounded-md text-sm font-semibold transition-all duration-200">
-          מחקר אוטומטי
-        </button>
-        <button data-click="switchTab" data-arg="reading" id="dt-tab-reading"
-          class="app-tab-btn active px-5 py-1.5 rounded-md text-sm font-semibold transition-all duration-200">
-          קריאה עצמית
-        </button>
+      <nav class="seg hidden md:flex">
+        <button data-click="switchTab" data-arg="research" id="dt-tab-research" class="seg-btn app-tab-btn">מחקר אוטומטי</button>
+        <button data-click="switchTab" data-arg="reading" id="dt-tab-reading" class="seg-btn app-tab-btn active">קריאה עצמית</button>
       </nav>
 
       <!-- Header actions -->
       <div class="flex items-center gap-1">
-        <button class="p-2 rounded-full text-on-surface-variant hover:bg-surface-container-high hover:text-primary transition-colors" title="עזרה" data-click="openHelp">
-          <span class="material-symbols-outlined" style="font-size:20px">help</span>
+        <button class="btn btn-ghost btn-icon header-icon-btn" title="עזרה" data-click="openHelp">
+          <span class="material-symbols-outlined">help</span>
         </button>
-        <button class="p-2 rounded-full text-on-surface-variant hover:bg-surface-container-high hover:text-primary transition-colors" title="הגדרות" id="settings-btn" data-click="openSettings">
-          <span class="material-symbols-outlined" style="font-size:20px">settings</span>
+        <button class="btn btn-ghost btn-icon header-icon-btn" title="הגדרות" id="settings-btn" data-click="openSettings">
+          <span class="material-symbols-outlined">settings</span>
         </button>
       </div>
     </div>
@@ -61,25 +55,46 @@
 
     <div id="chat-column" class="flex-1 overflow-y-auto px-4 py-6 space-y-4">
       <!-- Welcome state (shown until first query) -->
-      <div id="welcome-state" class="flex flex-col items-center justify-center h-full gap-4 text-center py-16">
-        <div class="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
-          <span class="material-symbols-outlined text-3xl text-primary" style="font-variation-settings:'FILL' 1">auto_awesome</span>
+      <div id="welcome-state" class="welcome">
+        <div class="welcome-icon">
+          <span class="material-symbols-outlined" style="font-variation-settings:'FILL' 1">auto_awesome</span>
         </div>
-        <div>
-          <div class="text-xl font-bold text-on-surface mb-1">שאל/י שאלה על חברי כנסת</div>
-          <div class="text-sm text-on-surface-variant max-w-sm">מה אני? אפשר לקרוא בעזרה משמאל למעלה</div>
-        </div>
+        <h1 class="welcome-title">מחקר אוטומטי</h1>
+        <p class="welcome-lead">סוכן AI שעונה על שאלות על פעולות ואמירות של חברי הכנסת.<br>
+          יש לו גישה לפרוטוקולים וההצבעות במליאה, והוא מראה לכם כל שלב בדרך וציטוט מקורי לכל טענה.</p>
+        <ol class="welcome-steps">
+          <li>תכנון</li><li>חיפוש במקורות</li><li>תשובה מנומקת</li>
+        </ol>
       </div>
       <!-- Messages appended here by JS -->
     </div>
 
-    <div id="input-bar" class="flex-shrink-0 bg-surface-container-highest/30 backdrop-blur-md border-t border-outline-variant/10 px-4 py-3">
+    <div id="input-bar" class="flex-shrink-0 px-4 py-3">
+      <div class="research-slot max-w-5xl mx-auto">
+        <div id="research-key-card" class="key-card" hidden>
+          <div class="key-card-text">
+            <b>כדי להתחיל, צריך מפתח Gemini API</b>
+            <span>המחקר רץ על מודלי Gemini של Google, עם המפתח שלכם. המפתח נשמר רק בדפדפן הזה ונשלח לשרת רק לצורך הבקשה.
+              <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">ליצירת מפתח ב-Google AI Studio</a></span>
+          </div>
+          <div class="key-card-form">
+            <input id="inline-key-input" class="field" type="password" autocomplete="off" spellcheck="false" dir="ltr"
+                   placeholder="AIza…" data-enter="saveInlineGeminiKey">
+            <button class="btn btn-primary" data-click="saveInlineGeminiKey">שמירה</button>
+          </div>
+          <div id="inline-key-error" class="key-card-error hidden"></div>
+        </div>
+        <div id="research-examples" class="examples" hidden>
+          <span class="examples-label">לדוגמה:</span>
+          <div class="examples-list" id="research-examples-list"></div>
+        </div>
+      </div>
       <div class="max-w-5xl mx-auto flex items-end gap-3">
         <textarea
           id="query-input"
           placeholder="שאל/י שאלה..."
           rows="1"
-          class="flex-1 resize-none bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-4 py-3 text-sm text-on-surface placeholder-on-surface-variant/60 outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all leading-relaxed"
+          class="field flex-1 resize-none leading-relaxed"
           style="min-height:48px;max-height:160px"
         ></textarea>
         <button
@@ -107,36 +122,30 @@
     <div class="rfb flex-shrink-0">
       <!-- Collapsed state (shown after search) -->
       <div class="rfb-collapsed-bar" id="rfb-collapsed-bar">
-        <button class="rfb-expand-btn" data-click="rfbExpand">
-          <span class="material-symbols-outlined" style="font-size:16px">tune</span>
-          חיפוש
+       <div class="rfb-collapsed-content">
+        <button class="btn btn-primary btn-sm btn-pill" data-click="rfbExpand">
+          <span class="material-symbols-outlined">tune</span>
+          עריכת חיפוש
         </button>
-        <span class="rfb-collapsed-query" id="rfb-collapsed-query"></span>
+        <div class="rfb-collapsed-chips" id="rfb-collapsed-chips"></div>
+       </div>
       </div>
       <div class="rfb-inner">
-        <div class="rfb-inner-header">
-          <button class="rfb-collapse-btn" data-click="rfbCollapse" title="קפל">
-            <span class="material-symbols-outlined" style="font-size:15px">keyboard_arrow_up</span>
-            סגירה
-          </button>
-        </div>
-        <div class="rfb-body">
-
-          <!-- ── Fields + filters (right, takes remaining width) ── -->
-          <div class="rfb-content">
-
-            <!-- Search fields -->
+       <div class="rfb-inner-content">
             <div class="rfb-search-row">
               <div class="rfb-field">
-                <label class="rfb-label">
+                <label class="rfb-label" for="reading-search-input">
                   <span class="material-symbols-outlined" style="font-size:13px">text_fields</span>
                   מילות מפתח
                 </label>
-                <input id="reading-search-input" type="text"
-                       class="w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-4 py-2.5 text-sm text-on-surface placeholder-on-surface-variant/60 outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all font-inherit"
+                <input id="reading-search-input" type="text" class="field"
                        placeholder="מילות מפתח בפרוטוקולים (ריק = ישיבות אחרונות)…"
                        data-enter="browseSearch" />
               </div>
+              <button id="reading-search-btn" class="btn btn-primary rfb-search-btn" data-click="browseSearch">
+                <span class="material-symbols-outlined" style="font-variation-settings:'FILL' 1">search</span>
+                <span>חיפוש</span>
+              </button>
             </div>
 
             <!-- Filter pills -->
@@ -153,7 +162,7 @@
                 <div class="rfb-dropdown hidden" id="rfdrop-committee">
                   <div class="rfb-dropdown-search">
                     <input type="text" placeholder="חיפוש ועדה…"
-                           class="w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-3 py-2 text-sm text-on-surface placeholder-on-surface-variant/60 outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all font-inherit"
+                           class="field field--sm"
                            data-input="rfFilterList" data-arg="rf-committee-list" />
                   </div>
                   <div class="rfb-option-list" id="rf-committee-list"></div>
@@ -172,7 +181,7 @@
                     <div class="rfb-part-title">חברי כנסת</div>
                     <div class="rfb-dropdown-search">
                       <input type="text" placeholder='חיפוש ח"כ…'
-                             class="w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-3 py-2 text-sm text-on-surface placeholder-on-surface-variant/60 outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all font-inherit"
+                             class="field field--sm"
                              data-input="rfFilterList" data-arg="rf-mk-list" />
                     </div>
                     <div class="rfb-option-list" id="rf-mk-list"></div>
@@ -181,7 +190,7 @@
                     <div class="rfb-part-title">מפלגה</div>
                     <div class="rfb-dropdown-search">
                       <input type="text" placeholder="חיפוש מפלגה…"
-                             class="w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-3 py-2 text-sm text-on-surface placeholder-on-surface-variant/60 outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all font-inherit"
+                             class="field field--sm"
                              data-input="rfFilterList" data-arg="rf-party-list" />
                     </div>
                     <div class="rfb-option-list" id="rf-party-list"></div>
@@ -190,7 +199,7 @@
                     <div class="rfb-part-title">אורחים</div>
                     <input id="rf-guest-input" type="text"
                            placeholder="טקסט חופשי: אורחים שאינם חברי כנסת"
-                           class="w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-3 py-2 text-sm text-on-surface placeholder-on-surface-variant/60 outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all font-inherit"
+                           class="field field--sm"
                            data-input="rfSetGuest" />
                   </div>
                 </div>
@@ -208,38 +217,32 @@
                     <div class="rfb-date-field">
                       <label>מתאריך</label>
                       <input id="rf-date-from" type="date" data-change="rfSetDate"
-                             class="w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-3 py-2 text-sm text-on-surface outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all font-inherit" />
+                             class="field field--sm" />
                     </div>
                     <div class="rfb-date-field">
                       <label>עד תאריך</label>
                       <input id="rf-date-to" type="date" data-change="rfSetDate"
-                             class="w-full bg-surface-container-lowest border border-outline-variant/40 rounded-xl px-3 py-2 text-sm text-on-surface outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20 transition-all font-inherit" />
+                             class="field field--sm" />
                     </div>
                   </div>
-                  <button class="rfb-date-apply" data-click="rfApplyDate">החל</button>
+                  <button class="btn btn-primary btn-block" data-click="rfApplyDate">החל</button>
                 </div>
               </div>
 
               <!-- Clear all -->
-              <button id="rf-clear-btn" class="rfb-clear-btn hidden" data-click="rfClearAll">
-                <span class="material-symbols-outlined" style="font-size:14px">close</span>
+              <button id="rf-clear-btn" class="btn btn-danger btn-sm btn-pill rfb-clear-btn hidden" data-click="rfClearAll">
+                <span class="material-symbols-outlined">close</span>
                 ניקוי הכל
+              </button>
+              <button class="btn btn-ghost btn-sm rfb-collapse-btn" data-click="rfbCollapse" title="קיפול">
+                <span class="material-symbols-outlined">keyboard_arrow_up</span>
+                סגירה
               </button>
             </div>
 
             <!-- Active chips -->
             <div id="rf-active-chips" class="rfb-active-chips hidden"></div>
-          </div>
-
-          <!-- ── Search button (left, vertically centered) ── -->
-          <div class="rfb-btn-area">
-            <button id="reading-search-btn" class="rfb-search-btn" data-click="browseSearch">
-              <span class="material-symbols-outlined" style="font-size:24px;font-variation-settings:'FILL' 1">search</span>
-              <span>חיפוש</span>
-            </button>
-          </div>
-
-        </div>
+       </div>
       </div>
     </div>
 
@@ -273,8 +276,8 @@
   <!-- ── Help overlay ── -->
   <div id="help-overlay" data-click="closeHelpOnBackdrop">
     <div id="help-panel">
-      <div id="help-content" class="prose-content">טוען…</div>
-      <button id="help-close" data-click="closeHelp">סגירה</button>
+      <div id="help-content" class="prose-content"><p>טוען…</p></div>
+      <button id="help-close" class="btn btn-secondary btn-block" data-click="closeHelp">סגירה</button>
     </div>
   </div>
 
@@ -282,37 +285,56 @@
   <div id="settings-overlay" data-click="closeSettingsOnBackdrop">
     <div id="settings-panel">
       <h2>הגדרות</h2>
-      <div class="settings-row">
-        <div>
-          <div class="settings-label">הצגת שלבי עיבוד תמיד</div>
-          <div class="settings-desc">הצגה אוטומטית של קופסת שלבי העיבוד (ברירת מחדל: כבוי)</div>
-        </div>
-        <label class="toggle-switch">
-          <input type="checkbox" id="toggle-stages-always" data-change="onStagesAlwaysToggle">
-          <span class="toggle-track"></span>
-        </label>
-      </div>
-      <div class="settings-row">
-        <div>
-          <div class="settings-label">מפתח Gemini API</div>
-          <div class="settings-desc" id="gemini-key-status">לא הוגדר</div>
-        </div>
-        <div class="gemini-key-settings-actions">
-          <button data-click="replaceGeminiKeyFromSettings">החלפה</button>
-          <button data-click="deleteGeminiKeyFromSettings">מחיקה</button>
-        </div>
-      </div>
-      <div class="settings-section">
-        <div class="settings-section-header">
+
+      <section class="settings-group">
+        <h3 class="settings-group-title">קריאה עצמית</h3>
+        <div class="settings-row">
           <div>
-            <div class="settings-label">מודלים</div>
-            <div class="settings-desc" id="model-settings-status"></div>
+            <div class="settings-label">קישורי שיתוף כוללים את החיפוש</div>
+            <div class="settings-desc">מילות המפתח והסינון נשמרות בקישור, כך שמי שפותח אותו רואה את אותן ההדגשות</div>
           </div>
-          <button class="model-settings-reset" data-click="resetResearchModels">ברירת מחדל</button>
+          <label class="toggle-switch">
+            <input type="checkbox" id="toggle-share-search" data-change="onShareSearchToggle">
+            <span class="toggle-track"></span>
+          </label>
         </div>
-        <div id="model-settings"></div>
-      </div>
-      <button id="settings-close" data-click="closeSettings">סגירה</button>
+      </section>
+
+      <fieldset class="settings-group" id="settings-research" disabled>
+        <h3 class="settings-group-title">מחקר אוטומטי</h3>
+        <div class="settings-group-note">ההגדרות האלה זמינות בלשונית מחקר אוטומטי</div>
+        <div class="settings-row">
+          <div>
+            <div class="settings-label">הצגת שלבי עיבוד תמיד</div>
+            <div class="settings-desc">הצגה אוטומטית של קופסת שלבי העיבוד (ברירת מחדל: כבוי)</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="toggle-stages-always" data-change="onStagesAlwaysToggle">
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+        <div class="settings-row">
+          <div>
+            <div class="settings-label">מפתח Gemini API</div>
+            <div class="settings-desc" id="gemini-key-status">לא הוגדר</div>
+          </div>
+          <div class="gemini-key-settings-actions">
+            <button class="btn btn-secondary btn-sm" data-click="replaceGeminiKeyFromSettings">החלפה</button>
+            <button class="btn btn-danger btn-sm" data-click="deleteGeminiKeyFromSettings">מחיקה</button>
+          </div>
+        </div>
+        <div class="settings-section">
+          <div class="settings-section-header">
+            <div>
+              <div class="settings-label">מודלים</div>
+              <div class="settings-desc" id="model-settings-status"></div>
+            </div>
+            <button class="btn btn-secondary btn-sm" data-click="resetResearchModels">ברירת מחדל</button>
+          </div>
+          <div id="model-settings"></div>
+        </div>
+      </fieldset>
+      <button id="settings-close" class="btn btn-secondary btn-block" data-click="closeSettings">סגירה</button>
     </div>
   </div>
 
@@ -327,8 +349,8 @@
         data-enter="saveGeminiKeyFromDialog">
       <div id="gemini-key-error" class="hidden"></div>
       <div class="gemini-key-actions">
-        <button id="gemini-key-save" data-click="saveGeminiKeyFromDialog">שמירה</button>
-        <button id="gemini-key-later" data-click="cancelGeminiKeyDialog">אחר כך</button>
+        <button id="gemini-key-save" class="btn btn-primary" data-click="saveGeminiKeyFromDialog">שמירה</button>
+        <button id="gemini-key-later" class="btn btn-secondary" data-click="cancelGeminiKeyDialog">אחר כך</button>
       </div>
     </div>
   </div>

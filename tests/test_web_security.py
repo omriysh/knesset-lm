@@ -792,11 +792,11 @@ class TestSecurityHeaders:
                 continue
             assert re.fullmatch(r"https://[a-z0-9.-]+/[^*\s]*[^/*\s]", source), source
 
-    def test_tailwind_is_pinned_to_one_version(self, web):
+    def test_tailwind_is_served_prebuilt(self, web):
         r = web.client.get("/")
-        tailwind = re.findall(r'<script[^>]+src="(https://cdn\.tailwindcss\.com[^"]*)"', r.text)
-        assert len(tailwind) == 1 and re.match(r"https://cdn\.tailwindcss\.com/\d+\.\d+\.\d+\?", tailwind[0])
-        assert allowed(r.headers["Content-Security-Policy"], "script-src", tailwind[0])
+        assert "cdn.tailwindcss.com" not in r.text
+        assert '<link rel="stylesheet" href="/static/tailwind.css">' in r.text
+        assert web.client.get("/static/tailwind.css").status_code == 200
 
     def test_docs_and_openapi_stay_public(self, web):
         assert web.client.get("/openapi.json").status_code == 200
