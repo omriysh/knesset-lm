@@ -125,6 +125,36 @@ CREATE VIRTUAL TABLE IF NOT EXISTS speeches_fts USING fts5(
     text, content='speeches', content_rowid='id', {_FTS_TOKENIZE}
 );
 
+CREATE TABLE IF NOT EXISTS mk_themes (
+    id               INTEGER PRIMARY KEY,
+    mk_id            TEXT NOT NULL,
+    knesset_num      INTEGER NOT NULL,
+    rank             INTEGER NOT NULL,
+    title            TEXT NOT NULL,
+    summary          TEXT NOT NULL,
+    model_rank       INTEGER,
+    persistence_rank INTEGER,
+    first_date       TEXT,
+    last_date        TEXT,
+    meeting_count    INTEGER NOT NULL,
+    opinion_count    INTEGER NOT NULL,
+    model            TEXT,
+    generated_at     TEXT,
+    UNIQUE (mk_id, knesset_num, rank)
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS mk_themes_fts USING fts5(
+    title, summary, content='mk_themes', content_rowid='id', {_FTS_TOKENIZE}
+);
+
+CREATE TABLE IF NOT EXISTS mk_theme_opinions (
+    theme_id    INTEGER NOT NULL,
+    knesset_num INTEGER NOT NULL,
+    meeting_id  TEXT NOT NULL,
+    opinion_idx INTEGER NOT NULL,
+    PRIMARY KEY (theme_id, meeting_id, opinion_idx)
+);
+CREATE INDEX IF NOT EXISTS idx_mk_theme_opinions_opinion ON mk_theme_opinions(meeting_id, opinion_idx);
+
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT
@@ -139,6 +169,7 @@ TARGET_TABLES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "meetings":   (("attendance",), ()),
     "summaries":  (("topics", "opinions"), ("topics_fts", "opinions_fts")),
     "speeches":   (("speeches",), ("speeches_fts",)),
+    "mk_themes":  (("mk_theme_opinions", "mk_themes"), ("mk_themes_fts",)),
 }
 
 _BATCH = 1000
@@ -238,6 +269,40 @@ def _insert_rows(conn: sqlite3.Connection, table: str, columns: tuple[str, ...],
         count += len(batch)
     conn.commit()
     return count
+
+
+def replace_mk_themes(conn, theme_file: dict) -> tuple[int, int]:
+    """
+    Replace one MK's themes with those of a Data/mk_themes/<k>/<mk_id>.json payload
+    (summarization.mk_themes.themes_file_payload). Opinions are linked by (meeting_id, idx), which survives
+    an opinions rebuild; links to opinions missing from the db are dropped. Dates and counts are derived
+    from the linked opinions. FTS is rebuilt by the caller. Returns (themes written, links dropped).
+    """
+    mk_id, knesset_num = theme_file["mk_id"], theme_file["knesset_num"]
+    conn.execute("DELETE FROM mk_theme_opinions WHERE theme_id IN "
+                 "(SELECT id FROM mk_themes WHERE mk_id = ? AND knesset_num = ?)", (mk_id, knesset_num))
+    conn.execute("DELETE FROM mk_themes WHERE mk_id = ? AND knesset_num = ?", (mk_id, knesset_num))
+    links_dropped = 0
+    for theme in theme_file["themes"]:
+        theme_id = conn.execute(
+            "INSERT INTO mk_themes(mk_id, knesset_num, rank, title, summary, model_rank, persistence_rank, "
+            "meeting_count, opinion_count, model, generated_at) VALUES (?,?,?,?,?,?,?,0,0,?,?)",
+            (mk_id, knesset_num, theme["rank"], theme["title"], theme["summary"], theme.get("model_rank"),
+             theme.get("persistence_rank"), theme_file.get("model"), theme_file.get("generated_at"))).lastrowid
+        refs = list(dict.fromkeys((meeting_id, idx) for meeting_id, idx in theme["opinions"]))
+        existing = [ref for ref in refs if conn.execute(
+            "SELECT 1 FROM opinions WHERE meeting_id = ? AND idx = ?", ref).fetchone()]
+        links_dropped += len(refs) - len(existing)
+        conn.executemany("INSERT INTO mk_theme_opinions(theme_id, knesset_num, meeting_id, opinion_idx) VALUES (?,?,?,?)",
+                         [(theme_id, knesset_num, meeting_id, idx) for meeting_id, idx in existing])
+        conn.execute("""
+            UPDATE mk_themes SET (first_date, last_date, meeting_count, opinion_count) = (
+                SELECT MIN(m.date), MAX(m.date), COUNT(DISTINCT l.meeting_id), COUNT(*)
+                FROM mk_theme_opinions l JOIN meetings m ON m.meeting_id = l.meeting_id
+                WHERE l.theme_id = ?)
+            WHERE id = ?""", (theme_id, theme_id))
+    conn.commit()
+    return len(theme_file["themes"]), links_dropped
 
 
 def insert_mks(conn, rows):

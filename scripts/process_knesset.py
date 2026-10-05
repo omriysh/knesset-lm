@@ -8,8 +8,10 @@ The complete offline data refresh for a Knesset number, in one command:
   2. Summarize every transcript that has no summary yet (scripts/summarize_knesset_batches.py,
      Gemini Batch API; needs GOOGLE_API_KEY or GEMINI_API_KEY). Resumes an interrupted run.
   3. Rebuild Data/knesset.db (scripts/build_knesset_db.py, all targets).
+  4. Summarize the themes of every MK whose opinions changed (scripts/summarize_mk_themes_batches.py,
+     Gemini Batch API, reads the rebuilt knesset.db), then load them (build_knesset_db.py --target mk_themes).
 
-Exits 1 when anything failed: a committee or session download, a meeting that could not be
+Exits 1 when anything failed: a committee or session download, a meeting or MK that could not be
 summarized, or the database build. Plenum .doc files need Microsoft Word (pywin32).
 
 Usage
@@ -17,7 +19,8 @@ Usage
     cd knesset-lm
     python scripts/process_knesset.py --knesset 25
     python scripts/process_knesset.py --knesset 25 --skip "ועדת הכנסת"
-    python scripts/process_knesset.py --knesset 25 --summaries-dry-run     # cost estimate, submits nothing
+    python scripts/process_knesset.py --knesset 25 --summaries-dry-run     # cost estimates, submits nothing
+    python scripts/process_knesset.py --knesset 25 --skip-download --skip-summaries --skip-db   # MK themes only
     python scripts/process_knesset.py --knesset 25 --skip-summaries --skip-db
     python scripts/process_knesset.py --knesset 25 --move-duplicate-transcripts
 """
@@ -49,11 +52,16 @@ def _summarize(args) -> dict:
         args.knesset, skip_patterns=args.skip, rescan=args.rescan, dry_run=args.summaries_dry_run)
 
 
-def _build_db(knesset_num: int) -> int:
+def _summarize_mk_themes(args) -> dict:
+    import summarize_mk_themes_batches
+    return summarize_mk_themes_batches.summarize_mk_themes(args.knesset, dry_run=args.summaries_dry_run)
+
+
+def _build_db(knesset_num: int, target: str = "all") -> int:
     script = Path(__file__).parent / "build_knesset_db.py"
-    tqdm.write(f"\nRebuilding {config.KNESSET_DB} …")
+    tqdm.write(f"\nRebuilding {config.KNESSET_DB} ({target}) …")
     result = subprocess.run(
-        [sys.executable, str(script), "--knesset-num", str(knesset_num), "--target", "all", "--rebuild"],
+        [sys.executable, str(script), "--knesset-num", str(knesset_num), "--target", target, "--rebuild"],
         text=True,
     )
     if result.returncode != 0:
@@ -108,6 +116,7 @@ def main() -> None:
     ap.add_argument("--rescan", action="store_true",
                     help="Summarizer: rescan the disk before finishing a leftover queue")
     ap.add_argument("--skip-db", action="store_true", help="Do not rebuild knesset.db")
+    ap.add_argument("--skip-themes", action="store_true", help="Do not summarize MK themes")
     ap.add_argument("--move-duplicate-transcripts", action="store_true",
                     help=f"Move transcript copies the pipeline does not use to Data/{DUPLICATE_TRANSCRIPTS_DIR_NAME}/")
     args = ap.parse_args()
@@ -115,8 +124,8 @@ def main() -> None:
 
     started = time.perf_counter()
     failures: list[str] = []
-    download = summaries = None
-    db_exit_code = None
+    download = summaries = themes = None
+    db_exit_code = themes_db_exit_code = None
 
     if not args.skip_download:
         download = download_missing_protocols(args.knesset, args.skip, include_plenum=not args.no_plenum)
@@ -137,6 +146,20 @@ def main() -> None:
         if db_exit_code != 0:
             failures.append(f"build_knesset_db exited with {db_exit_code}")
 
+    if not args.skip_themes and db_exit_code in (None, 0):
+        try:
+            themes = _summarize_mk_themes(args)
+        except Exception as exc:
+            print(f"\n[MK themes ERROR] {exc}")
+            failures.append(f"MK themes: {exc}")
+        else:
+            if themes["failed"]:
+                failures.append(f"MK themes: {themes['failed']} MK(s) failed every attempt")
+            if themes["summarized"]:
+                themes_db_exit_code = _build_db(args.knesset, "mk_themes")
+                if themes_db_exit_code != 0:
+                    failures.append(f"build_knesset_db --target mk_themes exited with {themes_db_exit_code}")
+
     n_duplicates = _report_duplicates(args.knesset, args.move_duplicate_transcripts)
 
     print(f"\n{'=' * 60}\nKnesset {args.knesset} — done in {(time.perf_counter() - started) / 60:.1f} min\n{'=' * 60}")
@@ -155,6 +178,11 @@ def main() -> None:
             print(f"  still queued          : {summaries['queued']}")
     if db_exit_code is not None:
         print(f"  knesset.db rebuild    : {'ok' if db_exit_code == 0 else f'FAILED (exit {db_exit_code})'}")
+    if themes:
+        print(f"  MK themes summarized  : {themes['summarized']}  (up to date {themes['up_to_date']}, "
+              f"failed {themes['failed']})")
+    if themes_db_exit_code is not None:
+        print(f"  MK themes db load     : {'ok' if themes_db_exit_code == 0 else f'FAILED (exit {themes_db_exit_code})'}")
     print(f"  duplicate transcripts : {n_duplicates}")
     if failures:
         print(f"\n{len(failures)} failure(s):")

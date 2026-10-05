@@ -62,6 +62,16 @@ def summary_batch_state_path(knesset_num: int = 25) -> Path:
     return DATA_DIR / "summary_batches" / f"batch_state_k{knesset_num}.json"
 
 
+def mk_themes_dir(knesset_num: int = 25) -> Path:
+    """Per-MK theme files (<mk_id>.json) written by scripts/summarize_mk_themes_batches.py."""
+    return DATA_DIR / "mk_themes" / str(knesset_num)
+
+
+def mk_themes_batch_state_path(knesset_num: int = 25) -> Path:
+    """Resume state of scripts/summarize_mk_themes_batches.py."""
+    return DATA_DIR / "summary_batches" / f"mk_themes_state_k{knesset_num}.json"
+
+
 # ── Plenum protocols ──────────────────────────────────────────────────────────
 # Plenum sessions are stored as meetings of one pseudo-committee, next to the committees.
 
@@ -79,6 +89,12 @@ WORD_EXTRACTION_TIMEOUT_SECONDS = 120   # per .doc; the worker and its own Word 
 # longer than the model context (scripts/summarize_knesset_batches.py MAX_TRANSCRIPT_CHARS).
 SUMMARY_OPINIONS_CHUNK_THRESHOLD_CHARS = 150_000
 SUMMARY_OPINIONS_CHUNK_TARGET_CHARS    = 120_000
+
+# ── MK themes (scripts/summarize_mk_themes_batches.py) ───────────────────────
+# One request per MK holding all their opinions; the largest MK (~4,800 opinions) is ~300K input tokens.
+MK_THEMES_MODEL             = "gemini-3.8-flash"
+MK_THEMES_THINKING_LEVEL    = "low"
+MK_THEMES_MAX_OUTPUT_TOKENS = 100_000
 
 
 # ── Plan-execute agent ───────────────────────────────────────────────────────
