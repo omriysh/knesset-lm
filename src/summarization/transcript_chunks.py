@@ -1,8 +1,9 @@
 """
 summarization/transcript_chunks.py
 
-Character spans for the opinions pass of long transcripts (see config.SUMMARY_OPINIONS_CHUNK_*):
-cut at speaker-turn starts so no speech is split between two requests.
+Character spans for the passes of long transcripts: the opinions pass (see config.SUMMARY_OPINIONS_CHUNK_*)
+and the topics pass of a transcript longer than the model context. Cut at speaker-turn starts so no speech
+is split between two requests.
 """
 
 import bisect
@@ -46,3 +47,10 @@ def opinion_chunk_spans(transcript: str) -> list[list[int]]:
         return [[0, len(transcript)]]
     n_chunks = math.ceil(len(transcript) / config.SUMMARY_OPINIONS_CHUNK_TARGET_CHARS)
     return split_span(transcript, 0, len(transcript), n_chunks)
+
+
+def topic_chunk_spans(transcript: str, max_chars: int) -> list[list[int]]:
+    """One span covering the transcript, or the fewest chunks of at most about max_chars when it is longer."""
+    if len(transcript) <= max_chars:
+        return [[0, len(transcript)]]
+    return split_span(transcript, 0, len(transcript), math.ceil(len(transcript) / max_chars))

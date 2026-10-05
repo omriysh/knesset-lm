@@ -8,7 +8,8 @@ sessions, downloaded by scripts/process_knesset.py) that has no summary yet gets
 and an opinions request (prompts in summarization/prompts.py). A transcript longer than
 config.SUMMARY_OPINIONS_CHUNK_THRESHOLD_CHARS gets one opinions request per chunk, cut at speaker
 turns; an answer cut off by the output cap (finishReason MAX_TOKENS) has its chunk split in two
-and re-requested. The model answers in plain text; Python parses it
+and re-requested. A transcript longer than the model context (MAX_TRANSCRIPT_CHARS) also gets one
+topics request per chunk; the chunks' topics are merged in order without repeats. The model answers in plain text; Python parses it
 (summarization/output_parsing.py), verifies every quote against the transcript, and writes
 Data/summaries/<knesset>/<committee>/<stem>.json:
 
@@ -18,7 +19,6 @@ Data/summaries/<knesset>/<committee>/<stem>.json:
 
 The file is written only once every request of a meeting succeeded, so an existing file always
 means a complete summary; a meeting whose summary exists (under any committee folder) is skipped.
-Meetings longer than the model context are skipped.
 
 State is saved to Data/summary_batches/batch_state_k<N>.json after every batch so runs can be
 interrupted and resumed: in-flight jobs are reconnected on resume (no re-submission / double
@@ -71,7 +71,7 @@ from utils.protocol_download import json_files_by_meeting, safe_dirname, transcr
 from summarization.prompts import SYSTEM_PROMPT_TOPICS, SYSTEM_PROMPT_OPINIONS
 from summarization.output_parsing import parse_topics, parse_opinions, verify_quotes
 from summarization.summary_io import summary_path_for_transcript
-from summarization.transcript_chunks import opinion_chunk_spans, split_span
+from summarization.transcript_chunks import opinion_chunk_spans, split_span, topic_chunk_spans
 
 # ── Batch constants ───────────────────────────────────────────────────────────
 
@@ -114,15 +114,31 @@ SETTINGS = {
     "enqueue_cap":    ENQUEUE_CAP_TOKENS,
 }
 
-RUN_COUNTERS = ("summarized", "not_protocol", "failed", "too_long", "truncated_resplit", "truncated_accepted")
+RUN_COUNTERS = ("summarized", "not_protocol", "failed", "truncated_resplit", "truncated_accepted")
 
 
 # ── Request keys ──────────────────────────────────────────────────────────────
 # One batch request per (meeting, task); Gemini batch output order is not guaranteed, so results
-# are correlated by key "<meeting_id>|topics" or "<meeting_id>|opinions:<start>-<end>".
+# are correlated by key "<meeting_id>|topics" (or "<meeting_id>|topics:<start>-<end>" for a transcript
+# longer than the model context) or "<meeting_id>|opinions:<start>-<end>".
 
 def _opinions_task(span: list[int]) -> str:
     return f"{OPINIONS_TASK}:{span[0]}-{span[1]}"
+
+
+def _topics_task(span: list[int]) -> str:
+    return f"{TOPICS_TASK}:{span[0]}-{span[1]}"
+
+
+def _topic_tasks(entry: dict) -> list[str]:
+    """[TOPICS_TASK] for a transcript that fits the context (and for queue entries saved before topic
+    chunking, which have no topic_spans), else one task per chunk."""
+    spans = entry.get("topic_spans") or []
+    return [TOPICS_TASK] if len(spans) <= 1 else [_topics_task(span) for span in spans]
+
+
+def _task_kind(task: str) -> str:
+    return task.partition(":")[0]
 
 
 def _make_key(entry: dict, task: str) -> str:
@@ -135,7 +151,7 @@ def _split_key(key: str) -> tuple[str, str]:
 
 
 def _span_of_task(task: str) -> list[int] | None:
-    if not task.startswith(OPINIONS_TASK + ":"):
+    if ":" not in task:
         return None
     start, _, end = task.partition(":")[2].partition("-")
     return [int(start), int(end)]
@@ -166,7 +182,12 @@ def _finish_entry(entry: dict, state: dict) -> None:
         state["stats"]["not_protocol"] += 1
         return
 
-    topics = entry["results"][TOPICS_TASK]
+    topic_lists = [entry["results"][task] for task in _topic_tasks(entry)]
+    if not any(topic_lists):
+        _write_summary(summ_path, False, [], [])
+        state["stats"]["not_protocol"] += 1
+        return
+    topics = list(dict.fromkeys(topic for topic_list in topic_lists for topic in topic_list))
     opinions = [opinion for span in entry["opinion_spans"]
                 for opinion in entry["results"][_opinions_task(span)]]
     try:
@@ -221,7 +242,7 @@ def _estimate_tokens(req: dict) -> int:
 
 
 def _all_tasks(entry: dict) -> list[str]:
-    return [TOPICS_TASK] + [_opinions_task(span) for span in entry["opinion_spans"]]
+    return _topic_tasks(entry) + [_opinions_task(span) for span in entry["opinion_spans"]]
 
 
 def _pending_tasks(entry: dict) -> list[str]:
@@ -230,15 +251,13 @@ def _pending_tasks(entry: dict) -> list[str]:
 
 def _requests_for_entry(entry: dict, transcript: str) -> list[tuple[dict, str]]:
     out = []
-    spans = entry["opinion_spans"]
     for task in _pending_tasks(entry):
+        kind = _task_kind(task)
         span = _span_of_task(task)
-        if span is None:
-            req = _build_request(PROMPTS[TOPICS_TASK], entry["committee"], entry["date"], entry["meeting_id"], transcript)
-        else:
-            part = (spans.index(span) + 1, len(spans)) if len(spans) > 1 else None
-            req = _build_request(PROMPTS[OPINIONS_TASK], entry["committee"], entry["date"], entry["meeting_id"],
-                                 transcript[span[0]:span[1]], part)
+        spans = entry["opinion_spans"] if kind == OPINIONS_TASK else entry.get("topic_spans") or []
+        part = (spans.index(span) + 1, len(spans)) if span is not None and len(spans) > 1 else None
+        text = transcript if span is None else transcript[span[0]:span[1]]
+        req = _build_request(PROMPTS[kind], entry["committee"], entry["date"], entry["meeting_id"], text, part)
         out.append((req, _make_key(entry, task)))
     return out
 
@@ -332,12 +351,14 @@ def _resplit_truncated_span(entry: dict, span: list[int]) -> bool:
 def _apply_task_result(entry: dict, task: str, text: str | None, finish_reason: str, state: dict) -> bool:
     """Parse one answer into entry["results"]. Returns False when the output is unusable.
     An answer cut off by the output cap is split and re-requested (opinions) or kept without its
-    cut-off last line (topics, or an opinions chunk too short to split)."""
+    cut-off last line (topics, or an opinions chunk too short to split). "Not a protocol" from a
+    whole-transcript topics answer ends the meeting; from a topics chunk it counts only if every chunk says so."""
     if text is None:
         return False
     truncated = finish_reason == TRUNCATED_FINISH_REASON
     span = _span_of_task(task)
-    if truncated and span is not None and _resplit_truncated_span(entry, span):
+    is_opinions = _task_kind(task) == OPINIONS_TASK
+    if truncated and is_opinions and _resplit_truncated_span(entry, span):
         state["stats"]["truncated_resplit"] += 1
         tqdm.write(f"  [truncated] {Path(entry['proto']).name} opinions {span}: output cap reached, "
                    f"re-requesting as {len(entry['opinion_spans'])} chunks")
@@ -346,7 +367,7 @@ def _apply_task_result(entry: dict, task: str, text: str | None, finish_reason: 
         state["stats"]["truncated_accepted"] += 1
         tqdm.write(f"  [truncated] {Path(entry['proto']).name} {task}: output cap reached, keeping the complete lines")
         text = _without_last_line(text)
-    parsed = parse_topics(text) if span is None else parse_opinions(text)
+    parsed = parse_opinions(text) if is_opinions else parse_topics(text)
     if parsed is None:
         return False
     entry["results"][task] = parsed
@@ -576,6 +597,7 @@ def _new_entry(proto_path: Path, committee: str, date_iso: str, meeting_id: str,
         "date":          date_iso,
         "meeting_id":    meeting_id,
         "opinion_spans": spans,
+        "topic_spans":   topic_chunk_spans(transcript, MAX_TRANSCRIPT_CHARS),
         "attempts":      {},
         "results":       {},
         "not_protocol":  False,
@@ -612,7 +634,7 @@ def _scan_transcripts(knesset_num: int, force_summarize: bool, skip_patterns: li
     previous_by_proto = {entry["proto"]: entry for entry in previous_queue}
 
     queue: list[dict] = []
-    counts = dict.fromkeys(("transcripts", "already_done", "skipped", "too_long", "unreadable"), 0)
+    counts = dict.fromkeys(("transcripts", "already_done", "skipped", "unreadable"), 0)
     counts["transcripts"] = len(transcripts)
     for meeting_id, proto_path in tqdm(sorted(transcripts.items()), desc="Scanning transcripts", unit="meeting"):
         if any(dirname in proto_path.parent.name for dirname in skipped_dirnames):
@@ -631,21 +653,18 @@ def _scan_transcripts(knesset_num: int, force_summarize: bool, skip_patterns: li
             tqdm.write(f"  [WARN] {proto_path.name}: {exc}")
             counts["unreadable"] += 1
             continue
-        if len(transcript) > MAX_TRANSCRIPT_CHARS:
-            counts["too_long"] += 1
-            tqdm.write(f"  [skip-long] {proto_path.name} ({len(transcript):,} chars)")
-            continue
         committee = str(meeting.get("committee") or proto_path.parent.name.replace("_", " "))
         queue.append(_new_entry(proto_path, committee, str(meeting.get("date") or ""), meeting_id, transcript))
 
     n_chunked = sum(1 for entry in queue if len(entry["opinion_spans"]) > 1)
+    n_topics_chunked = sum(1 for entry in queue if len(entry.get("topic_spans") or []) > 1)
     print("\nScan complete:")
     print(f"  Transcripts on disk : {counts['transcripts']}")
     print(f"  Already summarized  : {counts['already_done']}")
     print(f"  Skipped (--skip)    : {counts['skipped']}")
-    print(f"  Too long (skipped)  : {counts['too_long']}")
     print(f"  Unreadable          : {counts['unreadable']}")
-    print(f"  Queued              : {len(queue)}  ({n_chunked} with a chunked opinions pass)")
+    print(f"  Queued              : {len(queue)}  ({n_chunked} with a chunked opinions pass, "
+          f"{n_topics_chunked} longer than the model context with a chunked topics pass)")
     return queue, counts
 
 
@@ -688,7 +707,7 @@ def _run(client, state: dict, state_path: Path, tmp_dir: Path) -> None:
 def _estimated_output_tokens(request: dict, key: str) -> int:
     """Topics answers are short; opinions answers grow with the transcript (a ~150K-char meeting
     fills the output cap)."""
-    if _split_key(key)[1] == TOPICS_TASK:
+    if _task_kind(_split_key(key)[1]) == TOPICS_TASK:
         return 1_000
     return min(MAX_TOKENS, max(1_000, _estimate_tokens(request) // 5))
 
@@ -761,9 +780,8 @@ def summarize_knesset(knesset_num: int, *, skip_patterns: list[str] = (), force_
         print(f"  Resuming: {len(state['queue'])} meeting(s) in the queue, {len(state['active_jobs'])} job(s) in flight")
 
     def rescan_into_state() -> None:
-        queue, counts = _scan_transcripts(knesset_num, force_summarize, skip_patterns, state["queue"])
+        queue, _ = _scan_transcripts(knesset_num, force_summarize, skip_patterns, state["queue"])
         state["queue"] = queue
-        state["stats"]["too_long"] = counts["too_long"]
         if sample:
             _apply_sample(state, sample, seed)
         _save_state(state, state_path)

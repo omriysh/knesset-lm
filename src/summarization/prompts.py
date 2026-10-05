@@ -20,6 +20,7 @@ SYSTEM_PROMPT_TOPICS = _INTRO + """List the topics that were discussed in the me
 - Each line is one or two short sentences, concrete and specific: name the bill, clause, policy, incident, population or place that was discussed.
 - A topic does not have to be broad. Anything that was meaningfully discussed, even in a few speeches, gets its own line. A long list is fine.
 - Merge repeated returns to the same topic into one line.
+- A protocol longer than the model context is sent in parts (the request says which part). List only the topics discussed in the part you received.
 - Skip roll calls, greetings and scheduling remarks. Describe what was discussed, not who said what.
 - Do not invent topics that are not in the text.
 - Output only the list. No heading, no commentary."""

@@ -75,7 +75,8 @@ WORD_EXTRACTION_TIMEOUT_SECONDS = 120   # per .doc; the worker and its own Word 
 # ── Summarization (scripts/summarize_knesset_batches.py) ─────────────────────
 # The opinions pass saturates the output cap (~150 opinions) on long transcripts, so a transcript
 # longer than SUMMARY_OPINIONS_CHUNK_THRESHOLD_CHARS gets one opinions request per chunk of about
-# SUMMARY_OPINIONS_CHUNK_TARGET_CHARS, cut at speaker turns. The topics pass always sees it whole.
+# SUMMARY_OPINIONS_CHUNK_TARGET_CHARS, cut at speaker turns. The topics pass sees it whole unless it is
+# longer than the model context (scripts/summarize_knesset_batches.py MAX_TRANSCRIPT_CHARS).
 SUMMARY_OPINIONS_CHUNK_THRESHOLD_CHARS = 150_000
 SUMMARY_OPINIONS_CHUNK_TARGET_CHARS    = 120_000
 

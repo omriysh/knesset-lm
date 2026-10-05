@@ -149,7 +149,6 @@ def main() -> None:
     if summaries:
         print(f"  summarized            : {summaries['summarized']}  (not a protocol: {summaries['not_protocol']})")
         print(f"  summarization failed  : {summaries['failed']}")
-        print(f"  over the size limit   : {summaries['too_long']}  (skipped)")
         print(f"  truncated answers     : {summaries['truncated_resplit']} re-split, "
               f"{summaries['truncated_accepted']} kept without their cut-off line")
         if summaries["queued"]:
