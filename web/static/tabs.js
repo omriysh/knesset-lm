@@ -35,6 +35,7 @@ function switchTab(name, { writeUrl = true, push = true } = {}) {
   if (mobBtn) mobBtn.classList.add('active');
 
   if (name === 'reading' && writeUrl && !_readingTabHasResults()) browseSearch({ push: false });
+  if (name === 'chat') landingStartDemo();
 
   const researchSettings = document.getElementById('settings-research');
   if (researchSettings) researchSettings.disabled = name !== 'research';
@@ -42,15 +43,10 @@ function switchTab(name, { writeUrl = true, push = true } = {}) {
   setActiveTab(name, { writeUrl, push });
 }
 
-/* ── URL routing: /research, /protocols?… (url_state.js); back/forward re-applies the URL ── */
+/* ── URL routing: / (in your chat), /research, /protocols?… (url_state.js); back/forward re-applies the URL ── */
 function applyUrlRoute() {
   if (location.pathname === RESEARCH_PATH) { switchTab('research', { writeUrl: false }); return; }
-  if (location.pathname !== PROTOCOLS_PATH) {
-    const tab = document.getElementById('tab-research')?.classList.contains('hidden') ? 'reading' : 'research';
-    setActiveTab(tab, { writeUrl: false });
-    if (tab === 'reading' && !_readingTabHasResults()) browseSearch({ push: false });
-    return;
-  }
+  if (location.pathname !== PROTOCOLS_PATH) { switchTab('chat', { writeUrl: false }); return; }
   switchTab('reading', { writeUrl: false });
   const target = readProtocolUrl();
   setProtocolUrlState(target);
@@ -194,7 +190,7 @@ function _collapseRfb() {
   const query = document.getElementById('reading-search-input')?.value.trim() || '';
   const queryChip = query
     ? rfChipHtml(`"${query}"`, 'rfClearQueryAndSearch', { extraClass: 'chip--query' })
-    : '<span class="rfb-collapsed-label">ישיבות אחרונות</span>';
+    : '';
   chips.innerHTML = queryChip + rfActiveChipsHtml('rfRemoveFilterAndSearch');
 }
 

@@ -16,6 +16,7 @@
 
 const PROTOCOLS_PATH = '/protocols';
 const RESEARCH_PATH  = '/research';
+const CHAT_PATH      = '/';
 
 const _LIST_FILTER_PARAMS = { committee: 'committees', mk: 'mks', party: 'parties' };
 const _MEETING_ID_RE  = /^p?\d{1,12}$/;
@@ -120,7 +121,9 @@ let _activeTab = null;
 
 function setActiveTab(name, { writeUrl, push }) {
   _activeTab = name;
-  if (writeUrl) _writeUrl(name === 'research' ? RESEARCH_PATH : protocolPath(_protocolUrlState), push);
+  if (!writeUrl) return;
+  if (name === 'chat') _writeUrl(CHAT_PATH, push);
+  else _writeUrl(name === 'research' ? RESEARCH_PATH : protocolPath(_protocolUrlState), push);
 }
 
 /* ── Sharing ─────────────────────────────────────────────────────── */

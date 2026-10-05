@@ -26,14 +26,15 @@
         </div>
         <div class="flex flex-col justify-center h-9 -mt-1">
           <div class="text-base sm:text-lg font-bold text-primary leading-tight">מעורב ירושלמי</div>
-          <div class="hidden sm:block text-xs text-on-surface-variant opacity-70 leading-none mt-0.5">כלי מחקר על פעולות הכנסת</div>
+          <div class="hidden sm:block text-xs text-on-surface-variant opacity-70 leading-none mt-0.5">כלי AI להנגשת מידע מהכנסת</div>
         </div>
       </div>
 
       <!-- Desktop tab navigation (center) -->
       <nav class="seg hidden md:flex">
+        <button data-click="switchTab" data-arg="chat" id="dt-tab-chat" class="seg-btn app-tab-btn active">בצ'אט שלכם</button>
         <button data-click="switchTab" data-arg="research" id="dt-tab-research" class="seg-btn app-tab-btn">מחקר אוטומטי</button>
-        <button data-click="switchTab" data-arg="reading" id="dt-tab-reading" class="seg-btn app-tab-btn active">קריאה עצמית</button>
+        <button data-click="switchTab" data-arg="reading" id="dt-tab-reading" class="seg-btn app-tab-btn">קריאה עצמית</button>
       </nav>
 
       <!-- Header actions -->
@@ -47,6 +48,165 @@
       </div>
     </div>
   </header>
+
+  <!-- ══════════════════════════════════════════════════════════
+       Tab: In your chat (בצ'אט שלכם) — landing page, connect the MCP to Claude / ChatGPT
+  ══════════════════════════════════════════════════════════ -->
+  <div id="tab-chat" class="app-tab-panel">
+   <div class="landing">
+    <div class="landing-content">
+
+      <div class="lp-wrap lp-hero">
+        <div class="lp-hero-text">
+          <h1 class="lp-headline">הנרטיב <span class="lp-mark">שלנו</span></h1>
+          <p class="lp-lede">התרגלנו שאנשים אחרים שואלים את השאלות. מעורב ירושלמי נותן לצ'אט שלכם גישה ישירה למקורות, כדי שתקבלו <strong>תשובות מבוססות לשאלות שלכם</strong>.</p>
+          <div class="lp-ctas">
+            <button class="btn btn-primary btn-lg" type="button" data-click="landingGoInstall"><span class="material-symbols-outlined">add_link</span>מחברים את Claude</button>
+            <a class="btn btn-ghost btn-lg" href="#lp-cases-section" data-click="landingScrollToCases">מה אפשר לשאול?</a>
+          </div>
+          <p class="lp-note">חינם. בלי הרשמה. עובד בתוך הצ'אט שכבר יש לכם.</p>
+        </div>
+        <div class="lp-demo">
+          <p class="lp-demo-hint"><span class="material-symbols-outlined">touch_app</span>לחצו על מספר כדי לראות את המקור</p>
+          <div class="lp-chat">
+            <div class="lp-bubble-user">מה אמרו חברי הכנסת בוועדות על תחבורה ציבורית?</div>
+            <div class="lp-bubble-ai">
+              עלו בוועדות כמה גישות שונות:
+              <ul>
+                <li>ח"כ דוד ביטן (הליכוד) טען שאי אפשר לתעדף נתיבי תחבורה ציבורית בלי מערכת שלמה של רכבות ואוטובוסים<button class="lp-cite" type="button" data-click="landingPickSource" data-arg="0">1</button></li>
+                <li>ח"כ שלי טל מירון (יש עתיד) דרשה מהממשלה נתוני שימוש, כדי שהכנסת תוכל לפקח<button class="lp-cite" type="button" data-click="landingPickSource" data-arg="1">2</button></li>
+                <li>ח"כ אורי מקלב (יהדות התורה) קידם ניתוק דמי הנסיעה מהחזקת רכב, כדי לעודד שימוש בתחבורה ציבורית<button class="lp-cite" type="button" data-click="landingPickSource" data-arg="2">3</button></li>
+              </ul>
+            </div>
+          </div>
+          <div class="lp-source hide" id="lp-source" aria-live="polite">
+            <div class="lp-source-meta"><b id="lp-src-who"></b><span id="lp-src-where"></span></div>
+            <p class="lp-source-text">…<span class="lp-q" id="lp-src-quote"></span>…</p>
+            <div class="lp-source-foot">
+              <span class="lp-verified"><span class="material-symbols-outlined">verified</span>ציטוט מהפרוטוקול</span>
+              <a id="lp-src-link" class="ev-open-protocol" href="/protocols"><span class="material-symbols-outlined ev-open-icon">library_books</span><span>לפרוטוקול המלא ←</span></a>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="lp-band">
+        <section class="lp-wrap">
+          <h2>AI מציף מידע, אתם שופטים</h2>
+          <p class="lp-section-lede">לקרוא בעצמנו את כל המידע הנגיש לציבור זה כמעט בלתי אפשרי. AI יכול לעבד המון מידע ולתת לכם משהו קצר לקרוא, עם ציטוטים למקור. ההחלטה והיכולת לשפוט את המידע נשארות אצלכם.</p>
+          <div class="lp-pillars">
+            <div class="lp-pillar">
+              <div class="lp-pillar-icon"><span class="material-symbols-outlined">auto_awesome</span></div>
+              <h3>עיבוד מקדים</h3>
+              <p>מודל שפה קרא את דיוני הכנסת ואסף דעות לצד ציטוטים שתומכים בהן.</p>
+            </div>
+            <div class="lp-pillar">
+              <div class="lp-pillar-icon"><span class="material-symbols-outlined">psychology_alt</span></div>
+              <h3>שאלות ותשובות</h3>
+              <p>אתם מחליטים מה מעניין וכמה להעמיק. תמיד תוכלו לבקש ציטוט למקור.</p>
+            </div>
+            <div class="lp-pillar">
+              <div class="lp-pillar-icon"><span class="material-symbols-outlined">book_ribbon</span></div>
+              <h3>קריאה במקורות</h3>
+              <p>ממשק נוח לקרוא בדיוני הכנסת, לראות מה פוליטיקאים אומרים כשיש מי שיאתגר אותם.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section class="lp-wrap" id="lp-cases-section">
+        <h2>ושאינו יודע לשאול?</h2>
+        <p class="lp-section-lede">הצ'אט יכול להיות גם כלי לחשיבה ולעזור לכם למצוא את השאלות שמעניינות אתכם. הנה כמה הצעות לשיחה שיעזרו לכם להתניע, או שיוסיפו את התיבול הנכון ל-prompt-ים שלכם.</p>
+        <div class="lp-cases" id="lp-cases"></div>
+      </section>
+
+      <div class="lp-band">
+        <section class="lp-wrap" id="lp-install">
+          <h2>דקה והצ'אט שלכם מחובר</h2>
+          <div class="lp-install" id="lp-install-card">
+            <div class="lp-copied-banner" id="lp-copied-banner" hidden><span class="material-symbols-outlined">check_circle</span><span><span id="lp-copied-name"></span> הועתק. עכשיו מחברים, ואז מדביקים בצ'אט חדש.</span></div>
+            <div class="seg" id="lp-install-tabs" role="tablist">
+              <button class="seg-btn active" role="tab" type="button" aria-selected="true" data-click="landingSetInstallTab" data-arg="claude">Claude<span class="lp-badge">הכי פשוט</span></button>
+              <button class="seg-btn" role="tab" type="button" aria-selected="false" data-click="landingSetInstallTab" data-arg="chatgpt">ChatGPT</button>
+              <button class="seg-btn" role="tab" type="button" aria-selected="false" data-click="landingSetInstallTab" data-arg="gemini">Gemini</button>
+            </div>
+
+            <div data-lp-panel="claude">
+              <div class="lp-flow">
+                <div class="lp-flow-step">
+                  <span class="lp-n">1</span>
+                  <h4>מוסיפים את מעורב ירושלמי</h4>
+                  <p>הכפתור פותח את Claude עם הטופס כבר מלא. לוחצים Add.</p>
+                  <a class="btn btn-primary" id="lp-claude-install" href="https://claude.ai/customize/connectors" target="_blank" rel="noopener"><span class="material-symbols-outlined">open_in_new</span>הוספה ל-Claude</a>
+                  <div class="lp-minimock" aria-hidden="true">
+                    <div class="lp-field">Name: Meorav Yerushalmi</div>
+                    <div class="lp-field typing">URL: https://meorav.com/mcp</div>
+                    <span class="lp-go">Add</span>
+                  </div>
+                </div>
+                <div class="lp-flow-step">
+                  <span class="lp-n">2</span>
+                  <h4>פותחים צ'אט חדש</h4>
+                  <p>בצ'אט החדש בודקים שהחיבור דלוק, בתפריט ה-+ תחת Connectors.</p>
+                  <span class="lp-path">+ › Connectors › Meorav Yerushalmi ✓</span>
+                </div>
+                <div class="lp-flow-step">
+                  <span class="lp-n">3</span>
+                  <h4>מדביקים ומתחילים</h4>
+                  <p>מדביקים את ה-prompt שהעתקתם, או סתם שואלים שאלה על הכנסת.</p>
+                  <a class="btn btn-secondary lp-self-start" href="#lp-cases-section" data-click="landingScrollToCases">לבחירת prompt</a>
+                </div>
+              </div>
+              <div class="lp-manual">
+                <p>לא עובד הכפתור? מוסיפים ידנית: <span class="lp-path">Customize › Connectors › Add custom connector</span> ומדביקים את הכתובת <code class="lp-url">https://meorav.com/mcp</code></p>
+                <button class="btn btn-secondary btn-sm" type="button" data-click="landingCopyMcpUrl"><span class="material-symbols-outlined">content_copy</span>העתקת הכתובת</button>
+              </div>
+            </div>
+
+            <div data-lp-panel="chatgpt" hidden>
+              <div class="lp-flow">
+                <div class="lp-flow-step">
+                  <span class="lp-n">1</span>
+                  <h4>מפעילים מצב מפתחים</h4>
+                  <p>בהגדרות של ChatGPT, תחת Security and login. בגרסאות קודמות הוא נמצא תחת Connectors › Advanced.</p>
+                  <span class="lp-path">Settings › Security and login › Developer mode</span>
+                </div>
+                <div class="lp-flow-step">
+                  <span class="lp-n">2</span>
+                  <h4>יוצרים חיבור</h4>
+                  <p>בעמוד Plugins לוחצים + ואז Create MCP app, נותנים את השם Meorav Yerushalmi, מדביקים את הכתובת ובוחרים No Authentication.</p>
+                  <div class="lp-urlbox"><code>https://meorav.com/mcp</code><button class="btn btn-ghost btn-sm" type="button" data-click="landingCopyMcpUrl">העתקה</button></div>
+                </div>
+                <div class="lp-flow-step">
+                  <span class="lp-n">3</span>
+                  <h4>מדביקים ומתחילים</h4>
+                  <p>בצ'אט חדש בוחרים את Meorav Yerushalmi דרך Developer Mode בתפריט ה-+, ומדביקים את ה-prompt.</p>
+                  <span class="lp-path">+ › Developer Mode › Meorav Yerushalmi ✓</span>
+                </div>
+              </div>
+            </div>
+
+            <div data-lp-panel="gemini" hidden>
+              <p class="lp-gemini">Gemini בארץ עוד לא מאפשר לחבר כלים חיצוניים כמו מעורב ירושלמי.</p>
+              <p class="lp-gemini-alt">אם יש לכם מפתח API של Google, אפשר להשתמש <a href="/research" data-click="landingOpenTab" data-arg="research">במחקר האוטומטי</a>, שמציג כל שלב בתהליך.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section class="lp-wrap lp-more">
+        <h2>מה עוד יש פה?</h2>
+        <div class="lp-alt">
+          <a href="/protocols" data-click="landingOpenTab" data-arg="reading"><span class="material-symbols-outlined">menu_book</span><span><b>קריאה עצמית</b><span class="lp-alt-desc">חיפוש, סינון לפי ח"כ, מפלגה וועדה, וסיכום AI לכל ישיבה.</span></span></a>
+          <a href="/research" data-click="landingOpenTab" data-arg="research"><span class="material-symbols-outlined">smart_toy</span><span><b>מחקר אוטומטי</b><span class="lp-alt-desc">צ'אט AI פה באתר שמציג את כל תהליך החיפוש וקישורים עמוקים יותר למקורות. דורש מפתח Gemini API.</span></span></a>
+          <a href="/docs" target="_blank" rel="noopener"><span class="material-symbols-outlined">code</span><span><b>API למפתחים</b><span class="lp-alt-desc">כל הכלים, בגישה ישירה.</span></span></a>
+        </div>
+      </section>
+
+      <footer class="lp-wrap lp-footer">מעורב ירושלמי הוא פרויקט אישי במימון עצמי, לא מייצג ולא מקושר לאף גוף פוליטי. כל המפלגות מחופשות באותה הדרך.</footer>
+    </div>
+   </div>
+  </div>
 
   <!-- ══════════════════════════════════════════════════════════
        Tab: Research (מחקר אוטומטי) — existing chat interface
@@ -116,10 +276,10 @@
   <!-- ══════════════════════════════════════════════════════════
        Tab: Reading (קריאה עצמית) — protocol browser
   ══════════════════════════════════════════════════════════ -->
-  <div id="tab-reading" class="app-tab-panel">
+  <div id="tab-reading" class="app-tab-panel hidden">
 
     <!-- Filter bar -->
-    <div class="rfb flex-shrink-0">
+    <div class="rfb rfb-collapsed flex-shrink-0">
       <!-- Collapsed state (shown after search) -->
       <div class="rfb-collapsed-bar" id="rfb-collapsed-bar">
        <div class="rfb-collapsed-content">
@@ -263,11 +423,15 @@
 
   <!-- ── Mobile bottom tab navigation ── -->
   <nav id="mobile-tab-bar" class="md:hidden fixed bottom-0 inset-x-0 z-50 bg-surface-container-lowest border-t border-surface-variant/20 flex safe-area-bottom">
+    <button data-click="switchTab" data-arg="chat" id="mob-tab-chat" class="mobile-tab-btn active flex-1">
+      <span class="material-symbols-outlined" style="font-size:22px">forum</span>
+      <span>בצ'אט</span>
+    </button>
     <button data-click="switchTab" data-arg="research" id="mob-tab-research" class="mobile-tab-btn flex-1">
       <span class="material-symbols-outlined" style="font-size:22px">chat</span>
       <span>מחקר</span>
     </button>
-    <button data-click="switchTab" data-arg="reading" id="mob-tab-reading" class="mobile-tab-btn active flex-1">
+    <button data-click="switchTab" data-arg="reading" id="mob-tab-reading" class="mobile-tab-btn flex-1">
       <span class="material-symbols-outlined" style="font-size:22px">library_books</span>
       <span>קריאה</span>
     </button>
@@ -275,15 +439,18 @@
 
   <!-- ── Help overlay ── -->
   <div id="help-overlay" data-click="closeHelpOnBackdrop">
-    <div id="help-panel">
-      <div id="help-content" class="prose-content"><p>טוען…</p></div>
-      <button id="help-close" class="btn btn-secondary btn-block" data-click="closeHelp">סגירה</button>
+    <div id="help-panel" class="dialog">
+      <div id="help-content" class="dialog-body prose-content"><p>טוען…</p></div>
+      <div class="dialog-footer">
+        <button id="help-close" class="btn btn-secondary btn-block" data-click="closeHelp">סגירה</button>
+      </div>
     </div>
   </div>
 
   <!-- ── Settings overlay ── -->
   <div id="settings-overlay" data-click="closeSettingsOnBackdrop">
-    <div id="settings-panel">
+    <div id="settings-panel" class="dialog">
+     <div class="dialog-body">
       <h2>הגדרות</h2>
 
       <section class="settings-group">
@@ -334,7 +501,10 @@
           <div id="model-settings"></div>
         </div>
       </fieldset>
-      <button id="settings-close" class="btn btn-secondary btn-block" data-click="closeSettings">סגירה</button>
+     </div>
+      <div class="dialog-footer">
+        <button id="settings-close" class="btn btn-secondary btn-block" data-click="closeSettings">סגירה</button>
+      </div>
     </div>
   </div>
 
@@ -359,6 +529,7 @@
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.16/dist/purify.min.js" integrity="sha384-a7SzOxErzJ3ZpQz0zJ32d67dSitNzPcbfybc/ykU9KJhMgZkwqfSxlhhdJRS+XGL" crossorigin="anonymous"></script>
   <script src="/static/markdown.js"></script>
   <script src="/static/url_state.js"></script>
+  <script src="/static/landing.js"></script>
   <script src="/static/browser.js"></script>
   <script src="/static/tabs.js"></script>
   <script src="/static/filters.js"></script>

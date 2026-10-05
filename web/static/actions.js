@@ -4,11 +4,18 @@
  * (Enter key) = a key of PAGE_ACTIONS, with its argument in data-arg or other data-* attributes.
  * Only the actions listed here can run; sanitized markdown never carries data-* attributes.
  *
- * Non-module script, loaded after url_state.js / browser.js / tabs.js / filters.js (whose functions it calls) and
+ * Non-module script, loaded after url_state.js / landing.js / browser.js / tabs.js / filters.js (whose functions it calls) and
  * before app.js; app.js and gemini_key.js expose their functions on window.
  */
 const PAGE_ACTIONS = {
   switchTab:                    (el) => switchTab(el.dataset.arg),
+  landingOpenTab:               (el, event) => { event.preventDefault(); switchTab(el.dataset.arg); },
+  landingScrollToCases:         (el, event) => landingScrollToCases(event),
+  landingGoInstall:             () => landingGoInstall(),
+  landingPickSource:            (el) => landingPickSource(el),
+  landingCopyPrompt:            (el) => landingCopyPrompt(el),
+  landingCopyMcpUrl:            (el) => landingCopyMcpUrl(el),
+  landingSetInstallTab:         (el) => landingSetInstallTab(el),
   openHelp:                     () => window.openHelp(),
   closeHelp:                    () => window.closeHelp(),
   closeHelpOnBackdrop:          (el, event) => { if (event.target === el) window.closeHelp(); },
