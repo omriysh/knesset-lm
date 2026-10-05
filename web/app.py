@@ -464,6 +464,14 @@ install_public_docs(app, WEB_API_TITLE)
 install_error_handlers(app)
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
+
+def _static_asset_url(path: str) -> str:
+    """Versioned by mtime, so a deploy never pairs new HTML with JS/CSS a browser or proxy kept from before."""
+    return f"/static/{path}?v={int((_STATIC_DIR / path).stat().st_mtime)}"
+
+
+templates.env.globals["asset"] = _static_asset_url
+
 _MK_PHOTO_EXTS = (".jpeg", ".jpg", ".png")
 
 # Honorific / role prefixes stripped before photo lookup. Mirrors browser.js

@@ -795,8 +795,16 @@ class TestSecurityHeaders:
     def test_tailwind_is_served_prebuilt(self, web):
         r = web.client.get("/")
         assert "cdn.tailwindcss.com" not in r.text
-        assert '<link rel="stylesheet" href="/static/tailwind.css">' in r.text
-        assert web.client.get("/static/tailwind.css").status_code == 200
+        tailwind_url = re.search(r'<link rel="stylesheet" href="(/static/tailwind\.css\?v=\d+)">', r.text)[1]
+        assert web.client.get(tailwind_url).status_code == 200
+
+    def test_page_assets_are_versioned(self, web):
+        html = web.client.get("/").text
+        asset_urls = re.findall(r'(?:href|src)="(/static/[^"]+\.(?:css|js)[^"]*)"', html)
+        assert asset_urls
+        for url in asset_urls:
+            assert re.search(r"\?v=\d+$", url), url
+            assert web.client.get(url).status_code == 200
 
     def test_docs_and_openapi_stay_public(self, web):
         assert web.client.get("/openapi.json").status_code == 200
@@ -823,8 +831,8 @@ class TestFrontendSanitizing:
 
     def test_markdown_helper_loads_after_its_libraries(self):
         html = self.index_html()
-        assert html.index("dompurify@") < html.index("/static/markdown.js")
-        assert html.index("marked@") < html.index("/static/markdown.js") < html.index("/static/browser.js")
+        assert html.index("dompurify@") < html.index("asset('markdown.js')")
+        assert html.index("marked@") < html.index("asset('markdown.js')") < html.index("asset('browser.js')")
 
     def test_every_marked_call_goes_through_the_hardened_sanitizer(self):
         for name, source in self.static_js().items():
@@ -878,7 +886,7 @@ class TestFrontendSanitizing:
 
     def test_actions_script_loads_before_the_app(self):
         html = self.index_html()
-        assert html.index("/static/filters.js") < html.index("/static/actions.js") < html.index("/static/app.js")
+        assert html.index("asset('filters.js')") < html.index("asset('actions.js')") < html.index("asset('app.js')")
 
     def test_no_data_interpolated_into_inline_handlers(self):
         for name, source in self.static_js().items():

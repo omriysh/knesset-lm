@@ -1,5 +1,5 @@
 /**
- * landing.js — the "בצ'אט שלכם" tab (/): the live-quote demo, the prompt cards and the connect-to-chat steps.
+ * landing.js — the "בצ'אט שלכם" tab (/): the live-quote demo, the review prompt builder and the connect-to-chat steps.
  *
  * Non-module script, loaded before actions.js (whose PAGE_ACTIONS call these functions) and tabs.js
  * (switchTab starts the demo).
@@ -7,7 +7,6 @@
 
 const LANDING_MCP_URL = 'https://meorav.com/mcp';
 const LANDING_DEMO_STEP_MS = 4500;
-const LANDING_PEEK_CLOSE_MS = 300;
 
 const LANDING_DEMO_SOURCES = [
   { who: 'דוד ביטן · הליכוד', where: 'ועדת הכלכלה · 31.05.2026',
@@ -29,7 +28,61 @@ Always provide sources to the answers you write. Provide quotes when relevant, i
 Your job is to illustrate the opinions and narratives of the candidates, present them as such and help inspire critical thinking. Make sure to frame narratives as narratives.
 Don't be critical of the user's world view unless they ask you to. If you think it's important for the process, ask the user before you do so. It's better to challenge and ask questions than to provide criticism.`;
 
-const LANDING_FULL_REVIEW_PROMPT = `Your goal is to help prepare for the 2026 Israel elections. You will be working with the user to understand what topics they find important to base their decision on, and then help them research where each party stands. Your value comes from your unique logic flow, and the ability to use the Meorav MCP. The process aims to expose the user to new sources of data, it's up to the user to judge credibility and make conclusions in the end; give them the recommendation to follow up personally on leads they find interesting in this conversation. You are here to help with that. It's fine if the user doesn't make a decision at the end of the process.
+const LANDING_CANDIDATES_URL = 'https://www.gov.il/he/pages/candidates-lists-26';
+
+const LANDING_DEPTHS = {
+  deep:  { candidates: 5 },
+  quick: { candidates: 3 },
+};
+const LANDING_GUIDELINES_ONLY_PROMPT = `I will ask you questions to help me prepare for the 2026 Israel elections. Use the Meorav MCP for Knesset data (protocols, bills and votes of members and parties), and search the web for current news and statements. Candidates: ${LANDING_CANDIDATES_URL}
+When I ask about a party, filter Meorav searches both on the party and on its leading candidates. Some parties that run to the 26th elections didn't exist in the 25th knesset, and some candidates were not members of the 25th knesset.
+
+${LANDING_PROMPT_GUIDELINES}
+
+Reply briefly that you are ready, and wait for my first question.`;
+
+const _landingBuilder = { order: 'party', depth: 'deep' };
+
+const _LANDING_PARTIES_STEP_OPENER = 'Present the user with a list of the large parties, and ask them if they wish to profile all of them or only some (recommend to go with all of them, for a balanced read).';
+const _LANDING_MEORAV_SEARCH_GUIDELINES = `Candidates: ${LANDING_CANDIDATES_URL}
+Guidelines for Meorav searches in this step:
+When using a keyword search, if you don't get relevant results, use your knowledge and terminology you encountered online to try and expand the search.
+Filter both on party and on specific members. Some parties that run to the 26th elections didn't exist in the 25th knesset, and some candidates were not members of the 25th knesset.`;
+
+function _landingQuickResearchStep() {
+  return `Step 3
+${_LANDING_PARTIES_STEP_OPENER} Then build one comparison table: a row for each subject and a column for each selected party. In each cell, write the main position of the party on the subject in one line, with its best source.
+To find the position of a party on a subject, take the first ${LANDING_DEPTHS.quick.candidates} contenders from the list of the party. For each of them, check the Knesset sources and search the web for them referring to the subject. Combine the approach of the candidates and present it as the approach of the party. Keep it short; the table is a map, not a profile.
+${_LANDING_MEORAV_SEARCH_GUIDELINES}`;
+}
+
+function _landingResearchStep(builder) {
+  if (builder.depth === 'quick') return _landingQuickResearchStep();
+  const depth = LANDING_DEPTHS[builder.depth];
+  const order = builder.order === 'party'
+    ? 'Profile each of the selected parties based on the list of subjects. Output each profile to the user.'
+    : 'Then go over the subjects one at a time. For each subject, find the approach of each selected party and present them side by side, before moving to the next subject. After each subject, ask the user if they want to dig deeper before moving on.';
+  return `Step 3
+${_LANDING_PARTIES_STEP_OPENER} ${order}
+In order to "profile a party" on a subject, take the first ${depth.candidates} contenders from the list of each party. For each of them, check the Knesset sources and search the web for them referring to the subject. Combine the approach of the candidates and present it as the approach of the party. Keep track of your sources of information and present them to the user. Dive deep and present well-based answers.
+If you can, profile each party and even each of the top candidates using a new agent.
+${_LANDING_MEORAV_SEARCH_GUIDELINES}`;
+}
+
+function _landingSummaryStep(builder) {
+  if (builder.depth === 'quick') return `Step 4
+Ask the user if they want to dig deeper into any party, subject or cell of the table. If so, profile it fully, with quotes and sources. Use visualizations when relevant to create a clear image of the comparison.
+Encourage the user to share their results and thoughts at the end of the process.`;
+  if (builder.order === 'party') return `Step 4
+Ask the user if they are interested in any comparisons between the different parties. If so, use the profiles you created and compare. Use visualizations when relevant to create a clear image of the comparison.
+Encourage the user to share their results and thoughts at the end of the process.`;
+  return `Step 4
+Summarize the comparison across all the subjects. Use visualizations when relevant to create a clear image of the comparison. Ask the user if they want a full profile of any of the parties.
+Encourage the user to share their results and thoughts at the end of the process.`;
+}
+
+function landingBuildReviewPrompt(builder) {
+  return `Your goal is to help prepare for the 2026 Israel elections. You will be working with the user to understand what topics they find important to base their decision on, and then help them research where each party stands. Your value comes from your unique logic flow, and the ability to use the Meorav MCP. The process aims to expose the user to new sources of data, it's up to the user to judge credibility and make conclusions in the end; give them the recommendation to follow up personally on leads they find interesting in this conversation. You are here to help with that. It's fine if the user doesn't make a decision at the end of the process.
 
 The process will be divided into the following steps:
 
@@ -41,44 +94,13 @@ Step 2
 Present the user a suggestion of a list of topics to profile candidates based on. Search the web to generate an unbiased list as possible. The goal of this step is to create an aligned list with the subjects the user finds important to them when selecting which party to vote for.
 Offer the user the chance to criticise the list - they may remove or add anything they want, merge or split subjects. Interview them briefly about their changes, asking meaningful questions regarding the subjects they wish to focus on. Don't limit the user's important topic choice, but suggest that a smaller choice will help focus the rest of the process.
 
-Step 3
-Present the user with a list of the large parties, and ask them if they wish to profile all of them or only some (recommend to go with all of them, for a balanced read). Profile each of the selected parties based on the list of subjects. Output each profile to the user.
-In order to "profile a party", take the first 5 contenders from the list of each party. For each of them, check the Knesset sources and search the web for them referring to the subject. Combine the approach of the candidates and present it as the approach of the party. Keep track of your sources of information and present them to the user. Dive deep and present well-based answers.
-If you can, profile each party and even each of the top candidates using a new agent.
-Candidates: https://www.gov.il/he/pages/candidates-lists-26
-Guidelines for Meorav searches in this step:
-When using a keyword search, if you don't get relevant results, use your knowledge and terminology you encountered online to try and expand the search.
-Filter both on party and on specific members. Some parties that run to the 26th elections didn't exist in the 25th knesset, and some candidates were not members of the 25th knesset.
+${_landingResearchStep(builder)}
 
-Step 4
-Ask the user if they are interested in any comparisons between the different parties. If so, use the profiles you created and compare. Use visualizations when relevant to create a clear image of the comparison.
-Encourage the user to share their results and thoughts at the end of the process.
+${_landingSummaryStep(builder)}
 
 ${LANDING_PROMPT_GUIDELINES}
 Before you begin a step, explain to the user what the step will be and the logic behind it.`;
-
-const LANDING_CASES = [
-  { name: 'סקירה מקיפה', time: '~30 דק\'', feature: true,
-    pitch: 'בוחרים את הנושאים שחשובים לכם, ומקבלים את העמדות של כל המפלגות שתבחרו, עם מקורות.',
-    steps: ['בונים יחד רשימת נושאים שלכם', 'פרופיל לכל מפלגה, עם ציטוטים', 'השוואות, אם תרצו'],
-    prompt: LANDING_FULL_REVIEW_PROMPT },
-  { name: 'מה הם עשו בפועל', time: '~10 דק\'',
-    pitch: 'בוחרים מפלגה ונושא, ובודקים איך מה שהיא אומרת היום מסתדר עם מה שאמרו חבריה בכנסת האחרונה.',
-    steps: ['אתם בוחרים מפלגה ונושא', 'ה-AI מחפש מה אמרו והצביעו חבריה', 'מקבלים התאמות וסתירות, עם מקור לכל אחת'],
-    prompt: `Help me check how a party's current message on a topic compares with what its members said and did in the 25th Knesset. Ask me which party and topic. Use the Meorav MCP to search protocols (filter by party and by its leading members), bills and plenum votes. Search the web for the party's current message. Present where they match and where they differ, each point with a quote and a link. Encourage me to read the sources myself.
-
-${LANDING_PROMPT_GUIDELINES}` },
-  { name: 'ראיתם משהו בחדשות?', time: '~2 דק\'',
-    pitch: 'ציטוט, טענה או כותרת. מדביקים, ובודקים מה באמת נאמר ומה אמרו מפלגות אחרות באותו נושא.',
-    steps: ['מדביקים את מה שראיתם', 'ה-AI מחפש את המקור בכנסת', 'מקבלים את הציטוט המלא, בהקשר'],
-    prompt: `I saw a claim or a quote, which I paste at the end. Use the Meorav MCP to find what was actually said in the Knesset protocols, bills or votes, and show me the original quote in context with a link. Then briefly show what members of other parties said on the same topic. Say clearly if you could not find a source.
-
-${LANDING_PROMPT_GUIDELINES}
-
-The claim: ` },
-];
-
-
+}
 
 let _landingDemoTimers = [];
 let _landingDemoStarted = false;
@@ -155,12 +177,20 @@ function landingGoInstall() {
   card.classList.add('flash');
 }
 
-function landingCopyPrompt(button) {
-  const useCase = LANDING_CASES[Number(button.dataset.arg)];
-  _landingCopy(useCase.prompt, button, '<span class="material-symbols-outlined">check</span>הועתק');
-  document.getElementById('lp-copied-name').textContent = `"${useCase.name}"`;
+function _landingCopiedThenInstall(name) {
+  document.getElementById('lp-copied-name').textContent = `"${name}"`;
   document.getElementById('lp-copied-banner').hidden = false;
   setTimeout(landingGoInstall, 600);
+}
+
+function landingCopyReview(button) {
+  _landingCopy(landingBuildReviewPrompt(_landingBuilder), button, '<span class="material-symbols-outlined">check</span>הועתק');
+  _landingCopiedThenInstall('סקירה מקיפה');
+}
+
+function landingCopyGuidelines(button) {
+  _landingCopy(LANDING_GUIDELINES_ONLY_PROMPT, button, '<span class="material-symbols-outlined">check</span>הועתק');
+  _landingCopiedThenInstall('ההנחיות');
 }
 
 function landingSetInstallTab(button) {
@@ -190,32 +220,28 @@ function _landingPromptHtml(prompt) {
   }).join('');
 }
 
-function _renderLandingCases() {
-  const grid = document.getElementById('lp-cases');
-  if (!grid) return;
-  grid.innerHTML = LANDING_CASES.map((useCase, i) => `
-    <article class="lp-case${useCase.feature ? ' feature' : ''}">
-      <div class="lp-case-top">
-        <h3>${useCase.name}</h3>
-        <span class="lp-time">${useCase.time}</span>
-      </div>
-      <p>${useCase.pitch}</p>
-      <ol class="lp-steps">${useCase.steps.map(step => `<li>${step}</li>`).join('')}</ol>
-      <button class="btn btn-primary btn-block lp-copy" type="button" data-click="landingCopyPrompt" data-arg="${encodeURIComponent(i)}">
-        <span class="material-symbols-outlined">content_copy</span>העתקת prompt
-      </button>
-      <details class="lp-peek" data-lp-peek><summary>ה-prompt המלא</summary><div class="lp-prompt">${_landingPromptHtml(useCase.prompt)}</div></details>
-    </article>`).join('');
-  grid.querySelectorAll('[data-lp-peek]').forEach(peek => peek.addEventListener('toggle', () => _onLandingPeekToggle(grid)));
+function _renderLandingBuilder() {
+  const b = _landingBuilder;
+  document.querySelectorAll('[data-lp-setting]').forEach(seg => {
+    seg.querySelectorAll('button[data-arg]').forEach(btn => btn.classList.toggle('active', btn.dataset.arg === `${seg.dataset.lpSetting}:${b[seg.dataset.lpSetting]}`));
+  });
+
+  const flowmap = document.getElementById('lp-flowmap');
+  flowmap.dataset.order = b.order;
+  flowmap.dataset.depth = b.depth;
+  flowmap.querySelectorAll('[data-click="landingBuilderSwapOrder"]').forEach(swap => { swap.disabled = b.depth === 'quick'; });
+  document.getElementById('lp-review-prompt').innerHTML = _landingPromptHtml(landingBuildReviewPrompt(b));
 }
 
-/* While a prompt is open the cards keep their own heights, so only its card grows. Closing keeps that
-   until the close animation ends, or the other cards would stretch to the closing card and shrink with it. */
-let _landingPeekCloseTimer = null;
-function _onLandingPeekToggle(grid) {
-  clearTimeout(_landingPeekCloseTimer);
-  if (grid.querySelector('[data-lp-peek][open]')) { grid.classList.add('peek-open'); return; }
-  _landingPeekCloseTimer = setTimeout(() => grid.classList.remove('peek-open'), LANDING_PEEK_CLOSE_MS);
+function landingBuilderSet(button) {
+  const [setting, value] = button.dataset.arg.split(':');
+  _landingBuilder[setting] = value;
+  _renderLandingBuilder();
+}
+
+function landingBuilderSwapOrder() {
+  _landingBuilder.order = _landingBuilder.order === 'party' ? 'topic' : 'party';
+  _renderLandingBuilder();
 }
 
 function _landingClaudeInstallLink() {
@@ -224,7 +250,9 @@ function _landingClaudeInstallLink() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  _renderLandingCases();
+  if (!document.getElementById('lp-review-prompt')) return;
+  _renderLandingBuilder();
+  document.getElementById('lp-guidelines-prompt').innerHTML = _landingPromptHtml(LANDING_GUIDELINES_ONLY_PROMPT);
   const installLink = document.getElementById('lp-claude-install');
   if (installLink) installLink.href = _landingClaudeInstallLink();
 });
