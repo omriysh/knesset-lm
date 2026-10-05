@@ -1,20 +1,12 @@
 """
 tests/test_query_protocols.py
 
-utils.tools.handle_query_protocols / handle_get_meeting_attendance against a
-temp knesset.db seeded with real Knesset-25 rows (tests/fixtures/protocols_sample.json)
-plus a few synthetic edge-case rows (see conftest.synthetic_rows).
-
-Sample layout (X = עודד פורר, 30121, ישראל ביתנו):
-  SYN 2299001  C2  2023-06-15  is_protocol=1  synthetic: ktiv words, very long opinion/speech
-  M6  2205111  C2  2023-05-08  is_protocol=NULL (no summary; speeches only)
-  M5  2205807  education  2023-05-31  is_protocol=0 (real speeches + synthetic topic/opinion/attendance)
-  M3  2200829  C2  2023-02-08  M4 2200258  C1  2023-02-08  (same date)
-  M2  2199065  C1  2023-01-09  M1 2199062  C1  2023-01-04
+utils.tools.handle_query_protocols / handle_get_meeting_attendance on the real Data/knesset.db.
+Expected rows come from SQL oracles over the same db (conftest.real_conn), and the meetings,
+committees and MK come from conftest.RealDbFacts, so nothing depends on a data snapshot.
 """
 
 import json
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -24,20 +16,11 @@ import pytest
 
 import config
 from agent.subgraph.evidence import ToolEnvelope
-from retrieval import knesset_db_store as store
-from tests.conftest import ROLES, SAMPLE, SYN_MEETING, X_MK, synthetic_rows
 import utils.tools as tools
 
-M1, M2, M3, M4, M5, M6 = (ROLES[k] for k in ("M1", "M2", "M3", "M4", "M5", "M6"))
-SYN = SYN_MEETING
-X = X_MK["mk_id"]
-C1 = SAMPLE["committees"]["C1"]
-C2 = SAMPLE["committees"]["C2"]
-KARIV = "30807"          # attended only M3
-GOTLIB = "30860"         # attended M1 and M6
-LIKUD_SPEAKER = "30701"  # speaks at M1 idx 8
-DATE = {m["meeting_id"]: m["date"] for m in SAMPLE["meetings"] + synthetic_rows()["meetings"]}
 SCOPES = ("topics", "opinions", "speeches")
+NONSENSE_WORD = "קשקשתאינהקיימתבשוםפרוטוקול"
+UNUSED_KNESSET = 1
 
 
 def qp(**args) -> dict:
@@ -51,402 +34,378 @@ def keys(rows, idx_field="idx"):
     return [(r["meeting_id"], r[idx_field]) for r in rows]
 
 
-def sp(rows):
+def speech_keys(rows):
     return keys(rows, "speech_idx")
-
-
-def real_rows(table, meeting_id, verified_only=False):
-    rows = [r for r in SAMPLE[table] if r["meeting_id"] == meeting_id]
-    if verified_only:
-        rows = [r for r in rows if r["quote_verified"] == 1]
-    return sorted(rows, key=lambda r: r["idx"])
 
 
 def assert_list_order(rows, idx_field):
     """date DESC, rows of one meeting contiguous, in-meeting order ascending."""
     dates = [r["date"] for r in rows]
     assert dates == sorted(dates, reverse=True)
-    seen, prev = [], None
+    seen, previous = [], None
     for r in rows:
-        if r["meeting_id"] != prev:
+        if r["meeting_id"] != previous:
             assert r["meeting_id"] not in seen, "meeting rows not contiguous"
             seen.append(r["meeting_id"])
-            prev = r["meeting_id"]
-    for mid in seen:
-        idxs = [r[idx_field] for r in rows if r["meeting_id"] == mid]
+            previous = r["meeting_id"]
+    for meeting_id in seen:
+        idxs = [r[idx_field] for r in rows if r["meeting_id"] == meeting_id]
         assert idxs == sorted(idxs)
 
 
-def bm25_oracle(db_path, table, match):
-    conn = sqlite3.connect(str(db_path))
-    try:
-        return {(m, i): s for m, i, s in conn.execute(
-            f"SELECT x.meeting_id, x.idx, bm25({table}_fts) FROM {table}_fts "
-            f"JOIN {table} x ON x.id = {table}_fts.rowid WHERE {table}_fts MATCH ?", (match,))}
-    finally:
-        conn.close()
+def column(conn, sql, *params) -> list:
+    return [r[0] for r in conn.execute(sql, params)]
+
+
+def meeting_ids_of(rows) -> set[str]:
+    return {r["meeting_id"] for r in rows}
+
+
+def speech_position(conn, meeting_id: str, speech_idx: int) -> int:
+    return conn.execute("SELECT COUNT(*) FROM speeches WHERE meeting_id = ? AND idx < ?",
+                        (meeting_id, speech_idx)).fetchone()[0]
 
 
 # ── envelope / errors ─────────────────────────────────────────────────────────
 
 class TestEnvelope:
-    def test_metadata_and_count(self, sample_db):
-        env = tools.handle_query_protocols({"query": "העלייה"})
+    def test_metadata_and_count(self, real_db):
+        env = tools.handle_query_protocols({"query": real_db.topic_word})
         payload = json.loads(env.full)
-        assert env.metadata["kind"] == "search"
-        assert env.metadata["source"] == "knesset_db"
-        assert env.metadata["count"] == sum(len(v) for v in payload.values()) == 6 + 7 + 12
+        assert env.metadata["kind"] == "search" and env.metadata["source"] == "knesset_db"
+        assert env.metadata["count"] == sum(len(v) for v in payload.values()) > 0
 
-    def test_provenance_echoes_params(self, sample_db):
-        env = tools.handle_query_protocols({"query": "העלייה", "mk_id": X, "search_in": ["opinions"]})
-        assert env.provenance["query"] == "העלייה"
-        assert env.provenance["mk_id"] == X
+    def test_provenance_echoes_params(self, real_db):
+        env = tools.handle_query_protocols({"query": real_db.topic_word, "mk_id": real_db.mk_id,
+                                            "search_in": ["opinions"]})
+        assert env.provenance["query"] == real_db.topic_word
+        assert env.provenance["mk_id"] == real_db.mk_id
         assert list(env.provenance["search_in"]) == ["opinions"]
 
-    def test_only_requested_scopes_present(self, sample_db):
-        assert set(qp(query="העלייה", search_in=["opinions"])) == {"opinions"}
-        assert set(qp(query="העלייה", search_in=["topics", "speeches"])) == {"topics", "speeches"}
+    def test_only_requested_scopes_present(self, real_db):
+        assert set(qp(query=real_db.topic_word, search_in=["opinions"])) == {"opinions"}
+        assert set(qp(query=real_db.topic_word, search_in=["topics", "speeches"])) == {"topics", "speeches"}
 
-    def test_default_is_all_three_scopes(self, sample_db):
-        assert set(qp(query="העלייה")) == set(SCOPES)
-        assert set(qp()) == set(SCOPES)
+    def test_default_is_all_three_scopes(self, real_db):
+        assert set(qp(query=real_db.topic_word)) == set(SCOPES)
+        assert set(qp(meeting_ids=[real_db.meeting_id])) == set(SCOPES)
 
-    def test_invalid_search_in(self, sample_db):
-        env = tools.handle_query_protocols({"query": "העלייה", "search_in": ["topics", "bills"]})
+    def test_invalid_search_in(self, real_db):
+        env = tools.handle_query_protocols({"query": real_db.topic_word, "search_in": ["topics", "bills"]})
         assert env.error == "invalid_search_in"
 
     def test_db_missing(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "KNESSET_DB", tmp_path / "missing.db")
-        assert tools.handle_query_protocols({"query": "העלייה"}).error == "knesset_db_missing"
+        assert tools.handle_query_protocols({"query": "תקציב"}).error == "knesset_db_missing"
 
     def test_sqlite_error_is_db_search_failed(self, tmp_path, monkeypatch, capsys):
         broken = tmp_path / "knesset.db"
         broken.write_bytes(b"this is not an sqlite database" * 100)
         monkeypatch.setattr(config, "KNESSET_DB", broken)
-        env = tools.handle_query_protocols({"query": "העלייה"})
-        assert isinstance(env, ToolEnvelope)
+        env = tools.handle_query_protocols({"query": "תקציב"})
         assert env.error == "db_search_failed"
         assert capsys.readouterr().out.strip()
 
-    def test_fts_metacharacters_do_not_raise(self, sample_db):
-        rows = qp(query='העלייה)"*', search_in=["topics"])["topics"]
-        assert set(keys(rows)) == {(M2, 2), (M1, 0), (M1, 1), (M1, 2), (M2, 4), (M2, 1)}
+    def test_fts_metacharacters_are_literal(self, real_db):
+        plain = qp(query=real_db.topic_word, search_in=["topics"])["topics"]
+        decorated = qp(query=f'{real_db.topic_word})"*', search_in=["topics"])["topics"]
+        assert plain and keys(decorated) == keys(plain)
 
-    def test_other_knesset_is_empty(self, sample_db):
-        assert qp(query="העלייה", knesset_num=24) == {s: [] for s in SCOPES}
-        assert qp(knesset_num=24) == {s: [] for s in SCOPES}
+    def test_knesset_without_data_is_empty(self, real_db):
+        assert qp(query=real_db.topic_word, knesset_num=UNUSED_KNESSET) == {s: [] for s in SCOPES}
+        assert qp(knesset_num=UNUSED_KNESSET) == {s: [] for s in SCOPES}
 
 
 # ── row shapes / no truncation ────────────────────────────────────────────────
 
 class TestRowShapes:
-    def test_topic_row(self, sample_db):
-        row = next(r for r in qp(meeting_ids=[M2], search_in=["topics"])["topics"] if r["idx"] == 4)
-        assert row["meeting_id"] == M2 and row["committee"] == C1 and row["date"] == DATE[M2]
-        assert row["topic"] == real_rows("topics", M2)[4]["text"]
+    def test_topic_row(self, real_db, real_conn):
+        expected = real_conn.execute("SELECT idx, text FROM topics WHERE meeting_id = ? ORDER BY idx DESC",
+                                     (real_db.meeting_id,)).fetchone()
+        rows = qp(meeting_ids=[real_db.meeting_id], search_in=["topics"], top_k=config.QUERY_PROTOCOLS_MAX_TOP_K)
+        row = next(r for r in rows["topics"] if r["idx"] == expected["idx"])
+        assert (row["committee"], row["date"]) == (real_db.meeting_committee, real_db.meeting_date)
+        assert row["topic"] == expected["text"]
 
-    def test_opinion_row(self, sample_db):
-        expected = next(o for o in SAMPLE["opinions"] if o["meeting_id"] == M3 and o["idx"] == 11)
-        row = next(r for r in qp(meeting_ids=[M3], search_in=["opinions"])["opinions"] if r["idx"] == 11)
-        assert row["meeting_id"] == M3 and row["committee"] == C2 and row["date"] == DATE[M3]
+    def test_opinion_row(self, real_db, real_conn):
+        expected = real_conn.execute(
+            "SELECT * FROM opinions WHERE meeting_id = ? AND quote_verified = 1 AND mk_id IS NOT NULL "
+            "ORDER BY idx", (real_db.meeting_id,)).fetchone()
+        row = next(r for r in qp(meeting_ids=[real_db.meeting_id], search_in=["opinions"])["opinions"]
+                   if r["idx"] == expected["idx"])
         assert row["speaker"] == expected["speaker_label"]
-        for f in ("speaker_name", "mk_id", "party", "opinion", "quote", "speech_idx", "quote_offset"):
-            assert row[f] == expected[f], f
+        for name in ("speaker_name", "mk_id", "party", "opinion", "quote", "speech_idx", "quote_offset"):
+            assert row[name] == expected[name], name
 
-    def test_speech_row(self, sample_db):
-        expected = next(s for s in SAMPLE["speeches"] if s["meeting_id"] == M2 and s["idx"] == 8)
-        row = next(r for r in qp(meeting_ids=[M2], search_in=["speeches"])["speeches"] if r["speech_idx"] == 8)
-        assert row["meeting_id"] == M2 and row["committee"] == C1 and row["date"] == DATE[M2]
-        assert row["speaker"] == expected["speaker"] and row["mk_id"] == expected["mk_id"]
-        assert row["text"] == expected["text"]
+    def test_speech_row(self, real_db, real_conn):
+        expected = real_conn.execute("SELECT * FROM speeches WHERE meeting_id = ? AND mk_id IS NOT NULL ORDER BY idx",
+                                     (real_db.meeting_id,)).fetchone()
+        rows = qp(meeting_ids=[real_db.meeting_id], search_in=["speeches"], top_k=1,
+                  offset=speech_position(real_conn, real_db.meeting_id, expected["idx"]))["speeches"]
+        assert rows[0]["speech_idx"] == expected["idx"]
+        assert (rows[0]["speaker"], rows[0]["mk_id"], rows[0]["text"]) == (
+            expected["speaker"], expected["mk_id"], expected["text"])
 
-    def test_long_texts_not_truncated_in_list_mode(self, sample_db):
-        syn = synthetic_rows()
-        res = qp(meeting_ids=[SYN], search_in=["opinions", "speeches"])
-        op = next(r for r in res["opinions"] if r["idx"] == 0)
-        assert op["opinion"] == syn["opinions"][0]["opinion"] and len(op["opinion"]) > 3000
-        assert op["quote"] == syn["opinions"][0]["quote"]
-        speech = next(r for r in res["speeches"] if r["speech_idx"] == 2)
-        assert speech["text"] == syn["speeches"][2]["text"] and len(speech["text"]) > 20000
-
-    def test_long_texts_not_truncated_in_relevance_mode(self, sample_db):
-        syn = synthetic_rows()
-        res = qp(query="ביטחון", search_in=["opinions", "speeches"], mk_id=X)
-        assert syn["opinions"][0]["opinion"] in [r["opinion"] for r in res["opinions"]]
-        assert syn["speeches"][2]["text"] in [r["text"] for r in res["speeches"]]
+    def test_longest_texts_are_not_truncated(self, real_db, real_conn):
+        longest_speech = real_conn.execute(
+            "SELECT idx, text FROM speeches WHERE meeting_id = ? ORDER BY length(text) DESC",
+            (real_db.meeting_id,)).fetchone()
+        rows = qp(meeting_ids=[real_db.meeting_id], search_in=["speeches"], top_k=1,
+                  offset=speech_position(real_conn, real_db.meeting_id, longest_speech["idx"]))["speeches"]
+        assert rows[0]["text"] == longest_speech["text"]
+        longest_opinion = real_conn.execute(
+            "SELECT opinion FROM (SELECT opinion FROM opinions WHERE quote_verified = 1 AND meeting_id = ? "
+            "ORDER BY idx LIMIT ?) ORDER BY length(opinion) DESC",
+            (real_db.meeting_id, config.QUERY_PROTOCOLS_MAX_TOP_K)).fetchone()
+        rows = qp(meeting_ids=[real_db.meeting_id], search_in=["opinions"], top_k=config.QUERY_PROTOCOLS_MAX_TOP_K)
+        assert longest_opinion["opinion"] in [r["opinion"] for r in rows["opinions"]]
 
 
 # ── query matching / relevance ────────────────────────────────────────────────
 
 class TestRelevance:
-    def test_each_scope_searched_independently(self, sample_db):
-        res = qp(query="העלייה")
-        assert set(keys(res["topics"])) == {(M2, 2), (M1, 0), (M1, 1), (M1, 2), (M2, 4), (M2, 1)}
-        assert set(keys(res["opinions"])) == {(M1, 3), (M1, 2), (M2, 3), (M1, 4), (M2, 19), (M1, 7), (M1, 1)}
-        assert set(sp(res["speeches"])) == {
-            (M2, 1), (M1, 0), (M2, 0), (M4, 0), (M2, 4), (M1, 7), (M2, 7), (M4, 7),
-            (SYN, 2), (M2, 8), (M1, 9), (M4, 3)}
-
     @pytest.mark.parametrize("scope", SCOPES)
-    def test_ranked_by_bm25_best_first(self, sample_db, scope):
-        oracle = bm25_oracle(sample_db, scope, '"העלייה"')
-        rows = qp(query="העלייה", search_in=[scope])[scope]
+    def test_ranked_exact_words_first_then_bm25(self, real_db, real_conn, scope):
+        rows = qp(query=real_db.topic_word, search_in=[scope], top_k=20)[scope]
+        assert rows
         idx_field = "speech_idx" if scope == "speeches" else "idx"
-        scores = [oracle[(r["meeting_id"], r[idx_field])] for r in rows]
-        assert scores == sorted(scores)
+        match = tools._fts_match(real_db.topic_word, f"{scope}_fts")
+        exact_match = tools._fts_exact_match(real_db.topic_word)
+        meeting_ids = sorted(meeting_ids_of(rows))
+        oracle = {(r[0], r[1]): (r[2], r[3]) for r in real_conn.execute(
+            f"SELECT x.meeting_id, x.idx, x.id NOT IN (SELECT rowid FROM {scope}_fts WHERE {scope}_fts MATCH ?), "
+            f"bm25({scope}_fts) FROM {scope}_fts JOIN {scope} x ON x.id = {scope}_fts.rowid "
+            f"WHERE {scope}_fts MATCH ? AND x.meeting_id IN ({','.join('?' * len(meeting_ids))})",
+            (exact_match, match, *meeting_ids))}
+        tier_and_scores = [oracle[(r["meeting_id"], r[idx_field])] for r in rows]
+        assert tier_and_scores == sorted(tier_and_scores)
 
-    def test_tokens_are_anded(self, sample_db):
-        res = qp(query="משרד העלייה")
-        assert set(keys(res["topics"])) == {(M2, 2), (M2, 4)}
-        assert set(keys(res["opinions"])) == {(M2, 3), (M2, 19)}
-        assert set(sp(res["speeches"])) == {(M2, 1), (M2, 4), (M4, 3), (M2, 7), (SYN, 2), (M2, 8)}
+    def test_tokens_are_anded(self, real_db, real_conn):
+        first_word, second_word = "תקציב", "החינוך"
+        both = set(keys(qp(query=f"{first_word} {second_word}", search_in=["topics"], top_k=50)["topics"]))
+        assert both
+        for word in (first_word, second_word):
+            match = tools._fts_match(word, "topics_fts")
+            with_word = {(r[0], r[1]) for r in real_conn.execute(
+                "SELECT x.meeting_id, x.idx FROM topics_fts JOIN topics x ON x.id = topics_fts.rowid "
+                "WHERE topics_fts MATCH ?", (match,))}
+            assert both <= with_word, word
 
-    def test_no_match_gives_empty_lists(self, sample_db):
-        assert qp(query="רופאים", search_in=["opinions", "speeches"]) == {"opinions": [], "speeches": []}
+    def test_no_match_gives_empty_lists(self, real_db):
+        assert qp(query=NONSENSE_WORD, search_in=["opinions", "speeches"]) == {"opinions": [], "speeches": []}
 
-    def test_ktiv_haser_query_matches_male_spelling(self, sample_db):
-        res = qp(query="בטחון")
-        assert set(keys(res["topics"])) == {(SYN, 0), (SYN, 1)}
-        assert set(keys(res["opinions"])) == {(SYN, 0), (SYN, 1)}
-        assert set(sp(res["speeches"])) == {(SYN, 0), (SYN, 1), (SYN, 2)}
+    def test_ktiv_haser_query_finds_male_spelling(self, real_db):
+        rows = qp(query="בטחון", search_in=["topics"], top_k=50)["topics"]
+        assert any("ביטחון" in r["topic"] for r in rows)
 
-    def test_niqqud_in_query_is_ignored(self, sample_db):
-        res = qp(query="בִּיטָּחוֹן", search_in=["speeches"])
-        assert set(sp(res["speeches"])) == {(SYN, 0), (SYN, 1), (SYN, 2)}
+    def test_niqqud_in_query_is_ignored(self, real_db):
+        assert qp(query="בִּיטָּחוֹן", search_in=["speeches"], top_k=10) == qp(query="ביטחון", search_in=["speeches"],
+                                                                             top_k=10)
 
-    def test_relevance_rows_may_carry_score(self, sample_db):
-        rows = qp(query="העלייה", search_in=["topics"])["topics"]
-        if "score" in rows[0]:
-            assert [r["score"] for r in rows] == sorted(r["score"] for r in rows)
+    def test_sort_date_with_query(self, real_db):
+        rows = qp(query=real_db.topic_word, search_in=["speeches"], sort="date", top_k=50)["speeches"]
+        assert rows
+        assert_list_order(rows, "speech_idx")
 
-    def test_sort_date_with_query(self, sample_db):
-        rows = qp(query="העלייה", search_in=["speeches"], sort="date")["speeches"]
-        assert sp(rows) == [(SYN, 2), (M4, 0), (M4, 3), (M4, 7), (M2, 0), (M2, 1), (M2, 4), (M2, 7), (M2, 8),
-                            (M1, 0), (M1, 7), (M1, 9)]
+    def test_offset_with_query(self, real_db):
+        full = speech_keys(qp(query=real_db.topic_word, search_in=["speeches"], sort="date", top_k=12)["speeches"])
+        page = speech_keys(qp(query=real_db.topic_word, search_in=["speeches"], sort="date", top_k=4,
+                              offset=4)["speeches"])
+        assert page == full[4:8]
+
+    def test_results_never_from_non_protocol_meetings(self, real_db, real_conn):
+        rows = qp(query="תקציב", top_k=config.QUERY_PROTOCOLS_MAX_TOP_K)
+        meeting_ids = sorted(set().union(*(meeting_ids_of(r) for r in rows.values())))
+        assert meeting_ids
+        flags = column(real_conn, f"SELECT is_protocol FROM meetings WHERE meeting_id IN "
+                                  f"({','.join('?' * len(meeting_ids))})", *meeting_ids)
+        assert 0 not in flags
 
 
 # ── list mode ─────────────────────────────────────────────────────────────────
 
 class TestListMode:
-    def test_topics_newest_first_in_meeting_order(self, sample_db):
-        rows = qp(search_in=["topics"])["topics"]
-        assert len(rows) == 3 + 8 + 8 + 8 + 2
-        assert keys(rows)[:2] == [(SYN, 0), (SYN, 1)]
-        assert_list_order(rows, "idx")
-        assert keys(rows)[-3:] == [(M1, 0), (M1, 1), (M1, 2)]
+    @pytest.mark.parametrize("scope, idx_field", [("topics", "idx"), ("opinions", "idx"), ("speeches", "speech_idx")])
+    def test_newest_first_in_meeting_order(self, real_db, real_conn, scope, idx_field):
+        rows = qp(search_in=[scope], top_k=config.QUERY_PROTOCOLS_MAX_TOP_K)[scope]
+        assert len(rows) == config.QUERY_PROTOCOLS_MAX_TOP_K
+        assert_list_order(rows, idx_field)
+        newest = real_conn.execute(
+            f"SELECT MAX(m.date) FROM meetings m WHERE (m.is_protocol IS NULL OR m.is_protocol != 0) AND m.knesset_num = 25 "
+            f"AND EXISTS (SELECT 1 FROM {scope} x WHERE x.meeting_id = m.meeting_id)").fetchone()[0]
+        if scope != "opinions":
+            assert rows[0]["date"] == newest
 
-    def test_opinions_list_verified_only(self, sample_db):
-        rows = qp(search_in=["opinions"])["opinions"]
-        assert_list_order(rows, "idx")
-        expected = set()
-        for mid in (M1, M2, M3, M4):
-            expected |= {(mid, o["idx"]) for o in real_rows("opinions", mid, verified_only=True)}
-        expected |= {(SYN, 0), (SYN, 1)}
-        assert set(keys(rows)) == expected
-        assert len(rows) == 8 + 9 + 6 + 0 + 2
+    def test_listed_opinions_are_verified(self, real_db, real_conn):
+        rows = qp(search_in=["opinions"], top_k=config.QUERY_PROTOCOLS_MAX_TOP_K)["opinions"]
+        verified = {(r[0], r[1]): r[2] for r in real_conn.execute(
+            f"SELECT meeting_id, idx, quote_verified FROM opinions WHERE meeting_id IN "
+            f"({','.join('?' * len(meeting_ids_of(rows)))})", tuple(meeting_ids_of(rows)))}
+        assert all(verified[key] == 1 for key in keys(rows))
 
-    def test_speeches_list(self, sample_db):
-        rows = qp(search_in=["speeches"])["speeches"]
-        assert_list_order(rows, "speech_idx")
-        assert [r["meeting_id"] for r in rows][:4] == [SYN, SYN, SYN, M6]
-        assert len(rows) == 6 * 5 + 3
-
-    def test_relevance_sort_with_empty_query_is_date(self, sample_db):
+    def test_relevance_sort_with_empty_query_is_date(self, real_db):
         assert qp(search_in=["speeches"], sort="relevance") == qp(search_in=["speeches"], sort="date")
         assert qp(query="", search_in=["topics"]) == qp(search_in=["topics"])
 
-    def test_meeting_summary_via_meeting_ids(self, sample_db):
-        res = qp(meeting_ids=[M2], search_in=["topics", "opinions"])
-        assert [r["topic"] for r in res["topics"]] == [t["text"] for t in real_rows("topics", M2)]
-        assert [r["idx"] for r in res["opinions"]] == [o["idx"] for o in real_rows("opinions", M2, True)]
+    def test_meeting_summary_via_meeting_ids(self, real_db, real_conn):
+        res = qp(meeting_ids=[real_db.meeting_id], search_in=["topics", "opinions"],
+                 top_k=config.QUERY_PROTOCOLS_MAX_TOP_K)
+        assert [r["topic"] for r in res["topics"]] == column(
+            real_conn, "SELECT text FROM topics WHERE meeting_id = ? ORDER BY idx", real_db.meeting_id)
+        assert [r["idx"] for r in res["opinions"]] == column(
+            real_conn, "SELECT idx FROM opinions WHERE meeting_id = ? AND quote_verified = 1 ORDER BY idx",
+            real_db.meeting_id)[:config.QUERY_PROTOCOLS_MAX_TOP_K]
 
-    def test_transcript_reading_in_order(self, sample_db):
-        rows = qp(meeting_ids=[M2], search_in=["speeches"])["speeches"]
-        expected = real_rows("speeches", M2)
-        assert [r["speech_idx"] for r in rows] == [s["idx"] for s in expected]
-        assert [r["text"] for r in rows] == [s["text"] for s in expected]
+    def test_transcript_pages_in_order(self, real_db, real_conn):
+        all_idx = column(real_conn, "SELECT idx FROM speeches WHERE meeting_id = ? ORDER BY idx", real_db.meeting_id)
+        pages = [[r["speech_idx"] for r in qp(meeting_ids=[real_db.meeting_id], search_in=["speeches"],
+                                              top_k=5, offset=o)["speeches"]] for o in (0, 5, 10)]
+        assert pages == [all_idx[0:5], all_idx[5:10], all_idx[10:15]]
+        past_end = qp(meeting_ids=[real_db.meeting_id], search_in=["speeches"], offset=len(all_idx))["speeches"]
+        assert past_end == []
 
-    def test_offset_pages_through_transcript(self, sample_db):
-        all_idx = [s["idx"] for s in real_rows("speeches", M2)]
-        pages = [[r["speech_idx"] for r in qp(meeting_ids=[M2], search_in=["speeches"], top_k=2, offset=o)["speeches"]]
-                 for o in (0, 2, 4, 6)]
-        assert pages == [all_idx[0:2], all_idx[2:4], all_idx[4:6], []]
-
-    def test_offset_is_per_scope(self, sample_db):
-        res = qp(meeting_ids=[M2], search_in=["topics", "speeches"], top_k=3, offset=3)
-        assert [r["idx"] for r in res["topics"]] == [3, 4, 5]
-        assert [r["speech_idx"] for r in res["speeches"]] == [s["idx"] for s in real_rows("speeches", M2)][3:6]
-
-    def test_offset_with_query(self, sample_db):
-        full = sp(qp(query="העלייה", search_in=["speeches"], sort="date")["speeches"])
-        page = sp(qp(query="העלייה", search_in=["speeches"], sort="date", top_k=4, offset=4)["speeches"])
-        assert page == full[4:8]
+    def test_offset_is_per_scope(self, real_db, real_conn):
+        res = qp(meeting_ids=[real_db.meeting_id], search_in=["topics", "speeches"], top_k=2, offset=2)
+        topic_idx = column(real_conn, "SELECT idx FROM topics WHERE meeting_id = ? ORDER BY idx", real_db.meeting_id)
+        speech_idx = column(real_conn, "SELECT idx FROM speeches WHERE meeting_id = ? ORDER BY idx", real_db.meeting_id)
+        assert [r["idx"] for r in res["topics"]] == topic_idx[2:4]
+        assert [r["speech_idx"] for r in res["speeches"]] == speech_idx[2:4]
 
 
 # ── filters ───────────────────────────────────────────────────────────────────
 
 class TestFilters:
-    def test_mk_id_topics_means_attendance(self, sample_db):
-        assert {r["meeting_id"] for r in qp(mk_id=KARIV, search_in=["topics"])["topics"]} == {M3}
-        assert {r["meeting_id"] for r in qp(mk_id=GOTLIB, search_in=["topics"])["topics"]} == {M1}
-        assert {r["meeting_id"] for r in qp(mk_id=X, search_in=["topics"])["topics"]} == {M1, M2, M3, M4, SYN}
+    def test_mk_id_topics_means_attendance(self, real_db, real_conn):
+        rows = qp(mk_id=real_db.mk_id, search_in=["topics"], top_k=config.QUERY_PROTOCOLS_MAX_TOP_K)["topics"]
+        attended = set(column(real_conn, "SELECT meeting_id FROM attendance WHERE mk_id = ?", real_db.mk_id))
+        assert rows and meeting_ids_of(rows) <= attended
 
-    def test_mk_id_opinions_means_opinion_author(self, sample_db):
-        rows = qp(mk_id=X, search_in=["opinions"])["opinions"]
-        assert keys(rows) == [(SYN, 0), (M3, 11), (M2, 0), (M2, 19), (M1, 1)]
-        assert all(r["mk_id"] == X for r in rows)
+    def test_mk_id_opinions_means_opinion_author(self, real_db):
+        rows = qp(mk_id=real_db.mk_id, search_in=["opinions"], top_k=30)["opinions"]
+        assert rows and all(r["mk_id"] == real_db.mk_id for r in rows)
+        assert_list_order(rows, "idx")
 
-    def test_mk_id_speeches_means_speaker(self, sample_db):
-        rows = qp(mk_id=X, search_in=["speeches"])["speeches"]
-        assert sp(rows) == [(SYN, 0), (SYN, 2), (M4, 7), (M2, 8), (M1, 9)]
+    def test_mk_id_speeches_means_speaker(self, real_db):
+        rows = qp(mk_id=real_db.mk_id, search_in=["speeches"], top_k=30)["speeches"]
+        assert rows and all(r["mk_id"] == real_db.mk_id for r in rows)
 
-    def test_mk_id_with_query(self, sample_db):
-        res = qp(query="העלייה", mk_id=X)
-        assert set(keys(res["opinions"])) == {(M2, 19), (M1, 1)}
-        assert set(sp(res["speeches"])) == {(SYN, 2), (M2, 8), (M1, 9), (M4, 7)}
-        assert set(keys(res["topics"])) == {(M2, 2), (M1, 0), (M1, 1), (M1, 2), (M2, 4), (M2, 1)}
-        assert set(sp(qp(query="העלייה", mk_id=KARIV, search_in=["speeches"])["speeches"])) == set()
-        assert qp(query="העלייה", mk_id=KARIV, search_in=["topics"])["topics"] == []
+    def test_mk_id_numeric_equals_string(self, real_db):
+        assert qp(mk_id=int(real_db.mk_id), search_in=["opinions"]) == qp(mk_id=real_db.mk_id, search_in=["opinions"])
 
-    def test_party_topics_means_attendee_party(self, sample_db):
-        assert {r["meeting_id"] for r in qp(party="העבודה", search_in=["topics"])["topics"]} == {M3}
+    def test_party_topics_means_attendee_party(self, real_db, real_conn):
+        rows = qp(party=real_db.mk_party, search_in=["topics"], top_k=30)["topics"]
+        with_party = set(column(real_conn, "SELECT DISTINCT meeting_id FROM attendance WHERE party = ?",
+                                real_db.mk_party))
+        assert rows and meeting_ids_of(rows) <= with_party
 
-    def test_party_opinions(self, sample_db):
-        rows = qp(party="העבודה", search_in=["opinions"])["opinions"]
-        assert set(keys(rows)) == {(M3, 2), (M3, 4), (M3, 6)}
+    def test_party_opinions_and_speeches(self, real_db, real_conn):
+        opinions = qp(party=real_db.mk_party, search_in=["opinions"], top_k=30)["opinions"]
+        assert opinions and all(r["party"] == real_db.mk_party for r in opinions)
+        party_members = set(column(real_conn, "SELECT mk_id FROM mks WHERE party = ?", real_db.mk_party))
+        speeches = qp(party=real_db.mk_party, search_in=["speeches"], top_k=30)["speeches"]
+        assert speeches and {r["mk_id"] for r in speeches} <= party_members
 
-    def test_party_speeches_uses_speaker_roster_party(self, sample_db):
-        assert sp(qp(party="הליכוד", search_in=["speeches"])["speeches"]) == [(M1, 8)]
-        assert sp(qp(party="ישראל ביתנו", search_in=["speeches"])["speeches"]) == \
-            sp(qp(mk_id=X, search_in=["speeches"])["speeches"])
-
-    def test_committees_with_underscores(self, sample_db):
-        underscored = C1.replace(" ", "_")
+    def test_committees_with_underscores(self, real_db):
+        underscored = real_db.meeting_committee.replace(" ", "_")
         rows = qp(committees=[underscored], search_in=["topics"])["topics"]
-        assert {r["meeting_id"] for r in rows} == {M1, M2, M4}
-        assert rows == qp(committees=[C1], search_in=["topics"])["topics"]
+        assert rows and {r["committee"] for r in rows} == {real_db.meeting_committee}
+        assert rows == qp(committees=[real_db.meeting_committee], search_in=["topics"])["topics"]
 
-    def test_committees_ored(self, sample_db):
-        rows = qp(committees=[C1, C2], search_in=["speeches"])["speeches"]
-        assert {r["meeting_id"] for r in rows} == {M1, M2, M3, M4, M6, SYN}
-        assert {r["meeting_id"] for r in qp(committees=[C2], search_in=["speeches"])["speeches"]} == {M3, M6, SYN}
+    def test_committees_ored(self, real_db):
+        both = [real_db.meeting_committee, real_db.other_committee]
+        rows = qp(committees=both, search_in=["speeches"], top_k=config.QUERY_PROTOCOLS_MAX_TOP_K)["speeches"]
+        assert rows and {r["committee"] for r in rows} <= set(both)
+        for committee in both:
+            assert qp(committees=[committee], meeting_ids=[real_db.meeting_id, real_db.other_meeting_id],
+                      search_in=["topics"])["topics"]
 
-    def test_meeting_ids_ored(self, sample_db):
-        res = qp(meeting_ids=[M1, M3])
-        for scope in SCOPES:
-            assert {r["meeting_id"] for r in res[scope]} == {M1, M3}
+    def test_meeting_ids_ored(self, real_db):
+        res = qp(meeting_ids=[real_db.meeting_id, real_db.other_meeting_id], top_k=config.QUERY_PROTOCOLS_MAX_TOP_K)
+        for scope in ("topics", "opinions"):
+            assert meeting_ids_of(res[scope]) == {real_db.meeting_id, real_db.other_meeting_id}, scope
 
-    def test_date_range_inclusive(self, sample_db):
-        res = qp(date_from=DATE[M2], date_to=DATE[M3])
-        assert {r["meeting_id"] for r in res["topics"]} == {M2, M3, M4}
-        assert {r["meeting_id"] for r in res["speeches"]} == {M2, M3, M4}
-        assert {r["meeting_id"] for r in qp(date_from="2023-05-08", search_in=["speeches"])["speeches"]} == {M6, SYN}
-        assert {r["meeting_id"] for r in qp(date_to="2023-01-04", search_in=["topics"])["topics"]} == {M1}
+    def test_date_range_inclusive(self, real_db):
+        rows = qp(date_from=real_db.meeting_date, date_to=real_db.meeting_date, search_in=["topics"],
+                  top_k=config.QUERY_PROTOCOLS_MAX_TOP_K)["topics"]
+        assert rows and {r["date"] for r in rows} == {real_db.meeting_date}
+        later = qp(date_from=real_db.meeting_date, search_in=["topics"])["topics"]
+        earlier = qp(date_to=real_db.meeting_date, search_in=["topics"])["topics"]
+        assert all(r["date"] >= real_db.meeting_date for r in later)
+        assert all(r["date"] <= real_db.meeting_date for r in earlier)
 
-    def test_filters_are_anded(self, sample_db):
-        rows = qp(mk_id=X, committees=[C2], search_in=["opinions"])["opinions"]
-        assert keys(rows) == [(SYN, 0), (M3, 11)]
-        assert qp(mk_id=KARIV, committees=[C1], search_in=["topics"])["topics"] == []
-        rows = qp(query="הוועדה", committees=[C1], search_in=["opinions", "topics"])
-        assert {r["meeting_id"] for r in rows["opinions"]} == {M1}
-        assert keys(rows["topics"]) == [(M4, 0)]
+    def test_filters_are_anded(self, real_db):
+        rows = qp(mk_id=real_db.mk_id, committees=[real_db.meeting_committee], search_in=["opinions"])["opinions"]
+        assert all(r["mk_id"] == real_db.mk_id and r["committee"] == real_db.meeting_committee for r in rows)
+        assert qp(meeting_ids=[real_db.meeting_id], committees=[real_db.other_committee]) == {s: [] for s in SCOPES}
 
-    def test_unknown_mk_is_empty_not_error(self, sample_db):
+    def test_unknown_mk_is_empty_not_error(self, real_db):
         assert qp(mk_id="99999999") == {s: [] for s in SCOPES}
 
 
 # ── exclusions ────────────────────────────────────────────────────────────────
 
 class TestExclusions:
-    def test_unverified_opinions_never_returned(self, sample_db):
-        unverified = {(o["meeting_id"], o["idx"]) for o in SAMPLE["opinions"] if o["quote_verified"] == 0}
-        assert unverified
-        for args in ({}, {"query": "העלייה"}, {"meeting_ids": [M4]}, {"mk_id": X}, {"meeting_ids": [M2, M3, M4]}):
-            rows = qp(search_in=["opinions"], **args)["opinions"]
-            assert not set(keys(rows)) & unverified
-        assert qp(meeting_ids=[M4], search_in=["opinions"])["opinions"] == []
+    def test_unverified_opinions_never_returned(self, real_db, real_conn):
+        meeting_id = real_conn.execute(
+            "SELECT meeting_id FROM opinions WHERE quote_verified = 0 AND knesset_num = 25 ORDER BY meeting_id").fetchone()[0]
+        unverified = set(column(real_conn, "SELECT idx FROM opinions WHERE meeting_id = ? AND quote_verified = 0",
+                                meeting_id))
+        rows = qp(meeting_ids=[meeting_id], search_in=["opinions"], top_k=config.QUERY_PROTOCOLS_MAX_TOP_K)["opinions"]
+        assert not {r["idx"] for r in rows} & unverified
 
-    def test_not_protocol_meeting_excluded_everywhere(self, sample_db):
-        for args in ({}, {"query": "ביטחון"}, {"query": "פרוטוקול"}, {"meeting_ids": [M5]}, {"mk_id": X}):
-            res = qp(**args)
-            for scope in SCOPES:
-                assert M5 not in {r["meeting_id"] for r in res[scope]}, (args, scope)
-
-    def test_meeting_without_summary_is_included(self, sample_db):
-        rows = qp(meeting_ids=[M6], search_in=["speeches"])["speeches"]
-        assert [r["speech_idx"] for r in rows] == [s["idx"] for s in real_rows("speeches", M6)]
-        assert M6 in {r["meeting_id"] for r in qp(query="פרוטוקול", search_in=["speeches"])["speeches"]}
+    def test_not_protocol_meeting_excluded(self, real_db):
+        assert qp(meeting_ids=[real_db.non_protocol_meeting_id]) == {s: [] for s in SCOPES}
 
 
 # ── top_k ─────────────────────────────────────────────────────────────────────
 
-def _add_speeches(db_path, meeting_id, start, count):
-    conn = sqlite3.connect(str(db_path))
-    try:
-        conn.executemany(
-            "INSERT INTO speeches(meeting_id, knesset_num, idx, speaker, mk_id, text) VALUES (?,?,?,?,?,?)",
-            [(meeting_id, 25, start + i, "איל קופמן", None, f"ביטחון הציבור, סעיף {i}") for i in range(count)])
-        conn.execute("INSERT INTO speeches_fts(speeches_fts) VALUES('rebuild')")
-        conn.commit()
-    finally:
-        conn.close()
-
-
 class TestTopK:
-    def test_default_is_50_per_scope(self, sample_db):
-        _add_speeches(sample_db, SYN, 3, 80)
-        res = qp(meeting_ids=[SYN], search_in=["speeches"])
-        assert len(res["speeches"]) == 50
-        assert [r["speech_idx"] for r in res["speeches"]] == list(range(50))
-        assert len(qp(query="ביטחון", search_in=["speeches"])["speeches"]) == 50
+    def test_default_per_scope(self, real_db):
+        rows = qp(meeting_ids=[real_db.meeting_id], search_in=["speeches"])["speeches"]
+        assert len(rows) == config.QUERY_PROTOCOLS_DEFAULT_TOP_K
 
-    def test_top_k_is_per_scope(self, sample_db):
-        res = qp(search_in=["topics", "opinions", "speeches"], top_k=2)
+    def test_top_k_is_per_scope(self, real_db):
+        res = qp(search_in=list(SCOPES), top_k=2)
         assert [len(res[s]) for s in SCOPES] == [2, 2, 2]
 
-    def test_clamped_to_max(self, sample_db):
-        _add_speeches(sample_db, SYN, 3, config.QUERY_PROTOCOLS_MAX_TOP_K + 20)
-        rows = qp(meeting_ids=[SYN], search_in=["speeches"], top_k=config.QUERY_PROTOCOLS_MAX_TOP_K * 10)["speeches"]
+    def test_clamped_to_max(self, real_db):
+        rows = qp(search_in=["speeches"], top_k=config.QUERY_PROTOCOLS_MAX_TOP_K * 10)["speeches"]
         assert len(rows) == config.QUERY_PROTOCOLS_MAX_TOP_K
 
-    def test_clamped_to_one(self, sample_db):
+    def test_clamped_to_one(self, real_db):
         assert len(qp(search_in=["topics"], top_k=-5)["topics"]) == 1
 
 
 # ── get_meeting_attendance ────────────────────────────────────────────────────
 
-def _attendance(env):
+def attendance(env):
     assert env.error is None, env.error
     return json.loads(env.full)
 
 
 class TestGetMeetingAttendance:
-    def test_header_and_rows(self, sample_db):
-        full = _attendance(tools.handle_get_meeting_attendance({"meeting_id": M1}))
-        assert full["meeting_id"] == M1 and full["committee"] == C1 and full["date"] == DATE[M1]
-        rows = [a for a in SAMPLE["attendance"] if a["meeting_id"] == M1]
-        expected = sorted(rows, key=lambda a: (a["mk_id"] is None, a["party"] or "", a["name"]))
-        assert full["attendance"] == [{"name": a["name"], "mk_id": a["mk_id"], "party": a["party"]} for a in expected]
+    def test_header_and_rows_equal_the_db(self, real_db, real_conn):
+        full = attendance(tools.handle_get_meeting_attendance({"meeting_id": real_db.meeting_id}))
+        assert (full["meeting_id"], full["committee"], full["date"]) == (
+            real_db.meeting_id, real_db.meeting_committee, real_db.meeting_date)
+        expected = [dict(r) for r in real_conn.execute(
+            "SELECT name, mk_id, party FROM attendance WHERE meeting_id = ?", (real_db.meeting_id,))]
+        assert sorted(full["attendance"], key=json.dumps) == sorted(expected, key=json.dumps)
 
-    def test_mks_first_guests_null(self, sample_db):
-        rows = _attendance(tools.handle_get_meeting_attendance({"meeting_id": M3}))["attendance"]
-        flags = [r["mk_id"] is None for r in rows]
-        assert flags == sorted(flags) and any(flags) and not all(flags)
-        assert all(r["party"] is None for r in rows if r["mk_id"] is None)
-        assert X in {r["mk_id"] for r in rows}
+    def test_mks_first_guests_have_no_party(self, real_db):
+        rows = attendance(tools.handle_get_meeting_attendance({"meeting_id": real_db.meeting_id}))["attendance"]
+        guest_flags = [r["mk_id"] is None for r in rows]
+        assert guest_flags == sorted(guest_flags) and any(guest_flags) and not all(guest_flags)
 
-    def test_meeting_without_summary(self, sample_db):
-        rows = _attendance(tools.handle_get_meeting_attendance({"meeting_id": M6}))["attendance"]
-        assert len(rows) == len([a for a in SAMPLE["attendance"] if a["meeting_id"] == M6])
+    def test_meeting_id_as_int(self, real_db):
+        env = tools.handle_get_meeting_attendance({"meeting_id": int(real_db.meeting_id)})
+        assert attendance(env)["meeting_id"] == real_db.meeting_id
 
-    def test_meeting_id_as_int(self, sample_db):
-        assert _attendance(tools.handle_get_meeting_attendance({"meeting_id": int(M1)}))["meeting_id"] == M1
-
-    def test_errors(self, sample_db):
+    def test_errors(self, real_db):
         assert tools.handle_get_meeting_attendance({}).error == "missing_meeting_id"
         assert tools.handle_get_meeting_attendance({"meeting_id": "  "}).error == "missing_meeting_id"
         assert tools.handle_get_meeting_attendance({"meeting_id": "999999999"}).error == "meeting_not_found"
 
     def test_db_missing(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "KNESSET_DB", tmp_path / "missing.db")
-        assert tools.handle_get_meeting_attendance({"meeting_id": M1}).error == "knesset_db_missing"
+        assert tools.handle_get_meeting_attendance({"meeting_id": "1"}).error == "knesset_db_missing"

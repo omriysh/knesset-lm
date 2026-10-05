@@ -203,6 +203,7 @@ class LlamaServerBackend(LLMBackend):
                         print(f"[llama_server] malformed tool call chunk skipped ({exc})", flush=True)
                         continue
             finally:
+                resp.close()
                 if _dump_fh:
                     _dump_fh.close()
 
@@ -242,7 +243,8 @@ class LlamaServerBackend(LLMBackend):
             fn_body = m.group(2).strip()
             try:
                 args = json.loads(fn_body)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
+                print(f"[llama_server] tool call {fn_name!r} body is not JSON ({exc}); parsing <parameter> tags", flush=True)
                 params = re.findall(
                     r"<parameter=(\w+)>(.*?)</parameter>", fn_body, re.DOTALL
                 )

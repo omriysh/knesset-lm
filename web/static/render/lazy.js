@@ -22,7 +22,7 @@ async function loadToolResult(el) {
   if (el.dataset.loaded === '1' || el.dataset.loading === '1') return;
   el.dataset.loading = '1';
   const slot = el.querySelector('.tool-result-slot');
-  if (slot) slot.innerHTML = '<div class="tool-result-loading">טוען...</div>';
+  if (slot) slot.innerHTML = '<div class="tool-result-loading">בטעינה...</div>';
   const ref = el.dataset.resultRef;
   const sid = el.dataset.sessionId;
   try {
@@ -46,7 +46,7 @@ function unloadToolResult(el) {
   el._unloadTimer = null;
   el.dataset.loaded = '0';
   const slot = el.querySelector('.tool-result-slot');
-  if (slot) slot.innerHTML = '<div class="tool-result-placeholder">▼ לחץ להצגת תוצאה</div>';
+  if (slot) slot.innerHTML = '<div class="tool-result-placeholder">▼ להצגת התוצאה</div>';
 }
 
 function updateToolResultTimer(el) {
@@ -63,7 +63,7 @@ async function loadEvidenceFull(el) {
   if (el.dataset.loaded === '1' || el.dataset.loading === '1') return;
   el.dataset.loading = '1';
   const slot = el.querySelector('.ev-source-full-slot');
-  if (slot) slot.innerHTML = '<div class="ev-source-loading">טוען…</div>';
+  if (slot) slot.innerHTML = '<div class="ev-source-loading">בטעינה…</div>';
   const ref  = el.dataset.resultRef;
   const sid  = el.dataset.sessionId;
   const tool = el.dataset.toolName || '';

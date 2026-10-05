@@ -124,16 +124,14 @@ def _disambiguate(
     entity_key: str,
     entity_value: str,
     llm_call: Callable,
+    helper_model: str,
 ) -> str | None:
     """Ask the helper LLM whether ``entity_value`` is concrete enough.
 
     Returns ``None`` if the LLM judges the value resolvable in context
     (no issue to flag), or a short human-readable issue string otherwise.
 
-    The call is single-turn, JSON-only, and uses the local llama-server
-    (``config.INTENT_MODEL``) by convention. The caller-injected
-    ``llm_call`` handles model selection — this function only crafts the
-    request and parses the JSON.
+    The call is single-turn and JSON-only, against ``helper_model``.
     """
     prompt = (
         "You are a helper that decides if a named entity in a research-plan "
@@ -150,7 +148,7 @@ def _disambiguate(
     )
     try:
         raw = llm_call(
-            model=getattr(config, "INTENT_MODEL", "local"),
+            model=helper_model,
             prompt=prompt,
             response_format={"type": "json_object"},
         )
@@ -196,6 +194,8 @@ def validate_plan(
     plan: Plan,
     registry: ToolRegistry,
     llm_call: Callable,
+    *,
+    helper_model: str,
 ) -> ValidationResult:
     """Run deterministic validation, then a targeted helper LLM call for any
     ambiguous entity hints.
@@ -206,6 +206,7 @@ def validate_plan(
         llm_call: callable used for the helper LLM disambiguation step.
             Signature: ``llm_call(model: str, prompt: str, response_format=...)
             -> str | dict``. Only invoked on ambiguous entity-name hits.
+        helper_model: the model of that disambiguation call.
 
     Returns:
         :class:`ValidationResult`. Always returns; never raises on a
@@ -312,7 +313,7 @@ def validate_plan(
                 continue
 
             # Ambiguity decision delegated to helper LLM.
-            issue = _disambiguate(step, key, str(value), llm_call)
+            issue = _disambiguate(step, key, str(value), llm_call, helper_model)
             if issue is None:
                 continue
             # If helper marks it ambiguous AND no resolver in deps, this is

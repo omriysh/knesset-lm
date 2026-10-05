@@ -388,3 +388,138 @@ class TestSpacedHyphenRoleSuffix:
         from utils.meeting import _parse_attendance_section
         section = "נכחו:\nייעוץ משפטי:\nמירי פרנקל-שור\nרום בר-אב"
         assert _parse_attendance_section(section) == ["מירי פרנקל-שור", "רום בר-אב"]
+
+
+# ── parse_full_text_speeches ──────────────────────────────────────────────────
+# Excerpts are verbatim from real protocols: the plenum session of 28/07/2026
+# (25_ptm_14293473.doc), the PDF of meeting 2237982 (speaker lines in visual order)
+# and the DOCX of meeting 2239344 (style tags around every speaker line).
+
+_PLENUM_EXCERPT = (
+    "מסמכים שהונחו על שולחן הכנסת   \n\n"
+    'היו"ר אכרם חסון:   \n\nהודעת מזכירות הכנסת, בבקשה.\n\n'
+    "סגנית מזכיר הכנסת ראדה חסייסי:   \n\nתודה. ברשות יושב-ראש הישיבה, אני מתכבדת להודיעכם.\n\n"
+    'היו"ר אכרם חסון:   \n\nחברים, נעבור לנושא הבא על סדר-היום: הצעת חוק שירות הקבע.\n\n'
+    "שר הנגב, הגליל והחוסן הלאומי יצחק שמעון וסרלאוף:   \n\nתודה, אדוני היושב-ראש.\n"
+    "ביום 22 ביוני 2023 נחתם סיכום מפורט בין המשרדים, שכלל בין היתר את ההסכמות בנושא הזה:\n"
+    "הסדרת קצבאות הגישור.\n\n"
+    "מיכל מרים וולדיגר (הציונות הדתית): \n\nאני מברכת על ההצעה.\n\n"
+    "קריאה: \n\nלא נכון.\n"
+)
+
+_VISUAL_ORDER_EXCERPT = (
+    ":סדר היום  \nמענה לניצולי שואה\n:נכחו \n :חברי הוועדה \nמירב כהן– היו\"ר\n"
+    "רשימת הנוכחים על תואריהם מבוססת על המידע שהוזן במערכת המוזמנים הממוחשבת.\n"
+    ':היו"ר מירב כהן  \nבוקר טוב, אני פותחת את הישיבה.\n'
+    ":רחל לדאני  \nשאמרה שהעולם נחלק לארבעה סוגים של אנשים: \nתודה.\n"
+    ":)סימון דוידסון (יש עתיד   \nאני מצטרף.\n"
+)
+
+_DOCX_TAGGED_EXCERPT = (
+    "סדר היום:\n << נושא >> מענים רגשיים ונפשיים לילדים מהחברה הערבית << נושא >>  \n"
+    "נכחו:\nחברי הוועדה: \n"
+    "רשימת הנוכחים על תואריהם מבוססת על המידע שהוזן במערכת המוזמנים הממוחשבת.\n"
+    ' << יור >> היו"ר קטי קטרין שטרית: << יור >>  \nבוקר טוב.\n'
+    " << אורח >> נור איברהים: << אורח >>  \nתודה רבה.\n"
+    " << קריאה >> קריאה: << קריאה >> \nלא נכון.\n"
+    " << סיום >> הישיבה ננעלה בשעה 12:34. << סיום >>\n"
+)
+
+
+class TestParseFullTextSpeeches:
+    def test_plenum_office_title_headers(self):
+        from utils.meeting import parse_full_text_speeches
+        speakers = [s["speaker"] for s in parse_full_text_speeches(_PLENUM_EXCERPT)]
+        assert speakers == ['היו"ר אכרם חסון', "סגנית מזכיר הכנסת ראדה חסייסי", 'היו"ר אכרם חסון',
+                            "שר הנגב, הגליל והחוסן הלאומי יצחק שמעון וסרלאוף",
+                            "מיכל מרים וולדיגר", "קריאה"]
+
+    def test_sentence_ending_in_colon_stays_in_speech(self):
+        from utils.meeting import parse_full_text_speeches
+        speeches = parse_full_text_speeches(_PLENUM_EXCERPT)
+        minister = next(s for s in speeches if s["speaker"].startswith("שר הנגב"))
+        assert "ההסכמות בנושא הזה:\nהסדרת קצבאות הגישור." in minister["text_he"]
+
+    def test_visual_order_headers(self):
+        from utils.meeting import parse_full_text_speeches
+        speeches = parse_full_text_speeches(_VISUAL_ORDER_EXCERPT)
+        assert [s["speaker"] for s in speeches] == ['היו"ר מירב כהן', "רחל לדאני", "סימון דוידסון"]
+        assert "סוגים של אנשים:" in speeches[1]["text_he"]
+
+    def test_docx_style_tags(self):
+        from utils.meeting import parse_full_text_speeches
+        speeches = parse_full_text_speeches(_DOCX_TAGGED_EXCERPT)
+        assert [s["speaker"] for s in speeches] == ['היו"ר קטי קטרין שטרית', "נור איברהים", "קריאה"]
+        assert "<<" not in "".join(s["text_he"] for s in speeches)
+
+    def test_opening_block_is_not_a_speech(self):
+        from utils.meeting import parse_full_text_speeches
+        text = ("סדר-היום:\nהצעת חוק\nחברי הוועדה:\nאליהו רביבו\nמנהלת הוועדה:\nתמי ברנע\n"
+                'היו"ר אליהו רביבו:\nבוקר טוב.\nאיציק עמרני:\nתודה.\n')
+        assert [s["speaker"] for s in parse_full_text_speeches(text)] == ['היו"ר אליהו רביבו', "איציק עמרני"]
+
+    def test_header_only_document_is_not_parsed(self):
+        from utils.meeting import parse_full_text_speeches
+        assert parse_full_text_speeches("סדר היום:\nהצעת חוק\nנכחו:\nחברי הוועדה:\nאליהו רביבו\n") is None
+
+    def test_get_meeting_speakers_skips_interjections(self):
+        from utils.meeting import get_meeting_speakers
+        assert "קריאה" not in get_meeting_speakers({"full_text": _PLENUM_EXCERPT})
+
+
+def _real_full_text(meeting_id: str) -> str:
+    import sqlite3
+    import config
+    if not config.KNESSET_DB.exists():
+        pytest.skip("Data/knesset.db not present")
+    conn = sqlite3.connect(config.KNESSET_DB)
+    try:
+        row = conn.execute("SELECT transcript_path FROM meetings WHERE meeting_id = ?", (meeting_id,)).fetchone()
+    finally:
+        conn.close()
+    if not row or not row[0] or not Path(row[0]).exists():
+        pytest.skip(f"transcript of meeting {meeting_id} not present")
+    from utils.meeting import load_meeting
+    return load_meeting(row[0]).get("full_text") or pytest.skip(f"{meeting_id} is not a full_text transcript")
+
+
+class TestParseFullTextSpeechesRealData:
+    """Turn counts measured on the real transcripts when the parser was rewritten. Before it,
+    the visual-order / tagged meetings split into at most 10 turns."""
+
+    @pytest.mark.parametrize("meeting_id, minimum_turns", [
+        ("2237982", 350), ("2236989", 1600), ("2243630", 780),       # PDF, visual-order speaker lines
+        ("2239344", 640), ("2235064", 440), ("2243599", 470),       # DOCX, << tag >> speaker lines
+    ])
+    def test_previously_unparsed_meetings_split_into_turns(self, meeting_id, minimum_turns):
+        from utils.meeting import parse_full_text_speeches
+        assert len(parse_full_text_speeches(_real_full_text(meeting_id)) or []) >= minimum_turns
+
+    @pytest.mark.parametrize("meeting_id, turns_before_rewrite", [
+        ("2236715", 223), ("2241238", 1185), ("2234873", 475), ("2243184", 437), ("2239844", 216),
+    ])
+    def test_committee_meetings_that_parsed_before_do_not_lose_turns(self, meeting_id, turns_before_rewrite):
+        from utils.meeting import parse_full_text_speeches
+        assert len(parse_full_text_speeches(_real_full_text(meeting_id)) or []) >= turns_before_rewrite
+
+
+def test_format_meeting_chunks_replaces_box_glyphs_one_for_one():
+    from utils.meeting import format_meeting_chunks
+    raw = "סעיף 11א.\x07 בסעיף\x0bשני  פריט\x1f-"
+    meeting = {"full_text": raw}
+    text = format_meeting_chunks(meeting)[0]["text"]
+    assert len(text) == len(raw)
+    assert text == "סעיף 11א.  בסעיף\nשני • פריט -"
+
+
+def test_count_header_chunks_stops_at_the_first_speaker():
+    from utils.meeting import count_header_chunks
+    speakers = ["", "סדר-היום", "נכחו", "חבר הכנסת", "מוזמנים (באמצעים מקוונים)", "משתתפים באמצעים מקוונים",
+                "ייעוץ משפטי", "מנהלות הוועדה", "רישום פרלמנטרי", 'היו"ר יוסף טייב', "מוזמנים"]
+    assert count_header_chunks([{"speaker": s, "text": "x"} for s in speakers]) == 9
+
+
+def test_count_header_chunks_ignores_interjections_and_untitled_paragraphs():
+    from utils.meeting import count_header_chunks
+    assert count_header_chunks([{"speaker": "קריאה", "text": "x"}, {"speaker": "נכחו", "text": "x"}]) == 0
+    assert count_header_chunks([{"speaker": "", "text": "x"}, {"speaker": "", "text": "y"}]) == 1

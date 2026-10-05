@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 from typing import Generator
@@ -158,19 +159,12 @@ _GOOGLE_SEM = threading.Semaphore(5)  # cap concurrent Google API generations
 
 
 def _model_supports_thinking(model: str) -> bool:
-    """True for Gemini 2.5+ models that can emit thought tokens.
-
-    Explicit 2.5+ versions and alias names (e.g. gemini-flash-latest) that
-    Google routes to the current-generation thinking-capable model are both
-    accepted.  Gemini 2.0 and Gemma models do not support thinking.
-    """
-    if model.startswith("gemini-2.5"):
-        return True
-    # "*-latest" aliases (gemini-flash-latest, gemini-pro-latest, …) resolve
-    # to the current generation which is 2.5+ and supports thinking.
+    """True for Gemini 2.5 and later, and for the "*-latest" aliases Google routes to a current
+    (thinking) Gemini. Gemini 2.0 and Gemma models do not think."""
     if model.startswith("gemini-") and model.endswith("-latest"):
         return True
-    return False
+    version = re.match(r"gemini-(\d+)(?:\.(\d+))?", model)
+    return bool(version) and (int(version.group(1)), int(version.group(2) or 0)) >= (2, 5)
 
 
 class GoogleBackend(LLMBackend):
@@ -350,8 +344,8 @@ class GoogleBackend(LLMBackend):
                     thinking_budget=config.MAX_THINKING_TOKENS,
                     include_thoughts=True,
                 )
-            except Exception:  # noqa: BLE001 — SDK version may not support it
-                pass
+            except Exception as exc:  # noqa: BLE001 — SDK version may not support it
+                print(f"[google] thinking config not supported, running without it: {exc}", flush=True)
 
         gen_config = types.GenerateContentConfig(
             max_output_tokens  = max_tokens,
@@ -365,13 +359,18 @@ class GoogleBackend(LLMBackend):
         t0                     = time.monotonic()
         ttft:       float      = 0.0
         token_count            = 0
+        finish_reason          = ""
+        usage                  = None
 
         for chunk in self._client.models.generate_content_stream(
             model    = self._model,
             contents = contents,
             config   = gen_config,
         ):
+            usage = chunk.usage_metadata or usage
             for candidate in chunk.candidates or []:
+                if candidate.finish_reason:
+                    finish_reason = getattr(candidate.finish_reason, "name", str(candidate.finish_reason))
                 if not candidate.content:
                     continue
                 for part in candidate.content.parts or []:
@@ -406,14 +405,20 @@ class GoogleBackend(LLMBackend):
         gen   = total - ttft
         tps   = token_count / gen if gen > 0 else 0.0
         print(
-            f"[{self._log_prefix}] ttft={ttft:.2f}s tokens={token_count} "
-            f"gen={gen:.2f}s tps={tps:.1f}",
+            f"[{self._log_prefix}] model={self._model} finish={finish_reason or '?'} ttft={ttft:.2f}s "
+            f"chunks={token_count} gen={gen:.2f}s tps={tps:.1f} "
+            f"prompt_tokens={getattr(usage, 'prompt_token_count', None)} "
+            f"output_tokens={getattr(usage, 'candidates_token_count', None)} "
+            f"thinking_tokens={getattr(usage, 'thoughts_token_count', None)} max_output_tokens={max_tokens}",
             flush=True,
         )
+        if finish_reason == "MAX_TOKENS":
+            print(f"[{self._log_prefix}] WARNING: {self._model} hit max_output_tokens={max_tokens} "
+                  f"(thinking counts against it); the output is cut off", flush=True)
 
         if tc_list:
             yield ToolCallsEvent(tc_list)
-        yield DoneEvent()
+        yield DoneEvent(finish_reason=finish_reason)
 
     def _stream_local_fallback(
         self,

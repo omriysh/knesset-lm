@@ -57,6 +57,7 @@
         "input_template": "{{question}}",
         "max_tokens": 16384,
         "model": "",
+        "model_role": "intent",
         "output_format": {
           "fields": [
             {
@@ -118,6 +119,7 @@
         "input_template": "Research answer:\n{{final_answer}}\n\nRejection reason (if research answer is empty, use this instead):\n{{rejection_reason}}",
         "max_tokens": 16384,
         "model": "",
+        "model_role": "answer_editor",
         "notes": "",
         "rag": "",
         "stage": "reviewer",

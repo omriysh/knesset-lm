@@ -26,7 +26,7 @@ function handleExecutorLlmStart(phase, payload, session) {
   const isFirst = session.executor.beginStep(phase.stepKey, payload.prompt || {});
   if (!isFirst) return;
 
-  const taskLabel = extractTaskLabel(payload.prompt) || 'מחפש מידע...';
+  const taskLabel = extractTaskLabel(payload.prompt) || 'חיפוש מידע...';
   if (!session.subgraphPhase || !session.subgraphPhase._isExecutor) {
     session.subgraphPhase = { _isExecutor: true, thinking: '', content: '' };
   }
@@ -190,7 +190,7 @@ function handleStepCompleted(data, session) {
   if (stillActive) {
     // Other steps still executing in parallel — restore a generic live card.
     session.subgraphPhase = { _isExecutor: true, thinking: '', content: '', prompt: {} };
-    addLiveStageCard(session.subgraphContainer, { label: 'מחפש מידע...', stage: 'tool', loop: 0 });
+    addLiveStageCard(session.subgraphContainer, { label: 'חיפוש מידע...', stage: 'tool', loop: 0 });
   }
 }
 

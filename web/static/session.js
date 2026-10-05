@@ -12,6 +12,7 @@
  */
 import { sseLines } from './sse.js';
 import { handleEvent } from './events/dispatch.js';
+import { geminiKeyHeaders, agentResponseError } from './gemini_key.js';
 
 export class ExecutorState {
   constructor() {
@@ -59,10 +60,11 @@ export class Session {
   async run(url, body) {
     const res = await fetch(url, {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...geminiKeyHeaders() },
       body:    JSON.stringify(body),
     });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const rejection = await agentResponseError(res);
+    if (rejection) throw rejection;
     for await (const { event, data } of sseLines(res)) {
       handleEvent(event, data, this);
     }

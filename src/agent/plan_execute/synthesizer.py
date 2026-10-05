@@ -163,6 +163,7 @@ def synthesize_gen(
     store: EvidenceStore,
     llm_bridge: Any,
     *,
+    model: str,
     registry: Any = None,
 ) -> Generator:
     """Yield SubgraphEvents and return (answer_str, citations_list).
@@ -204,7 +205,7 @@ def synthesize_gen(
     while expand_count < max_expands:
         try:
             raw = llm_bridge(
-                model=config.SYNTHESIZER_MODEL,
+                model=model,
                 messages=messages,
                 tools=[EXPAND_TOOL_SCHEMA],
                 phase="synthesizer:expand",
@@ -256,20 +257,23 @@ def synthesize_gen(
     print(f"[synthesizer] synthesis turn after {expand_count} expand(s)", flush=True)
     text_parts: list[str] = []
     error_msg: str = ""
+    finish_reason: str = ""
     for sg_ev in llm_bridge.stream(
-        model=config.SYNTHESIZER_MODEL,
+        model=model,
         messages=messages,
+        max_tokens=config.SYNTHESIZER_MAX_TOKENS,
         phase="synthesizer",
     ):
         if sg_ev.kind == "llm_token":
             text_parts.append(sg_ev.payload.get("text", ""))
-        elif sg_ev.kind == "llm_done" and sg_ev.payload.get("error"):
-            error_msg = sg_ev.payload["error"]
+        elif sg_ev.kind == "llm_done":
+            error_msg = sg_ev.payload.get("error") or error_msg
+            finish_reason = sg_ev.payload.get("finish_reason") or ""
         yield sg_ev
 
     raw_output = "".join(text_parts)
     print(
-        f"[synthesizer] done: raw_len={len(raw_output)} error={error_msg!r} "
+        f"[synthesizer] done: raw_len={len(raw_output)} finish={finish_reason or '?'} error={error_msg!r} "
         f"first_100={raw_output[:100]!r}",
         flush=True,
     )
@@ -291,6 +295,7 @@ def synthesize(
     store: EvidenceStore,
     llm_call: Callable,
     *,
+    model: str,
     registry: Any = None,
 ) -> str:
     """Produce the final Hebrew answer string (synchronous, no streaming).
@@ -307,7 +312,7 @@ def synthesize(
     """
     prompt = _build_prompt(query, plan, store, registry)
     try:
-        raw = llm_call(model=config.SYNTHESIZER_MODEL, prompt=prompt)
+        raw = llm_call(model=model, prompt=prompt)
     except Exception as exc:  # noqa: BLE001
         return (
             "אירעה שגיאה ביצירת התשובה הסופית. "

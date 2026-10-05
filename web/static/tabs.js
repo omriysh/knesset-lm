@@ -5,7 +5,8 @@
  */
 
 /* ── Tab switching ───────────────────────────────────────────────── */
-function switchTab(name) {
+/* writeUrl: false when the URL already names this tab (opening a link, back/forward) */
+function switchTab(name, { writeUrl = true, push = true } = {}) {
   // Hide all panels
   document.querySelectorAll('.app-tab-panel').forEach(p => {
     p.classList.add('hidden');
@@ -32,17 +33,93 @@ function switchTab(name) {
   // Activate mobile button
   const mobBtn = document.getElementById(`mob-tab-${name}`);
   if (mobBtn) mobBtn.classList.add('active');
+
+  if (name === 'reading' && writeUrl && !_readingTabHasResults()) browseSearch({ push: false });
+  if (name === 'chat') landingStartDemo();
+
+  const researchSettings = document.getElementById('settings-research');
+  if (researchSettings) researchSettings.disabled = name !== 'research';
+
+  setActiveTab(name, { writeUrl, push });
 }
 
+/* ── URL routing: / (in your chat), /research, /protocols?… (url_state.js); back/forward re-applies the URL ── */
+function applyUrlRoute() {
+  if (location.pathname === RESEARCH_PATH) { switchTab('research', { writeUrl: false }); return; }
+  if (location.pathname !== PROTOCOLS_PATH) { switchTab('chat', { writeUrl: false }); return; }
+  switchTab('reading', { writeUrl: false });
+  const target = readProtocolUrl();
+  setProtocolUrlState(target);
+  const input = document.getElementById('reading-search-input');
+  if (input) input.value = target.query;
+  rfSetFilters(target.filters);
+  if (!target.meeting) {
+    browseSearch({ push: false });
+    return;
+  }
+  const focus = { speech: target.speech, offset: target.offset, length: target.length };
+  if (browserShowsMeeting(target.meeting)) browserFocusSpeech(target.speech, focus);
+  else if (browserListsMeeting(target.meeting)) browserSwitchMeeting(target.meeting, { focus, pushUrl: false });
+  else _openMeetingFromUrl(target, focus);
+}
+
+/* With a search in the link, the sidebar lists its results; the linked meeting is added on top when the
+   search does not return it. */
+async function _openMeetingFromUrl(target, focus) {
+  _setBrowseLoading(true);
+  try {
+    const withSearch = hasProtocolSearch(target);
+    const [linked, searched] = await Promise.all([
+      _browseSearch({ query: '', filters: { ...emptyProtocolFilters(), meeting_ids: [target.meeting] } }),
+      withSearch ? _browseSearch({ query: target.query, filters: target.filters }) : null,
+    ]);
+    const area = document.getElementById('reading-browser-area');
+    area.innerHTML = '';
+    if (!linked.meetings || !linked.meetings.length) {
+      _showBrowsePlaceholder('הישיבה לא נמצאה', 'ייתכן שהקישור שגוי או שהישיבה אינה זמינה.', 'link_off');
+      return;
+    }
+    const searchedMeetings = searched?.meetings || [];
+    const meetings = searchedMeetings.some(m => String(m.meeting_id) === String(target.meeting))
+      ? searchedMeetings : [...linked.meetings, ...searchedMeetings];
+    const data = { session_id: (searched || linked).session_id, meetings };
+    const label = target.query || 'ישיבה מקישור';
+    openProtocolBrowser(data.session_id, target.meeting, data.meetings, {
+      originalQuestion: label,
+      container:        area,
+      standalone:       true,
+      postCompletion:   true,
+      searchRequest:    withSearch ? { query: target.query, filters: target.filters } : null,
+      focus,
+      pushUrl:          false,
+    });
+    _collapseRfb();
+  } catch (err) {
+    console.error('[tabs] opening the linked meeting failed:', err);
+    _showBrowseError('שגיאה בפתיחת הקישור: ' + err.message);
+  } finally {
+    _setBrowseLoading(false);
+  }
+}
+
+window.addEventListener('popstate', applyUrlRoute);
+document.addEventListener('DOMContentLoaded', applyUrlRoute);
+
 /* ── Browse search (keyword; empty = newest meetings) ────────────── */
-async function browseSearch() {
+function _readingTabHasResults() {
+  return !!document.querySelector('#reading-browser-area .browser-standalone-wrapper, #browse-loading-overlay');
+}
+
+/* push: false when the search only loads what the current URL already says (a link, the first visit). */
+async function browseSearch({ push = true } = {}) {
   const input = document.getElementById('reading-search-input');
   const btn   = document.getElementById('reading-search-btn');
   if (!input || !btn) return;
 
   const query   = input.value.trim();
-  const filters = typeof rfGetFilters === 'function' ? rfGetFilters() : {};
+  const filters = rfGetFilters();
   const searchRequest = { query, filters };
+  updateProtocolUrl({ query, filters, meeting: null }, { push });
 
   _setBrowseLoading(true);
   try {
@@ -61,7 +138,7 @@ async function browseSearch() {
     if (!data.meetings || !data.meetings.length) {
       _showBrowsePlaceholder(
         'לא נמצאו ישיבות',
-        'נסה מילות מפתח אחרות או שינוי הסינון.',
+        'אפשר לנסות מילות מפתח אחרות או לשנות את הסינון.',
         'search_off',
       );
       return;
@@ -80,10 +157,12 @@ async function browseSearch() {
         standalone:       true,
         postCompletion:   true,
         searchRequest,
+        pushUrl:          false,
+        sortMode:         query ? 'relevance' : 'date_desc',
       }
     );
 
-    _collapseRfb(query || 'ישיבות אחרונות');
+    _collapseRfb();
 
   } catch (err) {
     console.error('[tabs] browse search failed:', err);
@@ -94,20 +173,48 @@ async function browseSearch() {
 }
 
 /* ── Filter bar collapse ─────────────────────────────────────────── */
+/* The collapsed bar shows the search as chips; removing one searches again without it. */
 function rfbExpand() {
   document.querySelector('.rfb')?.classList.remove('rfb-collapsed');
+  _scrolledSinceExpand = 0;
 }
 
 function rfbCollapse() {
-  const q = document.getElementById('rfb-collapsed-query')?.textContent || '';
-  _collapseRfb(q);
+  _collapseRfb();
 }
 
-function _collapseRfb(queryText) {
+function _collapseRfb() {
   document.querySelector('.rfb')?.classList.add('rfb-collapsed', 'rfb-has-results');
-  const q = document.getElementById('rfb-collapsed-query');
-  if (q) q.textContent = queryText;
+  const chips = document.getElementById('rfb-collapsed-chips');
+  if (!chips) return;
+  const query = document.getElementById('reading-search-input')?.value.trim() || '';
+  const queryChip = query
+    ? rfChipHtml(`"${query}"`, 'rfClearQueryAndSearch', { extraClass: 'chip--query' })
+    : '';
+  chips.innerHTML = queryChip + rfActiveChipsHtml('rfRemoveFilterAndSearch');
 }
+
+function rfClearQueryAndSearch() {
+  const input = document.getElementById('reading-search-input');
+  if (input) input.value = '';
+  browseSearch();
+}
+
+/* Reading the results folds an open filter bar away (after a short scroll, so a small nudge doesn't). */
+const _AUTO_COLLAPSE_SCROLL_PX = 160;
+let _scrolledSinceExpand = 0;
+const _lastScrollTop = new WeakMap();
+document.addEventListener('scroll', (event) => {
+  const scroller = event.target;
+  if (!(scroller instanceof Element) || !scroller.closest('#reading-browser-area')) return;
+  const previous = _lastScrollTop.get(scroller) ?? scroller.scrollTop;
+  _lastScrollTop.set(scroller, scroller.scrollTop);
+  const rfb = document.querySelector('.rfb');
+  if (!rfb?.classList.contains('rfb-has-results') || rfb.classList.contains('rfb-collapsed')) return;
+  if (document.querySelector('.rfb-dropdown:not(.hidden)')) return;
+  _scrolledSinceExpand += Math.abs(scroller.scrollTop - previous);
+  if (_scrolledSinceExpand > _AUTO_COLLAPSE_SCROLL_PX) _collapseRfb();
+}, true);
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
 function _setBrowseLoading(on) {
@@ -116,7 +223,7 @@ function _setBrowseLoading(on) {
   if (btn) {
     btn.disabled = on;
     const label = btn.querySelector('span:not(.material-symbols-outlined)');
-    if (label) label.textContent = on ? 'מחפש…' : 'חפש';
+    if (label) label.textContent = on ? 'בחיפוש…' : 'חיפוש';
   }
   if (!area) return;
   const existing = document.getElementById('browse-loading-overlay');
@@ -126,7 +233,7 @@ function _setBrowseLoading(on) {
     overlay.className = 'browse-loading-overlay';
     overlay.innerHTML = `
       <div class="browse-spinner"></div>
-      <div class="browse-loading-text">מחפש פרוטוקולים…</div>`;
+      <div class="browse-loading-text">חיפוש פרוטוקולים…</div>`;
     area.appendChild(overlay);
   } else if (!on && existing) {
     existing.remove();

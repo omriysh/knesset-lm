@@ -1,18 +1,60 @@
 """
 conftest.py
 
-Shared pytest fixtures and helpers.
+Shared pytest fixtures. Tests run against the real Data/knesset.db (read-only) and, for the
+tests marked `network`, the live oknesset / Knesset OData APIs through the production disk
+cache. Facts the tests assert on (meeting ids, committees, an MK) are discovered with small
+SQL queries at session start, never hardcoded from a snapshot.
+
+    python -m pytest tests -q                 # everything; network tests skip when offline
+    python -m pytest tests -q -m "not network"
+    KNESSETLM_OFFLINE=1 python -m pytest ...  # force the network tests to skip
 """
 
 import json
+import os
+import socket
+import sqlite3
 import sys
-import tempfile
+from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
 
-# Bootstrap sys.path so tests can import from src/ without installation
+sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+import config  # noqa: E402
+
+UPSTREAM_HOSTS = ("knesset.gov.il", "backend.oknesset.org")
+
+
+def pytest_configure(config):  # noqa: F811 (pytest passes its Config by this parameter name)
+    config.addinivalue_line(
+        "markers", "network: hits the live Knesset OData / oknesset APIs; skipped when offline")
+    config.addinivalue_line(
+        "markers", "word: drives a real Microsoft Word through pywin32; skipped when Word is unavailable")
+
+
+@lru_cache(maxsize=1)
+def upstream_unreachable_reason() -> str | None:
+    if os.environ.get("KNESSETLM_OFFLINE"):
+        return "KNESSETLM_OFFLINE is set"
+    for host in UPSTREAM_HOSTS:
+        try:
+            socket.create_connection((host, 443), timeout=4).close()
+        except OSError as exc:
+            print(f"[conftest] {host}:443 unreachable: {exc}")
+            return f"offline: cannot reach {host} ({exc})"
+    return None
+
+
+def pytest_runtest_setup(item):
+    if item.get_closest_marker("network") is not None:
+        reason = upstream_unreachable_reason()
+        if reason:
+            pytest.skip(f"network test skipped, {reason}")
 
 
 # ── Machine JSON factories ────────────────────────────────────────────────────
@@ -38,7 +80,6 @@ def _minimal_machine(extra_nodes=None, extra_edges=None) -> dict:
 
 @pytest.fixture()
 def minimal_machine_path(tmp_path):
-    """Write a minimal machine JSON to a temp file and return its Path."""
     p = tmp_path / "machine.json"
     p.write_text(json.dumps(_minimal_machine()), encoding="utf-8")
     return p
@@ -46,7 +87,6 @@ def minimal_machine_path(tmp_path):
 
 @pytest.fixture()
 def machine_with_tool_path(tmp_path):
-    """Machine with one LLM node + one tool node."""
     nodes = [
         {"id": "tool_001", "type": "tool", "label": "get_profile",
          "position": {"x": 200, "y": 100},
@@ -68,111 +108,218 @@ def machine_with_tool_path(tmp_path):
     return p
 
 
-# ── Sample knesset.db (real rows + a few synthetic edge-case rows) ────────────
+# ── The real knesset.db ───────────────────────────────────────────────────────
 
-SAMPLE = json.loads((Path(__file__).parent / "fixtures" / "protocols_sample.json").read_text(encoding="utf-8"))
-ROLES = SAMPLE["roles"]
-X_MK = SAMPLE["X"]
-SYN_MEETING = "2299001"
+REAL_DB_PATH = Path(config.KNESSET_DB)
 
 
-def _real_text(table: str, meeting_role: str, idx: int, field: str) -> str:
-    mid = ROLES[meeting_role]
-    return next(r[field] for r in SAMPLE[table] if r["meeting_id"] == mid and r["idx"] == idx)
+def open_real_db_readonly() -> sqlite3.Connection:
+    conn = sqlite3.connect(f"file:{REAL_DB_PATH.as_posix()}?mode=ro", uri=True, timeout=30,
+                           check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
-def synthetic_rows() -> dict:
-    """Edge-case rows: a newest meeting with ktiv-variant words and very long texts, plus
-    summary rows attached to the real is_protocol=0 meeting (M5)."""
-    x = X_MK["mk_id"]
-    c2 = SAMPLE["committees"]["C2"]
-    long_opinion = "ביטחון " + " ".join([_real_text("opinions", "M2", 0, "opinion")] * 40)
-    long_quote = " ".join([_real_text("opinions", "M2", 0, "quote")] * 20)
-    long_speech = "ביטחון " + "\n".join([_real_text("speeches", "M2", 8, "text")] * 5)
-    return {
-        "meetings": [{"meeting_id": SYN_MEETING, "knesset_num": 25, "committee": c2, "date": "2023-06-15",
-                      "format": "structured", "transcript_path": None, "summary_path": "syn.json",
-                      "is_protocol": 1}],
-        "topics": [
-            {"meeting_id": SYN_MEETING, "knesset_num": 25, "idx": 0, "text": "דיון בנושא ביטחון המדינה"},
-            {"meeting_id": SYN_MEETING, "knesset_num": 25, "idx": 1, "text": "תקציב ביטחון הפנים"},
-            {"meeting_id": ROLES["M5"], "knesset_num": 25, "idx": 0, "text": "ביטחון בתי הספר"},
-        ],
-        "opinions": [
-            {"meeting_id": SYN_MEETING, "knesset_num": 25, "idx": 0, "speaker_label": "היו\"ר עודד פורר",
-             "speaker_name": X_MK["full_name"], "mk_id": x, "party": X_MK["party"], "opinion": long_opinion,
-             "quote": long_quote, "quote_verified": 1, "speech_idx": 2, "quote_offset": 0},
-            {"meeting_id": SYN_MEETING, "knesset_num": 25, "idx": 1, "speaker_label": "איל קופמן",
-             "speaker_name": "איל קופמן", "mk_id": None, "party": None,
-             "opinion": "חיזוק ביטחון הציבור מחייב תקציב", "quote": "ביטחון הציבור הוא ערך עליון",
-             "quote_verified": 1, "speech_idx": 1, "quote_offset": 0},
-            {"meeting_id": ROLES["M5"], "knesset_num": 25, "idx": 0, "speaker_label": "עודד פורר",
-             "speaker_name": X_MK["full_name"], "mk_id": x, "party": X_MK["party"],
-             "opinion": "ביטחון התלמידים חשוב", "quote": "ביטחון התלמידים", "quote_verified": 1,
-             "speech_idx": 0, "quote_offset": 0},
-        ],
-        "attendance": [
-            {"meeting_id": SYN_MEETING, "knesset_num": 25, "name": "עודד פורר (ישראל ביתנו)", "mk_id": x,
-             "party": X_MK["party"]},
-            {"meeting_id": SYN_MEETING, "knesset_num": 25, "name": "איל קופמן", "mk_id": None, "party": None},
-            {"meeting_id": ROLES["M5"], "knesset_num": 25, "name": "עודד פורר", "mk_id": x, "party": X_MK["party"]},
-        ],
-        "speeches": [
-            {"meeting_id": SYN_MEETING, "knesset_num": 25, "idx": 0, "speaker": "היו\"ר עודד פורר", "mk_id": x,
-             "text": "אנו פותחים את הדיון בנושא ביטחון המדינה."},
-            {"meeting_id": SYN_MEETING, "knesset_num": 25, "idx": 1, "speaker": "איל קופמן", "mk_id": None,
-             "text": "ביטחון הציבור הוא ערך עליון."},
-            {"meeting_id": SYN_MEETING, "knesset_num": 25, "idx": 2, "speaker": "היו\"ר עודד פורר", "mk_id": x,
-             "text": long_speech},
-        ],
-    }
+@dataclass(frozen=True)
+class RealDbFacts:
+    """Stable facts of the real knesset.db, discovered by SQL (deterministic ORDER BY)."""
+    db_path: Path
+    meeting_id: str
+    meeting_committee: str
+    meeting_date: str
+    meeting_first_topic: str
+    other_meeting_id: str
+    other_committee: str
+    other_committee_id: str
+    non_protocol_meeting_id: str
+    mk_id: str
+    mk_name: str
+    mk_party: str
+    topic_word: str
+    table_counts: dict = field(default_factory=dict)
 
 
-_COLUMNS = {
-    "mks": ("mk_id", "knesset_num", "first_name", "last_name", "full_name", "party", "aliases"),
-    "committees": ("committee_id", "knesset_num", "name", "is_current"),
-    "meetings": ("meeting_id", "knesset_num", "committee", "date", "format", "transcript_path",
-                 "summary_path", "is_protocol"),
-    "attendance": ("meeting_id", "knesset_num", "name", "mk_id", "party"),
-    "topics": ("meeting_id", "knesset_num", "idx", "text"),
-    "opinions": ("meeting_id", "knesset_num", "idx", "speaker_label", "speaker_name", "mk_id", "party",
-                 "opinion", "quote", "quote_verified", "speech_idx", "quote_offset"),
-    "speeches": ("meeting_id", "knesset_num", "idx", "speaker", "mk_id", "text"),
-}
+def _one(conn, sql: str, *params):
+    row = conn.execute(sql, params).fetchone()
+    if row is None:
+        raise LookupError(f"no row for: {sql.split()[0:12]}")
+    return row
 
 
-def build_sample_db(path: Path, with_synthetic: bool = True) -> Path:
-    """Write the sampled rows (+ synthetic rows) into a fresh knesset.db at path via raw SQL on
-    the store schema, then rebuild the FTS indexes."""
-    from retrieval import knesset_db_store as store
+def discover_real_facts(conn: sqlite3.Connection) -> RealDbFacts:
+    """A rich K25 protocol meeting (topics, verified opinions, a long transcript, MK and guest
+    attendance), a meeting of another committee, a non-protocol meeting and the MK with the most
+    verified opinions."""
+    rich_meeting_sql = """
+        SELECT m.meeting_id, m.committee, m.date FROM meetings m
+        WHERE m.knesset_num = 25 AND m.is_protocol = 1 AND m.format = 'structured'
+          AND (SELECT COUNT(*) FROM topics t WHERE t.meeting_id = m.meeting_id) >= 5
+          AND (SELECT COUNT(*) FROM opinions o WHERE o.meeting_id = m.meeting_id AND o.quote_verified = 1
+               AND o.mk_id IS NOT NULL) >= 5
+          AND (SELECT COUNT(*) FROM speeches s WHERE s.meeting_id = m.meeting_id) >= 60
+          AND (SELECT COUNT(*) FROM attendance a WHERE a.meeting_id = m.meeting_id AND a.mk_id IS NOT NULL) >= 3
+          AND (SELECT COUNT(*) FROM attendance a WHERE a.meeting_id = m.meeting_id AND a.mk_id IS NULL) >= 1
+          {extra}
+        ORDER BY m.meeting_id LIMIT 1"""
+    meeting = _one(conn, rich_meeting_sql.format(extra=""))
+    other = _one(conn, rich_meeting_sql.format(extra="AND m.committee <> ?"), meeting["committee"])
+    other_committee_id = _one(conn, "SELECT committee_id FROM committees WHERE name = ? AND knesset_num = 25",
+                              other["committee"])[0]
+    non_protocol = _one(conn, "SELECT m.meeting_id FROM meetings m WHERE m.is_protocol = 0 AND EXISTS "
+                              "(SELECT 1 FROM speeches s WHERE s.meeting_id = m.meeting_id) ORDER BY m.meeting_id")
+    mk = _one(conn, """
+        SELECT k.mk_id, k.full_name, k.party FROM opinions o JOIN mks k ON k.mk_id = o.mk_id
+        WHERE o.quote_verified = 1 AND k.party IS NOT NULL AND o.knesset_num = 25
+        GROUP BY k.mk_id ORDER BY COUNT(*) DESC, k.mk_id LIMIT 1""")
+    first_topic = _one(conn, "SELECT text FROM topics WHERE meeting_id = ? ORDER BY idx", meeting["meeting_id"])[0]
+    topic_word = max((w for w in first_topic.split() if w.isalpha() and len(w) >= 4), key=len)
+    counts = {table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+              for table in ("mks", "committees", "meetings", "attendance", "topics", "opinions", "speeches")}
+    return RealDbFacts(
+        db_path=REAL_DB_PATH,
+        meeting_id=meeting["meeting_id"], meeting_committee=meeting["committee"], meeting_date=meeting["date"],
+        meeting_first_topic=first_topic,
+        other_meeting_id=other["meeting_id"], other_committee=other["committee"],
+        other_committee_id=str(other_committee_id),
+        non_protocol_meeting_id=non_protocol["meeting_id"],
+        mk_id=str(mk["mk_id"]), mk_name=mk["full_name"], mk_party=mk["party"],
+        topic_word=topic_word, table_counts=counts,
+    )
 
-    tables = {
-        "mks": SAMPLE["mks"], "committees": SAMPLE["committee_rows"], "meetings": SAMPLE["meetings"],
-        "attendance": SAMPLE["attendance"], "topics": SAMPLE["topics"], "opinions": SAMPLE["opinions"],
-        "speeches": SAMPLE["speeches"],
-    }
-    if with_synthetic:
-        for table, rows in synthetic_rows().items():
-            tables[table] = list(tables[table]) + rows
-    conn = store.connect(path)
+
+@lru_cache(maxsize=1)
+def _real_facts_or_skip_reason() -> tuple[RealDbFacts | None, str | None]:
+    if not REAL_DB_PATH.exists():
+        return None, f"real knesset.db missing at {REAL_DB_PATH}: build it with scripts/build_knesset_db.py"
     try:
-        for table, rows in tables.items():
-            cols = _COLUMNS[table]
-            conn.executemany(
-                f"INSERT INTO {table}({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
-                [tuple(r.get(c) for c in cols) for r in rows])
-        for fts in ("topics_fts", "opinions_fts", "speeches_fts"):
-            conn.execute(f"INSERT INTO {fts}({fts}) VALUES('rebuild')")
-        conn.commit()
-    finally:
-        conn.close()
-    return path
+        conn = open_real_db_readonly()
+        try:
+            return discover_real_facts(conn), None
+        finally:
+            conn.close()
+    except (sqlite3.Error, LookupError, ValueError) as exc:
+        print(f"[conftest] knesset.db unusable for tests: {exc}")
+        return None, f"real knesset.db unusable for tests: {exc}"
+
+
+@pytest.fixture(scope="session")
+def real_db() -> RealDbFacts:
+    """Facts of the real Data/knesset.db; skips the test cleanly when the db is missing."""
+    facts, reason = _real_facts_or_skip_reason()
+    if facts is None:
+        pytest.skip(reason)
+    return facts
+
+
+@pytest.fixture(scope="session")
+def real_conn(real_db):
+    """Read-only connection to the real knesset.db, for SQL oracles."""
+    conn = open_real_db_readonly()
+    yield conn
+    conn.close()
+
+
+# ── Clients over the real db ──────────────────────────────────────────────────
+
+@pytest.fixture()
+def client(real_db):
+    """TestClient on the public API (api.app:app) over the real db and live upstream APIs."""
+    from fastapi.testclient import TestClient
+    from api.app import app
+    return TestClient(app)
+
+
+def ok(response) -> dict:
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def handler_payload(handler, args: dict):
+    env = handler(args)
+    assert env.error is None, env.error
+    return json.loads(env.full)
+
+
+def assert_within_character_budget(rows: list[dict], budget: int) -> None:
+    """A query_protocols page (utils.tool_helpers.char_paging): the rows before the last one stay under the
+    budget, so the page runs over it by at most its last row. The rows' source `url` is not counted."""
+    from utils.tool_helpers.char_paging import served_json_chars
+    assert rows
+    assert sum(served_json_chars({k: v for k, v in row.items() if k != "url"}) for row in rows[:-1]) < budget
+
+
+# ── Upstream failure / spy (no canned payloads) ───────────────────────────────
+
+def _clear_upstream_caches():
+    import utils.knesset_db as kdb
+    kdb._fetch_members.cache_clear()
+    kdb._fetch_person_positions.cache_clear()
+    kdb._position_names.cache_clear()
+
+
+class UpstreamSpy:
+    """Stands in for requests.get and the cached HTTP session: records every outgoing request
+    and fails it with a ConnectionError, so nothing reaches the network."""
+
+    def __init__(self, message: str = "upstream unreachable (test)"):
+        self.calls: list[tuple[str, dict]] = []
+        self.message = message
+
+    def get(self, url, params=None, **kwargs):
+        import requests
+        self.calls.append((url, {k: str(v) for k, v in (params or {}).items()}))
+        raise requests.exceptions.ConnectionError(f"{self.message}: {url}")
+
+    __call__ = get
 
 
 @pytest.fixture()
-def sample_db(tmp_path, monkeypatch):
-    """Temp knesset.db with the real sampled rows; config.KNESSET_DB points at it."""
-    import config
-    path = build_sample_db(tmp_path / "knesset.db")
-    monkeypatch.setattr(config, "KNESSET_DB", path)
-    return path
+def upstream_down(monkeypatch):
+    import requests
+    import utils.knesset_db as kdb
+    spy = UpstreamSpy()
+    monkeypatch.setattr(requests, "get", spy)
+    monkeypatch.setattr(kdb, "HTTP_SESSION", spy)
+    monkeypatch.setattr(config, "API_RETRY_SLEEP", 0, raising=False)
+    _clear_upstream_caches()
+    yield spy
+    _clear_upstream_caches()
+
+
+# ── Research models ───────────────────────────────────────────────────────────
+
+TEST_RESEARCH_MODELS = {
+    "intent": "gemma-4-31b-it", "planner": "gemini-3.5-flash", "critic": "gemini-3.5-flash-lite",
+    "executor": "gemini-3.1-flash-lite", "synthesizer": "gemini-3.8-flash", "answer_editor": "gemini-3.1-flash-lite",
+}
+TEST_KEY_TEXT_MODELS = sorted(set(TEST_RESEARCH_MODELS.values()) | {"gemini-2.5-pro"})
+
+
+# ── Autouse ───────────────────────────────────────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def google_lists_test_models(monkeypatch):
+    """Every visitor key can call TEST_KEY_TEXT_MODELS; no test asks Google for a key's models. Yields the real
+    ask_google_for_text_models."""
+    import web.gemini_keys as gemini_keys
+    real_ask_google_for_text_models = gemini_keys.ask_google_for_text_models
+    monkeypatch.setattr(gemini_keys, "ask_google_for_text_models",
+                        lambda key: [{"id": model_id, "name": model_id} for model_id in TEST_KEY_TEXT_MODELS])
+    gemini_keys.forget_gemini_key_verdicts()
+    yield real_ask_google_for_text_models
+    gemini_keys.forget_gemini_key_verdicts()
+
+
+@pytest.fixture(autouse=True)
+def _no_rate_limit(monkeypatch):
+    """The public API rate limiter is enabled only by the tests that exercise it."""
+    monkeypatch.setattr(config, "API_RATE_LIMIT_ENABLED", False, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _server_logs_in_tmp(tmp_path, monkeypatch):
+    """Server log files go to the test's tmp dir, never Data/logs; handlers are closed after each test."""
+    from api import request_log
+    monkeypatch.setattr(config, "LOG_DIR", tmp_path / "logs")
+    yield
+    request_log.close_file_logging()

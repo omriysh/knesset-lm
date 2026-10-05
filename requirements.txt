@@ -8,6 +8,8 @@ uvicorn[standard]
 pydantic
 jinja2
 aiofiles
+mcp>=2.2         # MCP endpoint (src/api/mcp_server.py)
+PyJWT[crypto]    # Cloudflare Access tokens on the MCP endpoint
 
 # Document parsing (Knesset protocols)
 beautifulsoup4

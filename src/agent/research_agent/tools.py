@@ -10,11 +10,19 @@ the plan-execute graph itself, not via :func:`utils.tools.dispatch`.
 
 Numeric defaults / minima / maxima are sourced from :mod:`config` so the
 schema is never a second source of truth.
+
+Every call's arguments are validated before the handler runs (dispatch →
+``validate_args``) with the same validators as the public API but the
+agent's limits (:data:`api.tool_arguments.AGENT_LIMITS`), so LLM-generated
+arguments cannot reach SQLite or OData unchecked.
 """
 
 from __future__ import annotations
 
+from functools import partial
+
 import config
+from api.tool_arguments import agent_tool_args
 from retrieval.knesset_db_store import PROTOCOL_SCOPES
 from utils.tools import (
     ToolSpec,
@@ -76,14 +84,15 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
                 "Each result includes the full committee record (its exact "
                 "name, usable in query_protocols.committees) with its active "
                 "member list (mk_id, name, role). "
-                "No separate member-list fetch is needed after this call."
+                "No separate member-list fetch is needed after this call. "
+                "An empty query lists the committees that have meetings, with "
+                "{committee_id, name, meeting_count}."
             ),
             "properties": {
-                "query":       {"type": "string"},
+                "query":       {"type": "string", "description": "Committee name; empty to list all committees"},
                 "knesset_num": {"type": "integer", "default": 25},
                 "top_k":       {"type": "integer", "default": 5, "minimum": 1},
             },
-            "required": ["query"],
         },
         handler=handle_find_committee,
         task_kinds=["discover", "fetch"],
@@ -104,19 +113,21 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         schema={
             "type": "object",
             "description": (
-                "Fuzzy-match a party/faction name and return all its members "
-                "for a given Knesset. Returns up to top_k party matches, each "
-                "with party name, seat count, and a list of {mk_id, full_name, "
-                "is_current} members. Use when a question involves party composition "
-                "or party-level analysis; the returned party name is the `party` "
-                "filter of query_protocols."
+                "Match a party/faction name (common short names such as ש\"ס, "
+                "ליכוד or Likud included) and return all its members for a given "
+                "Knesset. Returns the matching party (several only when the name fits "
+                "more than one), each with party name, score, seat count and a list "
+                "of {mk_id, full_name, is_current} members; a name that is not a "
+                "faction of that Knesset returns no party. An empty query lists every "
+                "party with {party, mk_count}. "
+                "Use when a question involves party composition or party-level "
+                "analysis; the returned party name is the `party` filter of query_protocols."
             ),
             "properties": {
-                "query":       {"type": "string", "description": "Party or faction name (Hebrew)"},
+                "query":       {"type": "string", "description": "Party or faction name; empty to list all parties"},
                 "knesset_num": {"type": "integer", "default": 25},
                 "top_k":       {"type": "integer", "default": 3, "minimum": 1, "maximum": 5},
             },
-            "required": ["query"],
         },
         handler=handle_find_party,
         task_kinds=["discover", "fetch"],
@@ -135,7 +146,9 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         schema={
             "type": "object",
             "description": (
-                "Keyword search and listing over committee meeting protocols. Three "
+                "Keyword search and listing over Knesset meeting protocols: committee "
+                "meetings and plenum sessions (committee \"מליאת הכנסת\", meeting_id "
+                "\"p\" + number). Three "
                 "scopes, each searched independently with the same query and filters "
                 "and returned as its own list (top_k rows per scope):\n"
                 "  • topics   — discussion topics from the meeting's AI summary\n"
@@ -195,7 +208,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         task_kinds=["discover", "filter", "fetch"],
         cost_hint="cheap",
         ui={
-            "meta_note": "מתוך פרוטוקולי ועדות הכנסת וסיכומי AI שלהם",
+            "meta_note": "מתוך פרוטוקולי ועדות הכנסת ומליאת הכנסת וסיכומי AI שלהם",
             "enrich_fields": ["meeting_id"],
         },
         compact_spec={"kind": "dict"},
@@ -206,9 +219,10 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         schema={
             "type": "object",
             "description": (
-                "List who attended a committee meeting: MKs first (with mk_id and "
-                "party), then guests (mk_id/party null), plus the meeting's "
-                "committee and date."
+                "List who attended a committee meeting or a plenum session "
+                "(committee \"מליאת הכנסת\"; there, only those who spoke): MKs first "
+                "(with mk_id and party), then guests (mk_id/party null), plus the "
+                "meeting's committee and date."
             ),
             "properties": {
                 "meeting_id": {"type": "string"},
@@ -219,7 +233,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         task_kinds=["fetch"],
         cost_hint="cheap",
         ui={
-            "meta_note": "רשימת נוכחים מפרוטוקול ישיבת הוועדה",
+            "meta_note": "רשימת נוכחים מפרוטוקול הישיבה",
             "enrich_fields": ["meeting_id"],
         },
         compact_spec={"kind": "dict"},
@@ -232,13 +246,15 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
             "type": "object",
             "description": (
                 "Search bills by Hebrew title words (the whole query must appear in "
-                "the bill name) within one Knesset, most recently updated first. "
-                "Returns bill_id, name, status, type, initiators."
+                "the bill name), most recently updated first, in one Knesset or in "
+                "all of them when knesset_num is omitted. Page with offset. "
+                "Returns bill_id, name, knesset_num, status, type, initiators."
             ),
             "properties": {
                 "query":       {"type": "string"},
-                "knesset_num": {"type": "integer", "default": 25},
+                "knesset_num": {"type": "integer", "minimum": 1},
                 "top_k":       {"type": "integer", "default": 10, "minimum": 1, "maximum": 100},
+                "offset":      {"type": "integer", "default": 0, "minimum": 0},
             },
             "required": ["query"],
         },
@@ -260,8 +276,9 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
             "description": (
                 "Fetch a bill by bill_id (from query_bills): status, type, "
                 "initiators, document links. include_text=true also returns the "
-                "extracted bill text, capped at max_chars — raise max_chars only "
-                "when the bill text itself is the answer."
+                "extracted bill text, max_chars characters from offset (text_chars "
+                "gives [start, end, total]; continue with offset=end) — raise max_chars "
+                "only when the bill text itself is the answer."
             ),
             "properties": {
                 "bill_id":      {"type": "string"},
@@ -272,7 +289,9 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
                     "minimum": config.BILL_TEXT_MIN_MAX_CHARS,
                     "maximum": config.BILL_TEXT_MAX_MAX_CHARS,
                 },
-                "knesset_num":  {"type": "integer", "default": 25},
+                "offset":       {"type": "integer", "default": 0, "minimum": 0,
+                                 "description": "Character position in the bill text"},
+                "knesset_num":  {"type": "integer", "minimum": 1},
             },
             "required": ["bill_id"],
         },
@@ -292,18 +311,20 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         schema={
             "type": "object",
             "description": (
-                "Plenum votes. Behaviour depends on which params are supplied:\n"
+                "Plenum votes, newest first, in one Knesset or in all of them when "
+                "knesset_num is omitted. Behaviour depends on which params are supplied:\n"
                 "  query + mk_id → how that MK voted on each matching vote\n"
-                "  mk_id only    → recent votes cast by the MK\n"
+                "  mk_id only    → votes cast by the MK\n"
                 "  query only    → votes whose title matches the keyword\n"
                 "  neither       → most recent votes overall\n"
-                "Use find_mk first to obtain mk_id."
+                "Use find_mk first to obtain mk_id. Page with offset."
             ),
             "properties": {
                 "query":       {"type": "string"},
                 "mk_id":       {"type": "string"},
-                "knesset_num": {"type": "integer", "default": 25},
+                "knesset_num": {"type": "integer", "minimum": 1},
                 "top_k":       {"type": "integer", "default": 20, "minimum": 1},
+                "offset":      {"type": "integer", "default": 0, "minimum": 0},
             },
         },
         handler=handle_query_votes,
@@ -318,6 +339,10 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
         },
     ),
 ]
+
+
+for _research_tool in RESEARCH_TOOL_REGISTRY:
+    _research_tool.validate_args = partial(agent_tool_args, _research_tool.name)
 
 
 __all__ = ["RESEARCH_TOOL_REGISTRY"]

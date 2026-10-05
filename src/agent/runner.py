@@ -36,6 +36,7 @@ import config
 from agent.context import Context, evaluate_condition
 from agent.llm.base import DoneEvent, LLMBackend, ThinkingEvent, TokenEvent, ToolCallsEvent
 from agent.machine import StateMachine
+from agent.model_choice import ResearchModels
 from agent.parsers import get_loop_control, parse_output
 from agent.research_agent.agent import ResearchAgent
 from agent.subgraph.base import SubgraphEvent
@@ -72,7 +73,8 @@ def _safe_jsonable(value: object) -> object:
     """
     try:
         return json.loads(json.dumps(value, ensure_ascii=False, default=str))
-    except Exception:
+    except Exception as exc:
+        print(f"[runner] payload is not JSON-serialisable ({exc}); using its repr", flush=True)
         return repr(value)
 
 
@@ -145,10 +147,25 @@ class MachineRunner:
         machine:   StateMachine,
         backend:   LLMBackend,
         tool_registry: dict[str, Callable],
+        gemini_api_key: Optional[str] = None,
+        models: Optional[ResearchModels] = None,
+        backend_by_model_role: Optional[dict[str, LLMBackend]] = None,
     ) -> None:
-        self.machine       = machine
-        self.backend       = backend
-        self.tool_registry = tool_registry
+        """backend_by_model_role: the backend of llm_call nodes whose data.model_role names it; other
+        nodes use backend. models: the subgraph agents' models (None = their config defaults)."""
+        self.machine        = machine
+        self.backend        = backend
+        self.tool_registry  = tool_registry
+        self.gemini_api_key = gemini_api_key
+        self.models         = models
+        self.backend_by_model_role = backend_by_model_role or {}
+
+    def make_subgraph_agent(self, agent_cls: type):
+        agent_kwargs = {} if self.models is None else {"models": self.models}
+        if self.gemini_api_key is None:
+            return agent_cls(**agent_kwargs)
+        from agent.subgraph.llm_bridge import LLMBridge
+        return agent_cls(llm_bridge=LLMBridge(fallback_to_local=False, api_key=self.gemini_api_key), **agent_kwargs)
 
     # ── Status helpers ────────────────────────────────────────────────────────
 
@@ -583,7 +600,7 @@ class MachineRunner:
             },
         })
 
-        agent     = agent_cls()
+        agent     = self.make_subgraph_agent(agent_cls)
         router    = HookRouter(hooks)
         gen       = agent.run(inputs)
         last_done_payload: dict | None = None
@@ -678,7 +695,8 @@ class MachineRunner:
         Yields ("status", str), ("node_done", dict).
         """
         data         = node.get("data", {})
-        temperature  = float(data.get("temperature", self.backend.TEMPERATURE))
+        backend      = self.backend_by_model_role.get(data.get("model_role"), self.backend)
+        temperature  = float(data.get("temperature", backend.TEMPERATURE))
         max_tokens   = int(data.get("max_tokens",   config.MAX_TOKENS))
         tool_schemas = self.machine.build_tool_schemas(tool_nodes_list)
 
@@ -701,8 +719,8 @@ class MachineRunner:
             tool_calls:     list[dict] = []
 
             t_llm = time.monotonic()
-            for event in self.backend.stream(
-                self.backend.prepare_messages(messages, suppress_thinking=False),
+            for event in backend.stream(
+                backend.prepare_messages(messages, suppress_thinking=False),
                 tools=tool_schemas or None,
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -723,7 +741,7 @@ class MachineRunner:
             if thinking_parts:
                 thinking_blocks.append("".join(thinking_parts))
             else:
-                thinking = self.backend.extract_thinking(raw_content)
+                thinking = backend.extract_thinking(raw_content)
                 if thinking:
                     thinking_blocks.append(thinking)
 
@@ -733,13 +751,13 @@ class MachineRunner:
                 flush=True,
             )
 
-            tool_calls, content = self.backend.extract_tool_calls(
+            tool_calls, content = backend.extract_tool_calls(
                 {}, raw_content
-            ) if not tool_calls else (tool_calls, self.backend.extract_visible_content(raw_content))
+            ) if not tool_calls else (tool_calls, backend.extract_visible_content(raw_content))
 
             if not tool_calls:
-                content = self.backend.extract_visible_content(raw_content)
-                if self.backend.needs_thinking_retry(content, []):
+                content = backend.extract_visible_content(raw_content)
+                if backend.needs_thinking_retry(content, []):
                     yield ("status", "חושב שוב…")
                     continue
                 buf.append(content)
@@ -748,7 +766,7 @@ class MachineRunner:
             # Tool calls present
             messages.append({
                 "role":       "assistant",
-                "content":    self.backend.extract_visible_content(raw_content) or None,
+                "content":    backend.extract_visible_content(raw_content) or None,
                 "tool_calls": tool_calls,
             })
 
@@ -756,7 +774,8 @@ class MachineRunner:
                 fn_name = tc["function"]["name"]
                 try:
                     fn_args = json.loads(tc["function"]["arguments"])
-                except (json.JSONDecodeError, ValueError):
+                except (json.JSONDecodeError, ValueError) as exc:
+                    print(f"[runner] tool call {fn_name!r} has unparsable arguments ({exc}); calling with none", flush=True)
                     fn_args = {}
 
                 yield ("status", f"קורא: {fn_name}…")

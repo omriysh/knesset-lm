@@ -55,7 +55,7 @@ export function renderToolResultHtml(tr) {
       `<summary class="sub-summary"><span class="tool-summary-label">${esc(name)}</span>${timeStr}</summary>` +
       `<div class="sub-details-body">` +
       argsHtml +
-      `<div class="tool-result-slot"><div class="tool-result-placeholder">▼ לחץ להצגת תוצאה</div></div>` +
+      `<div class="tool-result-slot"><div class="tool-result-placeholder">▼ להצגת התוצאה</div></div>` +
       `</div></details>`
     );
   }
@@ -97,7 +97,7 @@ export function renderRetrievalHtml(r) {
       body += `<li class="chunk-item">` +
         `<span class="chunk-date">${esc(c.date)}</span>` +
         `<span class="chunk-topic">${esc(c.topic)}</span>` +
-        `<span class="chunk-sim">sim&nbsp;${c.p1_sim}</span>` +
+        `<span class="chunk-sim">sim&nbsp;${esc(String(c.p1_sim))}</span>` +
         `</li>`;
     }
     body += '</ul>';

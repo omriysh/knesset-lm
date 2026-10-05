@@ -17,7 +17,10 @@ import {
 } from './render/chat.js';
 import { appendStagesCard, wireStatusToggle } from './render/stages.js';
 import { applyEvidenceCitations, buildSourcesHtml } from './render/citations.js';
+import { addAnswerExportButton } from './render/export.js';
 import { scheduleReconnect } from './reconnect.js';
+import { requireGeminiKey } from './gemini_key.js';
+import { getResearchModels } from './models.js';
 
 export async function startQuery() {
   const question = queryInput.value.trim();
@@ -25,6 +28,7 @@ export async function startQuery() {
   const err = validateQuestion(question);
   if (err) { showQueryError(err); return; }
   clearQueryError();
+  if (!(await requireGeminiKey())) return;
 
   state.lastQuestion = question;
   state.running      = true;
@@ -42,11 +46,12 @@ export async function startQuery() {
   state.currentStagesEl = stagesEl;
   wireStatusToggle(statusEl, stagesEl);
 
-  await runSession('/api/research/start', { question }, statusEl, stagesEl);
+  await runSession('/api/research/start', { question, models: getResearchModels() }, statusEl, stagesEl);
 }
 
 export async function submitResponse(outputVar, value) {
   if (!state.sessionId) return;
+  if (!(await requireGeminiKey())) return;
   state.running      = true;
   submitBtn.disabled = true;
 
@@ -84,9 +89,10 @@ function finalize(session, statusEl) {
   if (session.agentEl && session.rawAnswer && !willReconnect) {
     const body = session.agentEl.querySelector('.prose-content');
     if (body) {
-      body.innerHTML = marked.parse(session.rawAnswer);
+      body.innerHTML = renderMarkdown(session.rawAnswer);
       const cursor = session.agentEl.querySelector('.stream-cursor');
       if (cursor) cursor.remove();
+      addAnswerExportButton(session.agentEl);
       if (session.pendingFootnotes.length > 0) {
         applyEvidenceCitations(body, session.pendingFootnotes, session.pendingCitations, state.sessionId);
         session.agentEl.insertAdjacentHTML(

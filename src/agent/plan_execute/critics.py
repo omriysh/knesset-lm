@@ -8,8 +8,7 @@ Public surface:
   * :func:`critic_post`   — post-execution sufficiency check of evidence.
 
 Both functions accept an injected ``llm_call`` so they can be unit-tested
-without a real API key. The model name is sourced from
-``config.CRITIC_PRE_MODEL`` / ``config.CRITIC_POST_MODEL``.
+without a real API key; the caller passes the critic model.
 """
 
 from __future__ import annotations
@@ -113,10 +112,12 @@ def critic_pre(
     plan: Plan,
     llm_call: Callable,
     registry: ToolRegistry | None = None,
+    *,
+    model: str,
 ) -> CriticResult:
     """Pre-execution critic. Reads the plan only — no evidence.
 
-    Single LLM call against ``config.CRITIC_PRE_MODEL``. Returns a
+    Single LLM call against *model*. Returns a
     :class:`CriticResult` whose ``verdict`` is one of ``"ok"`` /
     ``"revise"`` / ``"replan"``.
 
@@ -148,7 +149,7 @@ def critic_pre(
 
     try:
         raw = llm_call(
-            model=config.CRITIC_PRE_MODEL,
+            model=model,
             prompt=prompt,
             response_format={"type": "json_object"},
         )
@@ -173,10 +174,12 @@ def critic_post(
     plan: Plan,
     store: EvidenceStore,
     llm_call: Callable,
+    *,
+    model: str,
 ) -> CriticResult:
     """Post-execution critic. Reads plan + evidence summary view.
 
-    Single LLM call against ``config.CRITIC_POST_MODEL``. Returns a
+    Single LLM call against *model*. Returns a
     :class:`CriticResult` whose ``verdict`` is one of ``"ok"`` /
     ``"revise"`` / ``"replan"``.
 
@@ -198,7 +201,7 @@ def critic_post(
 
     try:
         raw = llm_call(
-            model=config.CRITIC_POST_MODEL,
+            model=model,
             prompt=prompt,
             response_format={"type": "json_object"},
         )
@@ -233,7 +236,7 @@ def critic_post(
 # functions remain available for tests and non-streaming call-sites.
 
 
-def critic_pre_gen(plan: "Plan", llm_bridge: "Any", registry=None):
+def critic_pre_gen(plan: "Plan", llm_bridge: "Any", registry=None, *, model: str):
     """Streaming generator version of critic_pre.
 
     Yields SubgraphEvents; returns a CriticResult via generator return value.
@@ -258,7 +261,7 @@ def critic_pre_gen(plan: "Plan", llm_bridge: "Any", registry=None):
     error_seen = False
     try:
         for ev in llm_bridge.stream(
-            model=config.CRITIC_PRE_MODEL,
+            model=model,
             prompt=prompt,
             response_format={"type": "json_object"},
             phase="critic_pre",
@@ -280,7 +283,7 @@ def critic_pre_gen(plan: "Plan", llm_bridge: "Any", registry=None):
     return CriticResult.from_dict(parsed)
 
 
-def critic_post_gen(plan: "Plan", store: "EvidenceStore | None", llm_bridge: "Any"):
+def critic_post_gen(plan: "Plan", store: "EvidenceStore | None", llm_bridge: "Any", *, model: str):
     """Streaming generator version of critic_post.
 
     Yields SubgraphEvents; returns a CriticResult via generator return value.
@@ -299,7 +302,7 @@ def critic_post_gen(plan: "Plan", store: "EvidenceStore | None", llm_bridge: "An
     error_seen = False
     try:
         for ev in llm_bridge.stream(
-            model=config.CRITIC_POST_MODEL,
+            model=model,
             prompt=prompt,
             response_format={"type": "json_object"},
             phase="critic_post",

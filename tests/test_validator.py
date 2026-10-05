@@ -92,7 +92,7 @@ class TestValidPlanPasses:
         registry = _make_registry("find_mk")
         steps = [_make_step(id="s1", allowed_tools=("find_mk",))]
         plan = _make_plan(steps)
-        result = validate_plan(plan, registry, _ok_llm_call)
+        result = validate_plan(plan, registry, _ok_llm_call, helper_model="helper-model")
         assert result.ok is True
         assert result.issues == []
 
@@ -104,7 +104,7 @@ class TestValidPlanPasses:
                        allowed_tools=("search_topics",), deps=("s1",)),
         ]
         plan = _make_plan(steps)
-        result = validate_plan(plan, registry, _ok_llm_call)
+        result = validate_plan(plan, registry, _ok_llm_call, helper_model="helper-model")
         assert result.ok is True
 
     def test_valid_no_tools_analyze_step(self):
@@ -114,13 +114,13 @@ class TestValidPlanPasses:
             _make_step(id="s2", task_kind="analyze", allowed_tools=(), deps=("s1",)),
         ]
         plan = _make_plan(steps)
-        result = validate_plan(plan, registry, _ok_llm_call)
+        result = validate_plan(plan, registry, _ok_llm_call, helper_model="helper-model")
         assert result.ok is True
 
     def test_valid_plan_returns_validation_result(self):
         registry = _make_registry("find_mk")
         plan = _make_plan([_make_step()])
-        result = validate_plan(plan, registry, _ok_llm_call)
+        result = validate_plan(plan, registry, _ok_llm_call, helper_model="helper-model")
         assert isinstance(result, ValidationResult)
 
 
@@ -136,7 +136,7 @@ class TestTooManySteps:
             for i in range(max_steps + 1)
         ]
         plan = Plan(goal="Overreach", steps=steps, version=1)
-        result = validate_plan(plan, registry, _ok_llm_call)
+        result = validate_plan(plan, registry, _ok_llm_call, helper_model="helper-model")
         assert result.ok is False
         assert any("OVERREACH_STEPS" in issue for issue in result.issues)
 
@@ -148,7 +148,7 @@ class TestTooManySteps:
             for i in range(max_steps)
         ]
         plan = Plan(goal="At cap", steps=steps, version=1)
-        result = validate_plan(plan, registry, _ok_llm_call)
+        result = validate_plan(plan, registry, _ok_llm_call, helper_model="helper-model")
         # Should not have OVERREACH_STEPS issue
         assert not any("OVERREACH_STEPS" in issue for issue in result.issues)
 
@@ -169,7 +169,7 @@ class TestTooManyDeepDives:
             for i in range(max_dd + 1)
         ]
         plan = Plan(goal="Too many deep dives", steps=steps, version=1)
-        result = validate_plan(plan, registry, _ok_llm_call)
+        result = validate_plan(plan, registry, _ok_llm_call, helper_model="helper-model")
         assert result.ok is False
         assert any("OVERREACH_DEEP_DIVES" in issue for issue in result.issues)
 
@@ -186,7 +186,7 @@ class TestTooManyDeepDives:
             for i in range(max_dd)
         ]
         plan = Plan(goal="At deep dive cap", steps=steps, version=1)
-        result = validate_plan(plan, registry, _ok_llm_call)
+        result = validate_plan(plan, registry, _ok_llm_call, helper_model="helper-model")
         assert not any("OVERREACH_DEEP_DIVES" in issue for issue in result.issues)
 
 
@@ -197,7 +197,7 @@ class TestUnknownTool:
         registry = _make_registry("find_mk")  # does NOT contain "no_such_tool"
         steps = [_make_step(id="s1", allowed_tools=("no_such_tool",))]
         plan = _make_plan(steps)
-        result = validate_plan(plan, registry, _ok_llm_call)
+        result = validate_plan(plan, registry, _ok_llm_call, helper_model="helper-model")
         assert result.ok is False
         assert any("UNKNOWN_TOOL" in issue for issue in result.issues)
 
@@ -205,7 +205,7 @@ class TestUnknownTool:
         registry = _make_registry("find_mk")
         steps = [_make_step(id="s99", allowed_tools=("phantom_tool",))]
         plan = _make_plan(steps)
-        result = validate_plan(plan, registry, _ok_llm_call)
+        result = validate_plan(plan, registry, _ok_llm_call, helper_model="helper-model")
         assert any("s99" in issue for issue in result.issues)
 
 
@@ -224,7 +224,7 @@ class TestDAGCycle:
                  allowed_tools=("find_mk",), deps=("s1",)),
         ]
         plan = _make_plan(steps)
-        result = validate_plan(plan, registry, _ok_llm_call)
+        result = validate_plan(plan, registry, _ok_llm_call, helper_model="helper-model")
         assert result.ok is False
         assert any("DAG_CYCLE" in issue for issue in result.issues)
 
@@ -240,7 +240,7 @@ class TestDAGCycle:
                  allowed_tools=("find_mk",), deps=("s2",)),
         ]
         plan = _make_plan(steps)
-        result = validate_plan(plan, registry, _ok_llm_call)
+        result = validate_plan(plan, registry, _ok_llm_call, helper_model="helper-model")
         assert result.ok is False
         assert any("DAG_CYCLE" in issue for issue in result.issues)
 
@@ -256,7 +256,7 @@ class TestDAGCycle:
                  allowed_tools=(), deps=("s2",)),
         ]
         plan = _make_plan(steps)
-        result = validate_plan(plan, registry, _ok_llm_call)
+        result = validate_plan(plan, registry, _ok_llm_call, helper_model="helper-model")
         assert not any("DAG_CYCLE" in issue for issue in result.issues)
 
 
@@ -271,7 +271,7 @@ class TestMissingDep:
                  allowed_tools=("find_mk",), deps=("s99",)),
         ]
         plan = _make_plan(steps)
-        result = validate_plan(plan, registry, _ok_llm_call)
+        result = validate_plan(plan, registry, _ok_llm_call, helper_model="helper-model")
         assert result.ok is False
         assert any("MISSING_DEP" in issue for issue in result.issues)
 
@@ -281,6 +281,21 @@ class TestMissingDep:
 class TestNonePlan:
     def test_none_plan_returns_not_ok(self):
         registry = _make_registry("find_mk")
-        result = validate_plan(None, registry, _ok_llm_call)
+        result = validate_plan(None, registry, _ok_llm_call, helper_model="helper-model")
         assert result.ok is False
         assert len(result.issues) > 0
+
+
+class TestEntityHintHelper:
+    def test_ambiguous_name_is_checked_with_the_helper_model(self):
+        models_called = []
+
+        def recording_llm_call(**kwargs):
+            models_called.append(kwargs["model"])
+            return _ambiguous_llm_call(**kwargs)
+
+        plan = _make_plan([_make_step(allowed_tools=("search_protocols",), args_hint={"mk_name": "כהן"})])
+        result = validate_plan(plan, _make_registry("search_protocols"), recording_llm_call,
+                               helper_model="gemma-helper")
+        assert models_called == ["gemma-helper"]
+        assert not result.ok

@@ -4,6 +4,7 @@ test_tool_dispatch.py
 Tests for utils.tools.dispatch and related tool infrastructure.
 """
 
+import json
 import sys
 from pathlib import Path
 
@@ -13,7 +14,6 @@ import pytest
 import config
 from utils.tools import ToolSpec, ToolRegistry, dispatch
 from agent.subgraph.evidence import ToolEnvelope
-from retrieval import knesset_db_store as store
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -165,17 +165,20 @@ class TestDispatchFindMkNoDB:
         assert result.error == "knesset_db_missing"
 
 
-class TestDispatchFindMkWithDB:
-    """Conditional on a built knesset.db — skipped otherwise."""
-
-    def test_dispatch_find_mk_with_real_db(self):
-        if not store.exists():
-            pytest.skip(f"knesset.db not built yet: {store.db_path()}")
+class TestDispatchWithRealDb:
+    @pytest.mark.network
+    def test_dispatch_find_mk_resolves_a_real_mk(self, real_db):
         from agent.research_agent.tools import RESEARCH_TOOL_REGISTRY
-        result = dispatch(RESEARCH_TOOL_REGISTRY, "find_mk", {"query": "נתניהו"})
-        assert isinstance(result, ToolEnvelope)
-        if result.error is not None:
-            assert result.error not in ("dispatch_exception", "unknown_tool")
+        result = dispatch(RESEARCH_TOOL_REGISTRY, "find_mk", {"query": real_db.mk_name})
+        assert result.error is None, result.error
+        assert json.loads(result.full)[0]["mk_id"] == real_db.mk_id
+
+    def test_dispatch_query_protocols_lists_a_real_meeting(self, real_db):
+        from agent.research_agent.tools import RESEARCH_TOOL_REGISTRY
+        result = dispatch(RESEARCH_TOOL_REGISTRY, "query_protocols",
+                          {"meeting_ids": [real_db.meeting_id], "search_in": ["topics"]})
+        assert result.error is None, result.error
+        assert real_db.meeting_first_topic in [row["topic"] for row in json.loads(result.full)["topics"]]
 
 
 # ── ToolSpec ──────────────────────────────────────────────────────────────────

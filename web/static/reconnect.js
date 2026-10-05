@@ -21,6 +21,7 @@ import {
   appendStatus, setStatusMsg, appendAgentCard, appendErrorMsg,
 } from './render/chat.js';
 import { applyEvidenceCitations, buildSourcesHtml } from './render/citations.js';
+import { addAnswerExportButton } from './render/export.js';
 import { renderUserInputPanel } from './render/user_input.js';
 import { mapToolResults } from './transforms.js';
 import { esc } from './util.js';
@@ -171,7 +172,7 @@ function replaySubgraph(data, replay) {
     });
   } else if (kind === 'hook' && name === 'synthesizer_completed' && replay.subgraphContainer) {
     addCompletedStageCard(replay.subgraphContainer, {
-      label: 'מסכם ממצאים', stage: 'research',
+      label: 'סיכום ממצאים', stage: 'research',
       content: '', thinking: '', tools: [], tool_results: [], prompt: {},
     });
   } else if (kind === 'done' && replay.subgraphContainer) {
@@ -202,9 +203,10 @@ function replayDone(data, replay) {
   if (replay.agentEl) {
     const body = replay.agentEl.querySelector('.prose-content');
     if (body) {
-      body.innerHTML = replay.rawAnswer ? marked.parse(replay.rawAnswer) : '';
+      body.innerHTML = replay.rawAnswer ? renderMarkdown(replay.rawAnswer) : '';
       const cursor = replay.agentEl.querySelector('.stream-cursor');
       if (cursor) cursor.remove();
+      if (replay.rawAnswer) addAnswerExportButton(replay.agentEl);
       if (replay.pendingFootnotes.length) {
         applyEvidenceCitations(body, replay.pendingFootnotes, replay.pendingCitations, replay.sid);
         replay.agentEl.insertAdjacentHTML(

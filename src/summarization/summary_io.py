@@ -38,7 +38,8 @@ def load_summary(path: Path) -> dict:
 def find_summary_path(meeting_id: str) -> Path | None:
     """Glob Data/summaries/**/*_<meeting_id>.json (the stem's trailing part is the session id)."""
     mid = str(meeting_id)
-    if not mid.isdigit():
+    digits = mid.removeprefix(config.PLENUM_MEETING_ID_PREFIX)
+    if not (digits.isascii() and digits.isdigit()):
         return None
     root = config.DATA_DIR / "summaries"
     try:

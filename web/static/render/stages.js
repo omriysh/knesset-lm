@@ -15,8 +15,8 @@ export function appendStagesCard() {
   wrap.innerHTML =
     `<div class="ai-stages-card">` +
     `<div class="ai-stages-header">` +
+      `<span class="ai-stages-toggle-arrow">◀</span>` +
       `<span>שלבי עיבוד</span>` +
-      `<span class="ai-stages-toggle-arrow">▶</span>` +
     `</div>` +
     `</div>`;
   chatColumn.appendChild(wrap);
@@ -32,7 +32,7 @@ export function wireStatusToggle(statusEl, stagesEl) {
   if (stagesAlways()) return;
   const wrap = stagesEl.parentElement;
   statusEl.classList.add('clickable');
-  statusEl.title = 'לחץ לצפייה בשלבי עיבוד';
+  statusEl.title = 'לצפייה בשלבי העיבוד';
   statusEl.addEventListener('click', () => {
     const hidden = wrap.style.display === 'none';
     wrap.style.display = hidden ? 'block' : 'none';
@@ -51,7 +51,7 @@ export function addSubgraphWrapperCard(stagesEl, nodeStart) {
   card.dataset.startTs = String(Date.now());
   card.innerHTML =
     `<div class="stage-header">` +
-      `<span class="stage-arrow">▶</span>` +
+      `<span class="stage-arrow">◀</span>` +
       `<span class="stage-dot research"></span>` +
       `<span class="stage-name">${esc(label)}</span>` +
       `<span class="stage-meta"><span class="live-thinking-dot"></span>${loopHtml}</span>` +

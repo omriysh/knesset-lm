@@ -1,26 +1,28 @@
 """
 process_knesset.py
 
-Offline data refresh for a Knesset number:
-  1. For each committee, download every session protocol that is not on disk yet
-     into Data/raw_transcriptions/<knesset>/<committee>/<DD_MM_YYYY_<session_id>>.json.
-  2. Rebuild Data/knesset.db (scripts/build_knesset_db.py, all targets).
+The complete offline data refresh for a Knesset number, in one command:
+  1. Download every committee session protocol and every plenum session protocol that is not on
+     disk yet into Data/raw_transcriptions/<knesset>/<committee>/<DD_MM_YYYY>_<meeting_id>.json
+     (utils/protocol_download.py; plenum sessions go to מליאת_הכנסת/ with meeting_id p<id>).
+  2. Summarize every transcript that has no summary yet (scripts/summarize_knesset_batches.py,
+     Gemini Batch API; needs GOOGLE_API_KEY or GEMINI_API_KEY). Resumes an interrupted run.
+  3. Rebuild Data/knesset.db (scripts/build_knesset_db.py, all targets).
 
-Summaries are produced separately by scripts/summarize_knesset_batches.py
-(Gemini Batch API); run it between steps 1 and 2 when new protocols landed, or
-rerun `build_knesset_db.py --target summaries` afterwards.
+Exits 1 when anything failed: a committee or session download, a meeting that could not be
+summarized, or the database build. Plenum .doc files need Microsoft Word (pywin32).
 
 Usage
 -----
     cd knesset-lm
     python scripts/process_knesset.py --knesset 25
     python scripts/process_knesset.py --knesset 25 --skip "ועדת הכנסת"
-    python scripts/process_knesset.py --knesset 25 --skip-db
+    python scripts/process_knesset.py --knesset 25 --summaries-dry-run     # cost estimate, submits nothing
+    python scripts/process_knesset.py --knesset 25 --skip-summaries --skip-db
+    python scripts/process_knesset.py --knesset 25 --move-duplicate-transcripts
 """
 
 import argparse
-import json
-import re
 import subprocess
 import sys
 import time
@@ -28,69 +30,26 @@ from pathlib import Path
 
 from tqdm import tqdm
 
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).parent))
 
 import config
-from utils.knesset_db import (
-    get_all_committees,
-    get_committee_sessions,
-    get_session_transcript,
-    SESSION_TYPE_CLASSIFIED,
-)
+from utils.protocol_download import download_missing_protocols, duplicate_transcripts
 
-_WIN_UNSAFE = re.compile(r'[\\/:*?"<>|]')
-_CANCELLED_STATUS_IDS = {193}
+DUPLICATE_TRANSCRIPTS_DIR_NAME = "duplicate_transcripts"
 
 
-def _safe_dirname(name: str) -> str:
-    return _WIN_UNSAFE.sub("_", name).replace(" ", "_")
+def _summarize(args) -> dict:
+    import summarize_knesset_batches
+    return summarize_knesset_batches.summarize_knesset(
+        args.knesset, skip_patterns=args.skip, rescan=args.rescan, dry_run=args.summaries_dry_run)
 
 
-def _session_filename(date_iso: str, session_id: int) -> str:
-    """'2023-07-14', 12345 -> '14_07_2023_12345'."""
-    y, m, d = date_iso[:10].split("-")
-    return f"{d}_{m}_{y}_{session_id}"
-
-
-def _download_committee(committee: dict, knesset_num: int) -> dict:
-    name = committee["Name"]
-    proto_dir = config.transcriptions_dir(knesset_num) / _safe_dirname(name)
-    stats = {"total": 0, "classified": 0, "cancelled": 0, "cached": 0, "downloaded": 0, "no_transcript": 0}
-
-    sessions = get_committee_sessions(committee["CommitteeID"], knesset_num)
-    stats["total"] = len(sessions)
-    if not sessions:
-        return stats
-    proto_dir.mkdir(parents=True, exist_ok=True)
-
-    with tqdm(total=len(sessions), desc="  Sessions", unit="sess", leave=False, position=1,
-              dynamic_ncols=True) as sbar:
-        for session in sessions:
-            sbar.update(1)
-            if session.get("type_id") == SESSION_TYPE_CLASSIFIED:
-                stats["classified"] += 1
-                continue
-            if session.get("status_id") in _CANCELLED_STATUS_IDS:
-                stats["cancelled"] += 1
-                continue
-            session_id = session["session_id"]
-            proto_path = proto_dir / f"{_session_filename(session['date'], session_id)}.json"
-            if proto_path.exists():
-                stats["cached"] += 1
-                continue
-            transcript = get_session_transcript(session_id)
-            if not transcript:
-                stats["no_transcript"] += 1
-                continue
-            payload = {"meeting_id": str(session_id), "date": session["date"], "committee": name,
-                       "knesset_num": knesset_num, **transcript}
-            proto_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-            stats["downloaded"] += 1
-            sbar.set_postfix(dl=stats["downloaded"], cached=stats["cached"], refresh=False)
-    return stats
-
-
-def _build_db(knesset_num: int) -> None:
+def _build_db(knesset_num: int) -> int:
     script = Path(__file__).parent / "build_knesset_db.py"
     tqdm.write(f"\nRebuilding {config.KNESSET_DB} …")
     result = subprocess.run(
@@ -99,51 +58,111 @@ def _build_db(knesset_num: int) -> None:
     )
     if result.returncode != 0:
         tqdm.write(f"  [build_knesset_db ERROR] exit code {result.returncode}")
+    return result.returncode
+
+
+def _report_duplicates(knesset_num: int, move: bool) -> int:
+    """Print meetings saved under more than one committee folder (renamed committees); with move,
+    move the copies the pipeline does not use to Data/duplicate_transcripts/<knesset>/."""
+    duplicates = duplicate_transcripts(knesset_num)
+    if not duplicates:
+        return 0
+    folder_pairs: dict[tuple[str, str], int] = {}
+    for _, kept, others in duplicates:
+        for other in others:
+            pair = (kept.parent.name, other.parent.name)
+            folder_pairs[pair] = folder_pairs.get(pair, 0) + 1
+    print(f"\n{len(duplicates)} meetings are saved in more than one folder "
+          f"(the pipeline uses one copy of each; kept folder <- unused copies' folder):")
+    for (kept_folder, other_folder), count in sorted(folder_pairs.items(), key=lambda kv: -kv[1]):
+        print(f"  {count:5}  {kept_folder}  <-  {other_folder}")
+    if not move:
+        print("  To move the unused copies out of raw_transcriptions/ (nothing is deleted):\n"
+              f"    python scripts/process_knesset.py --knesset {knesset_num} --move-duplicate-transcripts "
+              "--skip-download --skip-summaries --skip-db")
+        return len(duplicates)
+    target_root = config.DATA_DIR / DUPLICATE_TRANSCRIPTS_DIR_NAME / str(knesset_num)
+    moved = 0
+    for _, _, others in duplicates:
+        for other in others:
+            destination = target_root / other.parent.name / other.name
+            try:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                other.replace(destination)
+                moved += 1
+            except Exception as exc:
+                print(f"  [duplicates] could not move {other}: {exc}")
+    print(f"  moved {moved} unused copies to {target_root}")
+    return len(duplicates)
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--knesset", type=int, default=25, help="Knesset number (default: 25)")
     ap.add_argument("--skip", nargs="*", default=[], help="Committee name patterns to skip (substring match)")
-    ap.add_argument("--skip-db", action="store_true", help="Download only; do not rebuild knesset.db")
+    ap.add_argument("--no-plenum", action="store_true", help="Do not download plenum session protocols")
+    ap.add_argument("--skip-download", action="store_true", help="Do not download protocols")
+    ap.add_argument("--skip-summaries", action="store_true", help="Do not summarize new transcripts")
+    ap.add_argument("--summaries-dry-run", action="store_true",
+                    help="Build the summarization requests and print their cost estimate; submit nothing")
+    ap.add_argument("--rescan", action="store_true",
+                    help="Summarizer: rescan the disk before finishing a leftover queue")
+    ap.add_argument("--skip-db", action="store_true", help="Do not rebuild knesset.db")
+    ap.add_argument("--move-duplicate-transcripts", action="store_true",
+                    help=f"Move transcript copies the pipeline does not use to Data/{DUPLICATE_TRANSCRIPTS_DIR_NAME}/")
     args = ap.parse_args()
+    args.skip = [s.strip() for s in args.skip if s.strip()]
 
-    tqdm.write(f"Fetching committee list for Knesset {args.knesset} …")
-    committees = get_all_committees(args.knesset)
-    if not committees:
-        tqdm.write("No committees found.")
+    started = time.perf_counter()
+    failures: list[str] = []
+    download = summaries = None
+    db_exit_code = None
+
+    if not args.skip_download:
+        download = download_missing_protocols(args.knesset, args.skip, include_plenum=not args.no_plenum)
+        failures += download["failures"]
+
+    if not args.skip_summaries:
+        try:
+            summaries = _summarize(args)
+        except Exception as exc:
+            print(f"\n[summaries ERROR] {exc}")
+            failures.append(f"summarization: {exc}")
+        else:
+            if summaries["failed"]:
+                failures.append(f"summarization: {summaries['failed']} meeting(s) failed every attempt")
+
+    if not args.skip_db and not args.summaries_dry_run:
+        db_exit_code = _build_db(args.knesset)
+        if db_exit_code != 0:
+            failures.append(f"build_knesset_db exited with {db_exit_code}")
+
+    n_duplicates = _report_duplicates(args.knesset, args.move_duplicate_transcripts)
+
+    print(f"\n{'=' * 60}\nKnesset {args.knesset} — done in {(time.perf_counter() - started) / 60:.1f} min\n{'=' * 60}")
+    if download:
+        print(f"  downloaded            : {download['downloaded']}  "
+              f"(sessions listed {download['sessions']}, already on disk {download['on_disk']}, "
+              f"no transcript published {download['no_transcript']}, "
+              f"classified/cancelled {download['classified'] + download['cancelled']})")
+        print(f"  download failures     : {len(download['failures'])}")
+    if summaries:
+        print(f"  summarized            : {summaries['summarized']}  (not a protocol: {summaries['not_protocol']})")
+        print(f"  summarization failed  : {summaries['failed']}")
+        print(f"  truncated answers     : {summaries['truncated_resplit']} re-split, "
+              f"{summaries['truncated_accepted']} kept without their cut-off line")
+        if summaries["queued"]:
+            print(f"  still queued          : {summaries['queued']}")
+    if db_exit_code is not None:
+        print(f"  knesset.db rebuild    : {'ok' if db_exit_code == 0 else f'FAILED (exit {db_exit_code})'}")
+    print(f"  duplicate transcripts : {n_duplicates}")
+    if failures:
+        print(f"\n{len(failures)} failure(s):")
+        for failure in failures[:50]:
+            print(f"  - {failure}")
+        if len(failures) > 50:
+            print(f"  … and {len(failures) - 50} more")
         sys.exit(1)
-    skip_patterns = [s.strip() for s in args.skip if s.strip()]
-    if skip_patterns:
-        before = len(committees)
-        committees = [c for c in committees if not any(p in c["Name"] for p in skip_patterns)]
-        tqdm.write(f"Skipping {before - len(committees)} committee(s) by name pattern.")
-    tqdm.write(f"Found {len(committees)} committees.\n")
-
-    grand = {"total": 0, "classified": 0, "cancelled": 0, "cached": 0, "downloaded": 0, "no_transcript": 0}
-    t_run = time.perf_counter()
-    with tqdm(total=len(committees), desc="Committees", unit="committee", position=0, dynamic_ncols=True) as cbar:
-        for committee in committees:
-            cbar.set_postfix_str(committee["Name"][:30], refresh=False)
-            try:
-                stats = _download_committee(committee, args.knesset)
-            except Exception as exc:
-                tqdm.write(f"  [ERROR] {committee['Name']}: {exc}")
-                cbar.update(1)
-                continue
-            for key in grand:
-                grand[key] += stats[key]
-            if stats["downloaded"] or stats["no_transcript"]:
-                tqdm.write(f"  {committee['Name'][:40]}: +{stats['downloaded']} dl, "
-                           f"{stats['cached']} cached, {stats['no_transcript']} no-tr")
-            cbar.update(1)
-
-    print(f"\nDone in {(time.perf_counter() - t_run) / 60:.1f} min")
-    for key, value in grand.items():
-        print(f"  {key:<14}: {value}")
-
-    if not args.skip_db:
-        _build_db(args.knesset)
 
 
 if __name__ == "__main__":

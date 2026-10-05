@@ -72,7 +72,7 @@ async function _rfLoadMeta() {
 
 function _rfSetListLoading(listId) {
   const el = document.getElementById(listId);
-  if (el) el.innerHTML = '<div class="rfb-list-status">טוען…</div>';
+  if (el) el.innerHTML = '<div class="rfb-list-status">בטעינה…</div>';
 }
 
 function _rfSetListError(listId) {
@@ -146,9 +146,8 @@ function _rfRenderList(listId, items, type) {
   const set = _rfSetFor(type);
   el.innerHTML = items.map(item => {
     const sel  = set.has(item) ? 'rfb-option--selected' : '';
-    const safe = _rfEsc(item);
-    return `<button class="rfb-option ${sel}" onclick="rfToggleItem('${type}', this.dataset.value)" data-value="${safe}">
-  <span class="rfb-option-check material-symbols-outlined">check</span>${safe}</button>`;
+    return `<button class="rfb-option ${sel}" data-type="${_rfEsc(type)}" data-value="${_rfEsc(item)}" data-click="rfToggleItem">
+  <span class="rfb-option-check material-symbols-outlined">check</span>${_rfEsc(item)}</button>`;
   }).join('');
 }
 
@@ -281,12 +280,8 @@ function _rfBadge(type, count) {
   }
 }
 
-/* ── Active filter chips row ────────────────────────────────────── */
-function _rfRenderChips() {
-  const row      = document.getElementById('rf-active-chips');
-  const clearBtn = document.getElementById('rf-clear-btn');
-  if (!row) return;
-
+/* ── Active filter chips (filter bar row, and the collapsed bar after a search) ── */
+function _rfActiveChips() {
   const chips = [];
   _rfState.committees.forEach(v => chips.push({ label: v,                           type: 'committee', value: v }));
   _rfState.mks.forEach(v        => chips.push({ label: `ח"כ ${v}`,                 type: 'mk',        value: v }));
@@ -298,22 +293,53 @@ function _rfRenderChips() {
     if (_rfState.dateTo)   parts.push(_fmtDate(_rfState.dateTo));
     chips.push({ label: parts.join(' — '), type: 'date', value: 'date' });
   }
+  return chips;
+}
 
-  const has = chips.length > 0;
+function rfChipHtml(label, removeAction, { type = '', value = '', extraClass = '' } = {}) {
+  return `<span class="chip ${extraClass}" title="${_rfEsc(label)}">${_rfEsc(label)}<button class="chip-remove" data-type="${_rfEsc(type)}" data-value="${_rfEsc(value)}" data-click="${_rfEsc(removeAction)}" title="הסרה"><span class="material-symbols-outlined">close</span></button></span>`;
+}
+
+function rfActiveChipsHtml(removeAction) {
+  return _rfActiveChips().map(c => rfChipHtml(c.label, removeAction, { type: c.type, value: c.value })).join('');
+}
+
+function _rfRenderChips() {
+  const row      = document.getElementById('rf-active-chips');
+  const clearBtn = document.getElementById('rf-clear-btn');
+  if (!row) return;
+  const has = _rfActiveChips().length > 0;
   row.classList.toggle('hidden', !has);
   clearBtn?.classList.toggle('hidden', !has);
-
-  if (has) {
-    row.innerHTML = chips.map(c =>
-      `<span class="rfb-chip">${_rfEsc(c.label)}<button class="rfb-chip-remove" data-type="${_rfEsc(c.type)}" data-value="${_rfEsc(c.value)}" onclick="rfRemoveFilter(this.dataset.type, this.dataset.value)" title="הסר"><span class="material-symbols-outlined" style="font-size:13px">close</span></button></span>`
-    ).join('');
-  }
+  row.innerHTML = has ? rfActiveChipsHtml('rfRemoveFilter') : '';
 }
 
 function _fmtDate(iso) {
   if (!iso) return '';
   const [y, m, d] = iso.split('-');
   return `${d}.${m}.${y}`;
+}
+
+/* ── Set the whole filter state (a shared link) ─────────────────── */
+function rfSetFilters(filters) {
+  _rfState.committees = new Set(filters.committees || []);
+  _rfState.mks        = new Set(filters.mks || []);
+  _rfState.parties    = new Set(filters.parties || []);
+  _rfState.guest      = filters.guest || '';
+  _rfState.dateFrom   = filters.date_from || '';
+  _rfState.dateTo     = filters.date_to || '';
+
+  _rfRenderList('rf-committee-list', _RF_COMMITTEES, 'committee');
+  _rfRenderList('rf-mk-list',        _RF_MKS,        'mk');
+  _rfRenderList('rf-party-list',     _RF_PARTIES,    'party');
+  const inputValues = { 'rf-guest-input': _rfState.guest, 'rf-date-from': _rfState.dateFrom, 'rf-date-to': _rfState.dateTo };
+  for (const [id, value] of Object.entries(inputValues)) {
+    const el = document.getElementById(id); if (el) el.value = value;
+  }
+  _rfBadge('committee', _rfState.committees.size);
+  _rfBadge('participants', _rfParticipantCount());
+  _rfBadge('date', (_rfState.dateFrom || _rfState.dateTo) ? 1 : 0);
+  _rfRenderChips();
 }
 
 /* ── Return current filter state for search API ─────────────────── */

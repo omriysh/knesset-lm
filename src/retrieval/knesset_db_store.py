@@ -10,16 +10,16 @@ Built by scripts/build_knesset_db.py. Read by utils/tools.py, web/app.py and
 utils/meeting.py. One connection per query call; nothing is cached across
 requests.
 
-Quote location in opinions: speech_idx indexes the speech list the viewer
-shows (meeting["speeches"] for structured files, parse_full_text_speeches()
-for full_text files); quote_offset is a raw character offset inside
-speeches[speech_idx].text_he for structured files and inside full_text for
-full_text files. Both are NULL when the quote was not verified.
+Quote location in opinions: speech_idx indexes utils.meeting.meeting_display_speeches(),
+the speech list the viewer shows and the speeches table stores; quote_offset and
+quote_length are the character range of the quote inside that speech's text. All
+three are NULL when the quote was not located.
 """
 
 from __future__ import annotations
 
 import sqlite3
+import time
 from pathlib import Path
 from typing import Iterable
 
@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS opinions (
     quote_verified INTEGER NOT NULL,
     speech_idx     INTEGER,
     quote_offset   INTEGER,
+    quote_length   INTEGER,
     UNIQUE (meeting_id, idx)
 );
 CREATE INDEX IF NOT EXISTS idx_opinions_meeting ON opinions(meeting_id);
@@ -143,22 +144,64 @@ TARGET_TABLES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
 _BATCH = 1000
 
 
+_PROGRESS_HANDLER_OPCODES = 10_000
+
+
+class _DeadlineConnection(sqlite3.Connection):
+    interrupt_deadline: float | None = None
+
+
+def deadline_passed(conn) -> bool:
+    """True once a connection opened with interrupt_after_seconds is past its deadline
+    (its running statement is then aborted, surfacing as some sqlite3.OperationalError)."""
+    deadline = getattr(conn, "interrupt_deadline", None)
+    return deadline is not None and time.monotonic() > deadline
+
+
 def db_path() -> Path:
     return config.KNESSET_DB
 
 
-def connect(path: Path | None = None) -> sqlite3.Connection:
-    """Open the db, creating the file and schema when missing (readers check exists() first)."""
+def connect(path: Path | None = None, *, interrupt_after_seconds: float | None = None) -> sqlite3.Connection:
+    """Open the db, creating the file and schema when missing (readers check exists() first).
+    interrupt_after_seconds: statements still running that long after connect raise
+    sqlite3.OperationalError("interrupted")."""
     p = Path(path or db_path())
     p.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(p))
+    conn = sqlite3.connect(str(p), factory=_DeadlineConnection)
     conn.row_factory = sqlite3.Row
     try:
         conn.executescript(_SCHEMA)
+        _add_missing_columns(conn)
     except sqlite3.Error:
         conn.close()
         raise
+    if interrupt_after_seconds is not None:
+        conn.interrupt_deadline = time.monotonic() + interrupt_after_seconds
+        conn.set_progress_handler(lambda: deadline_passed(conn), _PROGRESS_HANDLER_OPCODES)
     return conn
+
+
+_COLUMNS_ADDED_AFTER_TABLE_CREATION = {"opinions": {"quote_length": "INTEGER"}}
+
+
+def _add_missing_columns(conn: sqlite3.Connection) -> None:
+    """CREATE TABLE IF NOT EXISTS leaves tables of an older db as they were; add the newer columns."""
+    for table, columns in _COLUMNS_ADDED_AFTER_TABLE_CREATION.items():
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for column, column_type in columns.items():
+            if column not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
+                conn.commit()
+
+
+LIKE_ESCAPE_CHAR = "!"
+
+
+def like_substring_pattern(text: str) -> str:
+    """LIKE pattern for text as a literal substring; use it with `LIKE ? ESCAPE '{LIKE_ESCAPE_CHAR}'`."""
+    escaped = "".join(LIKE_ESCAPE_CHAR + ch if ch in "%_" + LIKE_ESCAPE_CHAR else ch for ch in text)
+    return f"%{escaped}%"
 
 
 def exists(path: Path | None = None) -> bool:
@@ -232,10 +275,10 @@ def replace_meeting_summary(conn, meeting_id: str, knesset_num: int, summary_pat
         [(meeting_id, knesset_num, i, t) for i, t in enumerate(topics)])
     conn.executemany(
         "INSERT INTO opinions(meeting_id, knesset_num, idx, speaker_label, speaker_name, mk_id, party, "
-        "opinion, quote, quote_verified, speech_idx, quote_offset) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        "opinion, quote, quote_verified, speech_idx, quote_offset, quote_length) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         [(meeting_id, knesset_num, i, o["speaker_label"], o["speaker_name"], o.get("mk_id"), o.get("party"),
           o["opinion"], o.get("quote") or "", int(bool(o.get("quote_verified"))),
-          o.get("speech_idx"), o.get("quote_offset"))
+          o.get("speech_idx"), o.get("quote_offset"), o.get("quote_length"))
          for i, o in enumerate(opinions)])
     conn.execute("UPDATE meetings SET summary_path = ?, is_protocol = ? WHERE meeting_id = ?",
                  (summary_path, int(is_protocol), meeting_id))
@@ -295,7 +338,7 @@ def get_topics(conn, meeting_id: str) -> list[dict]:
 def get_opinions(conn, meeting_id: str) -> list[dict]:
     return [dict(r) for r in conn.execute(
         "SELECT idx, speaker_label AS speaker, speaker_name, mk_id, party, opinion, quote, quote_verified, "
-        "speech_idx, quote_offset FROM opinions WHERE meeting_id = ? ORDER BY idx", (str(meeting_id),))]
+        "speech_idx, quote_offset, quote_length FROM opinions WHERE meeting_id = ? ORDER BY idx", (str(meeting_id),))]
 
 
 def get_attendance(conn, meeting_id: str) -> list[dict]:
@@ -317,12 +360,49 @@ PROTOCOL_SCOPES = ("topics", "opinions", "speeches")
 _SCOPE_COLUMNS = {
     "topics":   "x.idx, x.text AS topic",
     "opinions": ("x.idx, x.speaker_label AS speaker, x.speaker_name, x.mk_id, x.party, x.opinion, x.quote, "
-                 "x.speech_idx, x.quote_offset"),
+                 "x.speech_idx, x.quote_offset, x.quote_length"),
     "speeches": "x.idx AS speech_idx, x.speaker, x.mk_id, x.text",
 }
 
 
+
+def _exact_tier_order(fts: str) -> str:
+    """ORDER BY term: 0 for rows matching the query words as typed, 1 for rows matched only through variants."""
+    return f"(CASE WHEN {fts}.rowid IN (SELECT rowid FROM {fts} WHERE {fts} MATCH ?) THEN 0 ELSE 1 END)"
+
+
+def _protocol_rows_sql(scope: str, knesset_num: int, *, match: str | None, exact_match: str | None,
+                       mk_id: str | None, party: str | None, committees: list[str] | None,
+                       meeting_ids: list[str] | None, date_from: str | None, date_to: str | None,
+                       sort: str) -> tuple[str, list]:
+    where, params = _protocol_filter_where(scope, knesset_num, mk_id=mk_id, party=party, committees=committees,
+                                           meeting_ids=meeting_ids, date_from=date_from, date_to=date_to)
+    fts = f"{scope}_fts"
+    select = f"SELECT x.meeting_id, m.committee, m.date, {_SCOPE_COLUMNS[scope]}"
+    if match:
+        where.insert(0, f"{fts} MATCH ?")
+        params.insert(0, match)
+        source = (f"FROM {fts} JOIN {scope} x ON x.id = {fts}.rowid "
+                  f"JOIN meetings m ON m.meeting_id = x.meeting_id")
+        select += f", bm25({fts}) AS score"
+    elif mk_id or party:
+        source = f"FROM {scope} x JOIN meetings m ON m.meeting_id = x.meeting_id"
+    else:
+        # Walk meetings newest-first via idx_meetings_date so LIMIT stops early;
+        # left to itself the planner scans and sorts the whole scope table.
+        source = f"FROM meetings m CROSS JOIN {scope} x ON x.meeting_id = m.meeting_id"
+    if match and sort == "relevance":
+        order = "score, x.id"
+        if exact_match and exact_match != match:
+            order = f"{_exact_tier_order(fts)}, {order}"
+            params.append(exact_match)
+    else:
+        order = "m.date DESC, m.meeting_id, x.idx"
+    return f"{select} {source} WHERE {' AND '.join(where)} ORDER BY {order}", params
+
+
 def query_protocol_rows(conn, scope: str, knesset_num: int, *, match: str | None = None,
+                        exact_match: str | None = None,
                         mk_id: str | None = None, party: str | None = None,
                         committees: list[str] | None = None, meeting_ids: list[str] | None = None,
                         date_from: str | None = None, date_to: str | None = None,
@@ -333,12 +413,49 @@ def query_protocol_rows(conn, scope: str, knesset_num: int, *, match: str | None
     together; mk_id / party mean attendance for topics, the opinion author for
     opinions and the speaker (roster party) for speeches. Opinions are always
     verified-only and is_protocol = 0 meetings are always excluded.
-    Order: bm25 (sort="relevance" with a match) or date DESC, meeting_id,
-    in-meeting idx.
+    Order: sort="relevance" with a match ranks rows matching exact_match (the query
+    words as typed) first, then rows matched only through spelling / prefix variants,
+    bm25 within each tier; otherwise date DESC, meeting_id, in-meeting idx.
     """
+    sql, params = _protocol_rows_sql(scope, knesset_num, match=match, exact_match=exact_match, mk_id=mk_id,
+                                     party=party, committees=committees, meeting_ids=meeting_ids,
+                                     date_from=date_from, date_to=date_to, sort=sort)
+    return [dict(r) for r in conn.execute(f"{sql} LIMIT ? OFFSET ?", params + [top_k, offset])]
+
+
+def iter_protocol_rows(conn, scope: str, knesset_num: int, *, match: str | None = None,
+                       exact_match: str | None = None, mk_id: str | None = None, party: str | None = None,
+                       committees: list[str] | None = None, meeting_ids: list[str] | None = None,
+                       date_from: str | None = None, date_to: str | None = None, sort: str = "relevance",
+                       offset: int = 0, batch_size: int = 50):
+    """query_protocol_rows in the same order from row offset on, without a page limit, fetched lazily
+    in batches: the caller stops iterating once it has what it needs."""
+    sql, params = _protocol_rows_sql(scope, knesset_num, match=match, exact_match=exact_match, mk_id=mk_id,
+                                     party=party, committees=committees, meeting_ids=meeting_ids,
+                                     date_from=date_from, date_to=date_to, sort=sort)
+    cursor = conn.execute(f"{sql} LIMIT -1 OFFSET ?", params + [offset])
+    while batch := cursor.fetchmany(batch_size):
+        for row in batch:
+            yield dict(row)
+
+
+def count_protocol_rows(conn, scope: str, knesset_num: int, *, cap: int, mk_id: str | None = None,
+                        party: str | None = None, committees: list[str] | None = None,
+                        meeting_ids: list[str] | None = None, date_from: str | None = None,
+                        date_to: str | None = None) -> int:
+    """Rows of one protocol scope passing the query_protocol_rows filters (no match), counted up to cap."""
+    where, params = _protocol_filter_where(scope, knesset_num, mk_id=mk_id, party=party, committees=committees,
+                                           meeting_ids=meeting_ids, date_from=date_from, date_to=date_to)
+    sql = (f"SELECT COUNT(*) FROM (SELECT 1 FROM {scope} x JOIN meetings m ON m.meeting_id = x.meeting_id "
+           f"WHERE {' AND '.join(where)} LIMIT ?)")
+    return conn.execute(sql, params + [cap]).fetchone()[0]
+
+
+def _protocol_filter_where(scope: str, knesset_num: int, *, mk_id: str | None, party: str | None,
+                           committees: list[str] | None, meeting_ids: list[str] | None,
+                           date_from: str | None, date_to: str | None) -> tuple[list[str], list]:
     if scope not in PROTOCOL_SCOPES:
         raise ValueError(f"unknown protocol scope {scope!r}")
-    fts = f"{scope}_fts"
     where = ["x.knesset_num = ?", "(m.is_protocol IS NULL OR m.is_protocol != 0)"]
     params: list = [knesset_num]
     _meeting_filters(where, params, "m", committees, date_from, date_to)
@@ -367,24 +484,7 @@ def query_protocol_rows(conn, scope: str, knesset_num: int, *, match: str | None
         if party:
             where.append("x.mk_id IN (SELECT mk_id FROM mks WHERE party = ? AND knesset_num = ?)")
             params.extend([party, knesset_num])
-
-    select = f"SELECT x.meeting_id, m.committee, m.date, {_SCOPE_COLUMNS[scope]}"
-    if match:
-        where.insert(0, f"{fts} MATCH ?")
-        params.insert(0, match)
-        source = (f"FROM {fts} JOIN {scope} x ON x.id = {fts}.rowid "
-                  f"JOIN meetings m ON m.meeting_id = x.meeting_id")
-        select += f", bm25({fts}) AS score"
-    elif mk_id or party:
-        source = f"FROM {scope} x JOIN meetings m ON m.meeting_id = x.meeting_id"
-    else:
-        # Walk meetings newest-first via idx_meetings_date so LIMIT stops early;
-        # left to itself the planner scans and sorts the whole scope table.
-        source = f"FROM meetings m CROSS JOIN {scope} x ON x.meeting_id = m.meeting_id"
-    order = "score" if match and sort == "relevance" else "m.date DESC, m.meeting_id, x.idx"
-    sql = f"{select} {source} WHERE {' AND '.join(where)} ORDER BY {order} LIMIT ? OFFSET ?"
-    params.extend([top_k, offset])
-    return [dict(r) for r in conn.execute(sql, params)]
+    return where, params
 
 
 def search_speeches(conn, match: str, knesset_num: int, *, top_k: int,
@@ -401,8 +501,8 @@ def search_speeches(conn, match: str, knesset_num: int, *, top_k: int,
         where.append(f"s.meeting_id IN ({','.join('?' * len(meeting_ids))})")
         params.extend(str(m) for m in meeting_ids)
     if speaker_tokens:
-        where.append("(" + " OR ".join("s.speaker LIKE ?" for _ in speaker_tokens) + ")")
-        params.extend(f"%{t}%" for t in speaker_tokens)
+        where.append("(" + " OR ".join(f"s.speaker LIKE ? ESCAPE '{LIKE_ESCAPE_CHAR}'" for _ in speaker_tokens) + ")")
+        params.extend(like_substring_pattern(t) for t in speaker_tokens)
     _meeting_filters(where, params, "m", committees, None, None)
     sql = (f"SELECT s.id, s.meeting_id, s.idx AS speech_idx, s.speaker, s.mk_id, s.text, "
            f"m.committee, m.date, bm25(speeches_fts) AS score "
@@ -458,8 +558,8 @@ def query_candidate_meeting_ids(
         attendance_parts.append(f"a.party IN ({','.join('?' * len(parties))})")
         attendance_params.extend(parties)
     if guest_name:
-        attendance_parts.append("a.name LIKE ?")
-        attendance_params.append(f"%{guest_name}%")
+        attendance_parts.append(f"a.name LIKE ? ESCAPE '{LIKE_ESCAPE_CHAR}'")
+        attendance_params.append(like_substring_pattern(guest_name))
     if attendance_parts:
         where.append("m.meeting_id IN (SELECT a.meeting_id FROM attendance a WHERE "
                      + " OR ".join(attendance_parts) + ")")
@@ -494,23 +594,33 @@ def recent_meetings(conn, knesset_num: int, *, limit: int,
 
 
 def meetings_by_best_speech(conn, match: str, knesset_num: int, *, limit: int, sort: str = "relevance",
-                            candidate_meeting_ids: list[str] | None = None) -> list[dict]:
+                            candidate_meeting_ids: list[str] | None = None,
+                            exact_match: str | None = None) -> list[dict]:
     """
     Browsable meetings with at least one speech matching the FTS expression, one row per meeting:
-    meeting_id/committee/date, best_speech_rowid, score (bm25 of the best speech, lower = better).
-    sort="relevance" orders by that score, anything else by date DESC.
+    meeting_id/committee/date, best_speech_rowid, score (bm25 of the best speech, lower = better) and
+    tier (0 when a speech matches exact_match, the query words as typed; 1 when the meeting matches
+    only through spelling / prefix variants). The best speech is the lowest (tier, score).
+    sort="relevance" orders by tier, then score; anything else by date DESC.
     """
     where, params = _browsable_meetings_where(knesset_num, candidate_meeting_ids)
-    order_by = "score" if sort == "relevance" else "date DESC, meeting_id DESC"
+    order_by = "tier, score, meeting_id" if sort == "relevance" else "date DESC, meeting_id DESC"
+    use_tiers = bool(exact_match) and exact_match != match
+    tier_sql = _exact_tier_order("speeches_fts") if use_tiers else "0"
     sql = (f"WITH matching_speeches AS MATERIALIZED ("
-           f"  SELECT s.meeting_id, m.committee, m.date, speeches_fts.rowid AS best_speech_rowid, "
-           f"         bm25(speeches_fts) AS speech_score "
+           f"  SELECT s.meeting_id, m.committee, m.date, speeches_fts.rowid AS speech_rowid, "
+           f"         bm25(speeches_fts) AS speech_score, {tier_sql} AS speech_tier "
            f"  FROM speeches_fts JOIN speeches s ON s.id = speeches_fts.rowid "
            f"  JOIN meetings m ON m.meeting_id = s.meeting_id "
-           f"  WHERE speeches_fts MATCH ? AND {' AND '.join(where)}) "
-           f"SELECT meeting_id, committee, date, best_speech_rowid, MIN(speech_score) AS score "
-           f"FROM matching_speeches GROUP BY meeting_id ORDER BY {order_by} LIMIT ?")
-    return [dict(r) for r in conn.execute(sql, [match] + params + [limit])]
+           f"  WHERE speeches_fts MATCH ? AND {' AND '.join(where)}), "
+           f"ranked_speeches AS ("
+           f"  SELECT *, ROW_NUMBER() OVER (PARTITION BY meeting_id ORDER BY speech_tier, speech_score) AS rank_in_meeting "
+           f"  FROM matching_speeches) "
+           f"SELECT meeting_id, committee, date, speech_rowid AS best_speech_rowid, speech_score AS score, "
+           f"       speech_tier AS tier "
+           f"FROM ranked_speeches WHERE rank_in_meeting = 1 ORDER BY {order_by} LIMIT ?")
+    tier_params = [exact_match] if use_tiers else []
+    return [dict(r) for r in conn.execute(sql, tier_params + [match] + params + [limit])]
 
 
 def speech_snippet(conn, match: str, speech_rowid: int, *, tokens: int = 24) -> str:
@@ -528,26 +638,75 @@ def first_topic_by_meeting(conn, meeting_ids: list[str]) -> dict[str, str]:
     return {r[0]: r[1] for r in conn.execute(sql, [str(m) for m in meeting_ids])}
 
 
-def meeting_speech_hits(conn, word_matches: list[str], meeting_id: str) -> list[dict]:
+def meeting_speech_hits(conn, word_matches: list[str], meeting_id: str,
+                        exact_word_matches: list[str] | None = None) -> list[dict]:
     """Speeches of one meeting matching at least one of the per-word FTS expressions.
 
-    Rows: speech_idx, matched_words (how many of word_matches the speech contains), relevance
-    (summed -bm25 over the matched words, higher = better), ordered by speech_idx.
+    Rows: speech_idx, matched_words (how many of word_matches the speech contains), exact_words
+    (how many of exact_word_matches, the words as typed, it contains), relevance (summed -bm25 over
+    the matched words, higher = better), ordered by speech_idx.
     """
-    speech_id_range = conn.execute(
-        "SELECT MIN(id), MAX(id) FROM speeches WHERE meeting_id = ?", (str(meeting_id),)).fetchone()
-    if speech_id_range[0] is None:
+    speech_idx_by_rowid = _meeting_speech_idx_by_rowid(conn, meeting_id)
+    if not speech_idx_by_rowid:
         return []
-    sql = ("SELECT s.idx, -bm25(speeches_fts) FROM speeches_fts JOIN speeches s ON s.id = speeches_fts.rowid "
-           "WHERE speeches_fts MATCH ? AND speeches_fts.rowid BETWEEN ? AND ? AND s.meeting_id = ?")
+    sql = "SELECT rowid, -bm25(speeches_fts) FROM speeches_fts WHERE speeches_fts MATCH ? AND rowid BETWEEN ? AND ?"
+    rowid_range = (min(speech_idx_by_rowid), max(speech_idx_by_rowid))
     hits_by_speech: dict[int, dict] = {}
     for word_match in word_matches:
-        for speech_idx, relevance in conn.execute(
-                sql, (word_match, speech_id_range[0], speech_id_range[1], str(meeting_id))):
-            hit = hits_by_speech.setdefault(speech_idx, {"speech_idx": speech_idx, "matched_words": 0, "relevance": 0.0})
+        for rowid, relevance in conn.execute(sql, (word_match, *rowid_range)):
+            if rowid not in speech_idx_by_rowid:
+                continue
+            speech_idx = speech_idx_by_rowid[rowid]
+            hit = hits_by_speech.setdefault(speech_idx, {"speech_idx": speech_idx, "matched_words": 0,
+                                                         "exact_words": 0, "relevance": 0.0})
             hit["matched_words"] += 1
             hit["relevance"] += relevance
+    for exact_word_match in exact_word_matches or []:
+        for rowid, _relevance in conn.execute(sql, (exact_word_match, *rowid_range)):
+            if speech_idx_by_rowid.get(rowid) in hits_by_speech:
+                hits_by_speech[speech_idx_by_rowid[rowid]]["exact_words"] += 1
     return [hits_by_speech[idx] for idx in sorted(hits_by_speech)]
+
+
+def _meeting_speech_idx_by_rowid(conn, meeting_id: str) -> dict[int, int]:
+    """speeches_fts rowid -> speech idx of one meeting. The FTS queries filter by this meeting's rowid range
+    instead of joining speeches: with the join SQLite runs the MATCH once per speech of the meeting."""
+    return dict(conn.execute("SELECT id, idx FROM speeches WHERE meeting_id = ?", (str(meeting_id),)).fetchall())
+
+
+_HIGHLIGHT_OPEN, _HIGHLIGHT_CLOSE = "", ""
+
+
+def _ranges_between_markers(highlighted: str) -> list[list[int]]:
+    ranges, plain_length, open_at = [], 0, None
+    for char in highlighted:
+        if char == _HIGHLIGHT_OPEN:
+            open_at = plain_length
+        elif char == _HIGHLIGHT_CLOSE:
+            if open_at is not None and plain_length > open_at:
+                ranges.append([open_at, plain_length - open_at])
+            open_at = None
+        else:
+            plain_length += 1
+    return ranges
+
+
+def meeting_speech_keyword_ranges(conn, word_matches: list[str], meeting_id: str) -> dict[int, list[list[int]]]:
+    """speech_idx -> [[offset, length], ...] of the tokens any of word_matches matches, in the stored
+    speech text (the text the reading tab shows), ordered by offset."""
+    if not word_matches:
+        return {}
+    speech_idx_by_rowid = _meeting_speech_idx_by_rowid(conn, meeting_id)
+    if not speech_idx_by_rowid:
+        return {}
+    any_word_match = " OR ".join(f"({word_match})" for word_match in word_matches)
+    sql = ("SELECT rowid, highlight(speeches_fts, 0, ?, ?) FROM speeches_fts "
+           "WHERE speeches_fts MATCH ? AND rowid BETWEEN ? AND ?")
+    return {speech_idx_by_rowid[rowid]: _ranges_between_markers(highlighted)
+            for rowid, highlighted in conn.execute(
+                sql, (_HIGHLIGHT_OPEN, _HIGHLIGHT_CLOSE, any_word_match,
+                      min(speech_idx_by_rowid), max(speech_idx_by_rowid)))
+            if rowid in speech_idx_by_rowid}
 
 
 def table_row_counts(conn, tables: tuple[str, ...] = ("meetings", "topics", "opinions", "speeches")) -> dict[str, int]:

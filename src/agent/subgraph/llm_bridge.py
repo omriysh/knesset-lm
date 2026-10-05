@@ -104,8 +104,9 @@ class LLMBridge:
     the first actual LLM call is attempted.
     """
 
-    def __init__(self, fallback_to_local: bool = True):
+    def __init__(self, fallback_to_local: bool = True, api_key: str | None = None):
         self._fallback_to_local = bool(fallback_to_local)
+        self._api_key = api_key
         self._cache: dict[tuple[str, str], Any] = {}
 
     # ── Public API ──────────────────────────────────────────────────────────
@@ -233,6 +234,7 @@ class LLMBridge:
             kwargs["max_tokens"] = max_tokens
 
         text_parts: list[str] = []
+        finish_reason = ""
         try:
             for ev in backend.stream(**kwargs):
                 if isinstance(ev, ThinkingEvent):
@@ -243,6 +245,7 @@ class LLMBridge:
                     yield SubgraphEvent(kind="llm_token", name=phase_name,
                                         payload={"text": ev.text})
                 elif isinstance(ev, DoneEvent):
+                    finish_reason = ev.finish_reason
                     break
         except Exception as exc:
             elapsed = int((time.monotonic() - t0) * 1000)
@@ -258,7 +261,7 @@ class LLMBridge:
         yield SubgraphEvent(
             kind="llm_done",
             name=phase_name,
-            payload={"content": content, "elapsed_ms": elapsed},
+            payload={"content": content, "elapsed_ms": elapsed, "finish_reason": finish_reason},
         )
 
     def drain_events(self) -> list[SubgraphEvent]:
@@ -326,7 +329,7 @@ class LLMBridge:
             backend = GemmaLlamaBackend()
         else:
             from agent.llm.google import GoogleBackend
-            backend = GoogleBackend(model=model)
+            backend = GoogleBackend(model=model, api_key=self._api_key)
 
         self._cache[cache_key] = backend
         return backend

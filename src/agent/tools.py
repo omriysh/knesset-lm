@@ -81,14 +81,16 @@ def call_for_machine_runner(
     truncated, error) and can reason about errors / warnings the same way
     the plan-execute executor does.
 
-    Never raises: :func:`utils.tools.dispatch` already routes every error
+    Never raises: :func:`utils.tools.dispatch` validates the arguments
+    (the registry's ``validate_args``) and routes every error
     path through the envelope's ``error`` field, and the JSON serialisation
     falls back to ``default=str`` for any stragglers.
     """
     envelope = dispatch(registry, name, args or {})
     try:
         return json.dumps(envelope.to_dict(), ensure_ascii=False, default=str)
-    except Exception:  # noqa: BLE001 — final safety net for the legacy contract
+    except Exception as exc:  # noqa: BLE001 — final safety net for the legacy contract
+        print(f"[agent.tools] {name} envelope serialisation failed: {exc}", flush=True)
         return json.dumps(
             {
                 "summary":    "",

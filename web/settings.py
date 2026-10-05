@@ -20,7 +20,6 @@ import config as _cfg
 
 # ── LLM server ────────────────────────────────────────────────────────────────
 
-LLAMA_SERVER: str = os.environ.get("KNESSET_LLAMA_SERVER", _cfg.LLAMA_SERVER)
 
 # ── State machine ─────────────────────────────────────────────────────────────
 

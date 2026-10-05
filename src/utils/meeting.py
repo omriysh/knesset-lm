@@ -101,7 +101,7 @@ _GUEST_LABELS = {
 # (legal counsel / stenographer / staff names), fine to fold into the flat
 # returned name list without special categorization. The MK-vs-guest split
 # needed for filtering happens downstream via mk_id fuzzy-resolution
-# (build_meeting_index.py), not from which section a name came from.
+# (scripts/build_knesset_db.py build_meetings), not from which section a name came from.
 _HEADER_LINE_MAX_LEN = 40
 
 # Longest real name candidate accepted by _parse_attendance_section's add()
@@ -115,7 +115,7 @@ _MAX_NAME_LEN = 40
 # _structured_header_text). Left in, they cause false-positive fuzzy matches
 # downstream (e.g. "קריאה" resolving to an unrelated MK by partial-ratio).
 _SPEAKER_STOPLIST = {
-    "קריאה", "קריאות", "קריאת ביניים", "סדר היום", "חברי הוועדה",
+    "קריאה", "קריאות", "קריאת ביניים", "סדר היום", "סדר-היום", "חברי הוועדה",
     "חברי הועדה", "חברי הכנסת", "חברי כנסת", "מוזמנים",
     "מוזמנים באמצעים מקוונים", "מוזמנים באמצעים דיגיטליים",
     "משתתפים", "משתתפים באמצעים מקוונים", "משתתפים באמצעים דיגיטליים",
@@ -257,22 +257,52 @@ def _structured_header_text(meeting: dict) -> str:
             break
     return "\n".join(lines)
 
-# Matches speaker-turn headers in OData full_text protocols.
-# Handles:  "היו"ר שם:"  "ח"כ שם:"  "שם (מפלגה):"  "שם:"
-# Requires colon at end of line (no body text after it on same line).
-# Uses [ \t]+ (not \s+) between name tokens to avoid crossing line boundaries.
-# NOTE: full_text must be LF-normalised before use — CR-only PDFs fool re.MULTILINE.
+# Speaker-turn header lines in OData full_text protocols ("היו"ר שם:", "ח"כ שם:",
+# "שם (מפלגה):", "שר הנגב, הגליל והחוסן הלאומי יצחק שמעון וסרלאוף:"). The colon must
+# end the line, and [ \t] (never \s) keeps a header on one line. Only a header that
+# opens with an office title may run past four words, so an ordinary sentence ending
+# in a colon is not taken for a speaker. Text must go through
+# _normalize_protocol_markup first (LF line endings, flipped and tagged headers).
+_QUOTE_MARK_CLASS = r'["׳״’”]'
+_HEBREW_NAME_TOKEN = r'[א-ת][א-ת\-׳״"' + "'" + r']{0,20}'
+_OFFICE_TITLE_WORDS = ("השר", "השרה", "שר", "שרת", "סגן", "סגנית", "מזכיר", "מזכירת",
+                       "ממלא", "ממלאת", "ראש", "יושב", "יושבת", "היועץ", "היועצת")
+_MAX_OFFICE_TITLE_HEADER_WORDS = 12
 _SPEAKER_TURN_RE = re.compile(
-    r'^('
-    r'(?:היו["\u05f3\u05f4\u2019\u201d]ר[ \t]+|ח["\u05f3\u05f4\u2019\u201d]כ[ \t]+|'
-    r'(?:סגן[ \t]+)?שר(?:ת)?[ \t]+|ממלא[ \t]+מקום[ \t]+)?'   # optional title prefix
-    r'[\u05d0-\u05ea][\u05d0-\u05ea\-\u05f3\u05f4"\']{0,20}'  # first name token
-    r'(?:[ \t]+[\u05d0-\u05ea][\u05d0-\u05ea\-\u05f3\u05f4"\']{0,20}){0,3}'  # up to 3 more
+    r'^[ \t]*('
+    r'(?:' + "|".join(_OFFICE_TITLE_WORDS) + r')'
+    r'(?:,?[ \t]+' + _HEBREW_NAME_TOKEN + r'){1,' + str(_MAX_OFFICE_TITLE_HEADER_WORDS - 1) + r'}'
+    r'|'
+    r'(?:היו' + _QUOTE_MARK_CLASS + r'ר[ \t]+|ח' + _QUOTE_MARK_CLASS + r'כ[ \t]+|'
+    r'(?:סגן[ \t]+)?שר(?:ת)?[ \t]+|ממלא[ \t]+מקום[ \t]+)?'
+    + _HEBREW_NAME_TOKEN + r'(?:[ \t]+\(' + _HEBREW_NAME_TOKEN + r'\)(?=[ \t]+[א-ת]))?'
+    r'(?:[ \t]+' + _HEBREW_NAME_TOKEN + r'){0,3}'
     r')'
-    r'(?:[ \t]*\([^)\n]{1,40}\))?'   # optional (party / role)
-    r'[ \t]*:[ \t]*$',               # colon at end of line only
+    r'(?:[ \t]*\([^)\n]{1,100}\))?'
+    r'[ \t]*:[ \t]*$',
     re.MULTILINE,
 )
+
+# Some PDF extractions keep speaker lines in visual order, colon first:
+# ":היו"ר מירב כהן" and, with the brackets mirrored, ":)סימון דוידסון (יש עתיד".
+_VISUAL_ORDER_HEADER_RE = re.compile(r'^[ \t]*:[ \t]*([^:\n]{1,80}?)[ \t]*$', re.MULTILINE)
+# Some DOCX conversions wrap every styled line in tags: "<< יור >> היו"ר X: << יור >>".
+_DOCX_STYLE_TAG_RE = re.compile(r'<<\s*[^<>\n]{1,15}\s*>>')
+
+
+def _unflip_visual_order_header(match: re.Match) -> str:
+    content = match.group(1)
+    if content.startswith(")") and "(" in content and not content.endswith(")"):
+        content = content[1:] + ")"
+    return f"{content}:"
+
+
+def _normalize_protocol_markup(full_text: str) -> str:
+    """LF line endings, visual-order speaker lines turned to "name:", DOCX style tags dropped."""
+    text = full_text.replace("\r\n", "\n").replace("\r", "\n")
+    if "<<" in text:
+        text = _DOCX_STYLE_TAG_RE.sub("", text)
+    return _VISUAL_ORDER_HEADER_RE.sub(_unflip_visual_order_header, text)
 
 
 def _meeting_row(meeting_id: str) -> dict | None:
@@ -469,8 +499,8 @@ def extract_attendance(meeting: dict) -> list[str]:
     comment above _EN_DASH for the full format writeup and the real-file
     verification behind it. Returns deduplicated names in order of
     appearance; MK-vs-guest categorization is NOT done here (that happens
-    downstream via mk_id fuzzy-resolution against mks.db, in
-    scripts/build_meeting_index.py) — this stays a flat list.
+    downstream via mk_id fuzzy-resolution against the knesset.db mks table, in
+    scripts/build_knesset_db.py build_meetings) — this stays a flat list.
 
     Returns an empty list if no names are found.
     """
@@ -513,7 +543,7 @@ def get_meeting_speakers(meeting: dict) -> list[str]:
 
     Deliberately derived from who *spoke*, not who's listed as attending:
     silently-present attendees come from extract_attendance() instead, and
-    build_meeting_index.py unions the two.
+    scripts/build_knesset_db.py build_meetings unions the two.
 
     Supports both meeting JSON formats:
     - structured ('speeches' field): speaker names taken directly.
@@ -548,34 +578,105 @@ def parse_full_text_speeches(full_text: str) -> list[dict] | None:
     """
     Parse a raw OData full_text protocol into [{speaker, text_he}] entries.
 
-    Splits on speaker-turn headers (e.g. 'היו"ר שם:' / 'שם (מפלגה):').
-    Returns None if fewer than 2 speaker turns are found (triggers fallback).
+    Splits on speaker-turn headers (see _SPEAKER_TURN_RE). The protocol's opening block
+    (סדר היום:, נכחו:, חברי הוועדה:, מוזמנים: ...) is not a speech: turns before the
+    first real speaker are dropped. Returns None when the text has fewer than 2 header
+    lines or no real speaker.
     """
-    # PDF extraction often produces CR-only line endings; re.MULTILINE ^ only
-    # matches after \n, so normalise before applying the regex.
-    full_text = full_text.replace('\r\n', '\n').replace('\r', '\n')
-
+    full_text = _normalize_protocol_markup(full_text)
     matches = list(_SPEAKER_TURN_RE.finditer(full_text))
     if len(matches) < 2:
         return None
+    roster_end = _ATTENDANCE_END_RE.search(full_text, 0, _ATTENDANCE_ANCHOR_WINDOW + _ATTENDANCE_FALLBACK_CAP)
+    if roster_end is not None:
+        matches = [match for match in matches if match.start() > roster_end.end()]
+    first_speaker_position = next(
+        (position for position, match in enumerate(matches)
+         if _is_person_name(match.group(1)) and not _is_attendance_header_label(match.group(1))),
+        len(matches))
+    matches = matches[first_speaker_position:]
 
     speeches: list[dict] = []
     for i, m in enumerate(matches):
         speaker = m.group(1).strip()
-        text_start = m.end()
         text_end = matches[i + 1].start() if i + 1 < len(matches) else len(full_text)
-        text = full_text[text_start:text_end].strip()
+        text = full_text[m.end():text_end].strip()
         if text:
             speeches.append({"speaker": speaker, "text_he": text})
 
     return speeches if speeches else None
 
 
+def speaker_turn_starts(transcript_text: str) -> list[int]:
+    """
+    Offsets in build_transcript_text() output where a speaker turn begins: the speaker header
+    lines of a full_text protocol, else the blank-line separated "speaker: text" paragraphs of a
+    structured one. Offsets index transcript_text as given (no normalization).
+    """
+    starts: list[int] = []
+    offset = 0
+    for line in transcript_text.splitlines(keepends=True):
+        if _SPEAKER_TURN_RE.match(_normalize_protocol_markup(line.rstrip("\r\n"))):
+            starts.append(offset)
+        offset += len(line)
+    if len(starts) >= 2:
+        return starts
+    return [match.end() for match in re.finditer(r"\n[ \t]*\n", transcript_text)]
+
+
+_INTERJECTION_LABELS = {"קריאה", "קריאות", "קריאת ביניים"}
+# Header section labels besides the attendance ones, after _header_label_base() normalization
+_HEADER_SECTION_LABELS = {
+    "סדר היום", "על סדר היום", "הצעה לסדר היום בנושא", "הצעה לדיון מהיר בנושא", "דיון מהיר בנושא",
+    "דיון בנושא", "הצעת חוק יסוד", "הערות", "מנהלי הוועדות", "מנהלות הוועדות", "מנהלות ועדה",
+    "נכחו", "נוכחים", "משתתפים", "משתתף", "משתתפת", "מוזמנים",
+    "חברי הכנסת", "חבר הכנסת", "חברת הכנסת", "חברי הוועדה", "חברי הועדה",
+}
+_ONLINE_SUFFIX_RE = re.compile(r"\s*באמצעים (מקוונים|דיגיטליים)\s*$")
+
+
+def _header_label_base(label: str) -> str:
+    """ "מוזמנים (באמצעים מקוונים)", "נכחו באמצעים מקוונים", "סדר-היום:" → the section name alone."""
+    text = re.sub(r"\(([^)]*)\)", r" \1 ", label).replace("-", " ").rstrip(":")
+    text = re.sub(r"\s+", " ", text).strip()
+    return _ONLINE_SUFFIX_RE.sub("", text).strip()
+
+
+def count_header_chunks(chunks: list[dict]) -> int:
+    """
+    How many of the meeting's first chunks are its header rather than speeches: the untitled protocol
+    heading (first chunk only) and the agenda / attendance / staff sections ("סדר היום", "נכחו",
+    "מוזמנים באמצעים מקוונים", "רישום פרלמנטרי", ...), up to the first person speaking.
+    """
+    count = 0
+    for idx, chunk in enumerate(chunks[:_MAX_HEADER_SPEECHES]):
+        speaker = chunk["speaker"].strip()
+        base = _header_label_base(speaker)
+        is_heading = idx == 0 and not speaker
+        is_section = (bool(base) and speaker not in _INTERJECTION_LABELS
+                      and (base in _HEADER_SECTION_LABELS or _is_attendance_header_label(base)))
+        if not (is_heading or is_section):
+            break
+        count += 1
+    return count
+
+
+# Word/PDF leftovers that browsers draw as boxes (BEL cell markers, form feeds, Symbol-font bullets).
+# Replaced one-for-one so opinion quote offsets into the speech stay valid.
+_DISPLAY_CHAR_REPLACEMENTS = {
+    **{code: " " for code in (*range(0x00, 0x09), 0x0C, *range(0x0E, 0x20), 0x7F, 0xFEFF)},
+    0x0B: "\n",
+    **{code: "•" for code in range(0xF000, 0xF900)},
+}
+
+
 def format_meeting_chunks(meeting: dict) -> list[dict]:
     """
-    Format a meeting into display chunks for the web UI.
+    The meeting's speeches as the web UI shows them and knesset.db stores them (speeches table,
+    opinions.speech_idx / quote_offset / quote_length), so a speech index and a character range in it
+    mean the same text everywhere.
 
-    Returns list of {chunk_id: str, speaker: str, text: str}.
+    Returns list of {chunk_id: str, speaker: str, text: str}; chunk_id is the speech index.
 
     Three formats handled:
     - structured speeches  → ftfy-cleaned text per speech
@@ -619,4 +720,6 @@ def format_meeting_chunks(meeting: dict) -> list[dict]:
                     "speaker":  "",
                     "text":     para,
                 })
+    for chunk in chunks:
+        chunk["text"] = chunk["text"].translate(_DISPLAY_CHAR_REPLACEMENTS)
     return chunks
