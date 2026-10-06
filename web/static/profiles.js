@@ -144,7 +144,7 @@ async function _pfRenderParties(root, current) {
   root.innerHTML = `<div class="pf-page">
     <div class="pf-head">
       <div><h1>הרשימות לכנסת ה-26</h1>
-      <p>${data.parties.length} רשימות, כפי שהוגשו לוועדת הבחירות המרכזית (טרם אושרו סופית). <a href="${pfEsc(data.source)}" target="_blank" rel="noopener">לאתר הוועדה</a></p></div>
+      <p>${data.parties.length} רשימות, כפי שהוגשו <a href="${pfEsc(data.source)}" target="_blank" rel="noopener">לוועדת הבחירות המרכזית</a> (טרם אושרו סופית).</p></div>
       <input type="text" class="field field--sm pf-search" placeholder="חיפוש רשימה או מועמד בראשה" data-input="profilesFilterParties">
     </div>
     <div class="pf-party-grid" id="pf-party-grid">${data.parties.map(party => _pfLink(`${PROFILES_PATH}/party/${party.id}`, `
@@ -195,7 +195,7 @@ async function _pfRenderParty(root, partyId, current) {
       ${party.website ? `<div class="pf-links"><a class="btn btn-secondary btn-sm" href="${pfEsc(party.website)}" target="_blank" rel="noopener">${pfIcon('language')}לאתר המפלגה</a></div>` : ''}</div>
     </section>
     <div class="pf-legend">
-      <div class="pf-legend-keys"><span class="pf-tag pf-tag--mk">${pfIcon('verified')}פרופיל מלא</span><span class="pf-tag pf-tag--former">${pfIcon('history')}כיהן בכנסת קודמת: הצעות חוק</span></div>
+      <div class="pf-legend-keys"><span class="pf-tag pf-tag--mk">${pfIcon('verified')}פרופיל מלא</span><span class="pf-tag pf-tag--former">${pfIcon('history')}כיהן בכנסת קודמת</span></div>
       <div class="seg seg--sm"><button class="seg-btn active" type="button" data-click="profilesFilterCandidates" data-arg="all">כל המועמדים</button><button class="seg-btn" type="button" data-click="profilesFilterCandidates" data-arg="mks">רק חברי כנסת</button></div>
     </div>
     <div class="pf-cand-grid" id="pf-cand-grid">${party.candidates.map(card).join('')}</div>
