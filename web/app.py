@@ -54,6 +54,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
 import config
+from summarization import prompts as summary_prompts
 from api import validation as valid
 from api.app import use_public_api_http_settings
 from api.rate_limit import RateLimitMiddleware, SlidingWindowRateLimiter
@@ -645,6 +646,23 @@ async def help_content():
     """The site's help page (Hebrew markdown)."""
     path = Path(__file__).parent / "templates" / "user-help.md"
     return path.read_text(encoding="utf-8")
+
+
+SITE_DATA_PROMPTS = [
+    {"title": "נושאי הישיבה", "used_for": "רשימת הנושאים של כל ישיבה בדיוני הכנסת. מקבל את הפרוטוקול המלא.",
+     "text": summary_prompts.SYSTEM_PROMPT_TOPICS},
+    {"title": "עמדות וציטוטים", "used_for": "העמדות והציטוטים של כל דובר בישיבה, בדיוני הכנסת ובפרופילים. מקבל את הפרוטוקול המלא, "
+                                         "וכל ציטוט נבדק מול הפרוטוקול אחרי שהמודל מחזיר את התשובה שלו.",
+     "text": summary_prompts.SYSTEM_PROMPT_OPINIONS},
+    {"title": "נושאים מרכזיים של ח\"כ", "used_for": "הנושאים המרכזיים בפרופיל של כל ח\"כ. מקבל את כל העמדות שחולצו לאותו ח\"כ.",
+     "text": summary_prompts.SYSTEM_PROMPT_MK_THEMES},
+]
+
+
+@app.get("/api/help/prompts")
+async def help_prompts():
+    """The system prompts that built the summaries and themes shown on the site."""
+    return SITE_DATA_PROMPTS
 
 
 @app.get("/api/health")

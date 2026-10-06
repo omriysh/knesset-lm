@@ -10,7 +10,7 @@
 const PAGE_ACTIONS = {
   switchTab:                    (el) => switchTab(el.dataset.arg),
   landingOpenTab:               (el, event) => { event.preventDefault(); switchTab(el.dataset.arg); },
-  landingScrollToCases:         (el, event) => landingScrollToCases(event),
+  landingScrollToSection:       (el, event) => landingScrollToSection(event, el.getAttribute('href').slice(1)),
   landingGoInstall:             () => landingGoInstall(),
   landingPickSource:            (el) => landingPickSource(el),
   landingCopyReview:            (el) => landingCopyReview(el),
@@ -21,6 +21,7 @@ const PAGE_ACTIONS = {
   landingSetInstallTab:         (el) => landingSetInstallTab(el),
   openHelp:                     () => window.openHelp(),
   closeHelp:                    () => window.closeHelp(),
+  helpSetTab:                   (el) => window.helpSetTab(el.dataset.arg),
   closeHelpOnBackdrop:          (el, event) => { if (event.target === el) window.closeHelp(); },
   openSettings:                 () => window.openSettings(),
   closeSettings:                () => window.closeSettings(),

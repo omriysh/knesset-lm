@@ -1697,6 +1697,15 @@ body { font-size: 16px; }
 #help-content p { margin: 0 0 8px; }
 #help-content ul { padding-right: 20px; margin: 0 0 8px; }
 #help-content li { margin-bottom: 4px; }
+#help-tabs { align-self: center; margin: 16px 16px 0; flex: none; }
+#help-content, #help-prompts { padding-top: 18px; }
+#help-prompts { font-size: 0.85rem; line-height: 1.6; color: var(--ink); }
+.help-prompts-lead { color: var(--ink-muted); margin: 0 0 14px; }
+.help-prompt + .help-prompt { margin-top: 18px; }
+.help-prompt h3 { font-size: 1rem; font-weight: 700; color: var(--primary-dim); margin: 0 0 2px; }
+.help-prompt p { margin: 0 0 8px; color: var(--ink-muted); }
+.help-prompt pre { margin: 0; padding: 12px 14px; border-radius: 12px; background: var(--surface-low); font-size: 0.74rem; line-height: 1.55;
+  white-space: pre-wrap; overflow-wrap: anywhere; text-align: left; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
 /* ── Settings panel ─────────────────────────────────────────── */
 #settings-overlay {
@@ -3121,7 +3130,7 @@ body.show-welcome .research-slot { display: block; }
 .lp-gemini-alt a { color: var(--primary); }
 
 .landing .lp-more { padding-block: 40px 24px; }
-.lp-alt { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.lp-alt { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .lp-alt a { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; border-radius: var(--radius-lg); background: var(--surface-lowest); box-shadow: var(--shadow-raised); color: var(--ink); text-decoration: none; }
 .lp-alt a .material-symbols-outlined { margin-top: 2px; color: var(--primary); }
 .lp-alt a b { display: block; font-size: 0.95rem; }

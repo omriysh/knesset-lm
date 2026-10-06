@@ -139,6 +139,13 @@ class TestStaticFiles:
         assert response.headers.get("etag")
 
 
+class TestHelpPrompts:
+    def test_help_shows_the_prompts_that_built_the_site_data(self, web):
+        from summarization import prompts
+        shown = [prompt["text"] for prompt in web.client.get("/api/help/prompts").json()]
+        assert shown == [prompts.SYSTEM_PROMPT_TOPICS, prompts.SYSTEM_PROMPT_OPINIONS, prompts.SYSTEM_PROMPT_MK_THEMES]
+
+
 class TestBodyLimit:
     def test_oversized_body_is_413(self, web):
         sid = save(web, status="done", workspace_data={"selected_chunks": []})

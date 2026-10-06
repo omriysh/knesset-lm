@@ -61,10 +61,10 @@
       <div class="lp-wrap lp-hero">
         <div class="lp-hero-text">
           <h1 class="lp-headline">הנרטיב <span class="lp-mark">שלנו</span></h1>
-          <p class="lp-lede">התרגלנו שאנשים אחרים שואלים את השאלות. מעורב ירושלמי נותן לצ'אט שלכם גישה ישירה למקורות, כדי שתקבלו <strong>תשובות מבוססות לשאלות שלכם</strong>.</p>
+          <p class="lp-lede">התרגלנו שאנשים אחרים שואלים את השאלות. מעורב ירושלמי נותן לצ'אט גישה ישירה למקורות, כדי שתקבלו <strong>תשובות מבוססות לשאלות שלכם</strong>.</p>
           <div class="lp-ctas">
             <button class="btn btn-primary btn-lg" type="button" data-click="landingGoInstall"><span class="material-symbols-outlined">add_link</span>מחברים את Claude</button>
-            <a class="btn btn-ghost btn-lg" href="#lp-cases-section" data-click="landingScrollToCases">מה אפשר לשאול?</a>
+            <a class="btn btn-secondary btn-lg" href="#lp-more-section" data-click="landingScrollToSection">מה עוד יש פה?</a>
           </div>
           <p class="lp-note">חינם. בלי הרשמה. עובד בתוך הצ'אט שכבר יש לכם.</p>
         </div>
@@ -213,7 +213,7 @@
                   <span class="lp-n">3</span>
                   <h4>מדביקים ומתחילים</h4>
                   <p>מדביקים את ה-prompt שהעתקתם, או סתם שואלים שאלה על הכנסת.</p>
-                  <a class="btn btn-secondary lp-self-start" href="#lp-cases-section" data-click="landingScrollToCases">לבחירת prompt</a>
+                  <a class="btn btn-secondary lp-self-start" href="#lp-cases-section" data-click="landingScrollToSection">לבחירת prompt</a>
                 </div>
               </div>
               <div class="lp-manual">
@@ -253,9 +253,10 @@
         </section>
       </div>
 
-      <section class="lp-wrap lp-more">
+      <section class="lp-wrap lp-more" id="lp-more-section">
         <h2>מה עוד יש פה?</h2>
         <div class="lp-alt">
+          <a href="/profiles" data-click="landingOpenTab" data-arg="profiles"><span class="material-symbols-outlined">groups</span><span><b>פרופילים</b><span class="lp-alt-desc">מקום אחד לראות בו את כל המועמדים לבחירות 2026, ואפשרות להעמיק בנתונים על כל מועמד שכיהן בעבר בכנסת.</span></span></a>
           <a href="/protocols" data-click="landingOpenTab" data-arg="reading"><span class="material-symbols-outlined">menu_book</span><span><b>דיוני הכנסת</b><span class="lp-alt-desc">חיפוש, סינון לפי ח"כ, מפלגה וועדה, וסיכום AI לכל ישיבה.</span></span></a>
           <a href="/research" data-click="landingOpenTab" data-arg="research"><span class="material-symbols-outlined">smart_toy</span><span><b>מחקר אוטומטי</b><span class="lp-alt-desc">צ'אט AI פה באתר שמציג את כל תהליך החיפוש וקישורים עמוקים יותר למקורות. דורש מפתח Gemini API.</span></span></a>
           <a href="/docs" target="_blank" rel="noopener"><span class="material-symbols-outlined">code</span><span><b>API למפתחים</b><span class="lp-alt-desc">כל הכלים, בגישה ישירה.</span></span></a>
@@ -536,7 +537,12 @@
   <!-- ── Help overlay ── -->
   <div id="help-overlay" data-click="closeHelpOnBackdrop">
     <div id="help-panel" class="dialog">
+      <div class="seg" id="help-tabs" role="tablist">
+        <button class="seg-btn active" role="tab" type="button" aria-selected="true" data-click="helpSetTab" data-arg="about">אודות</button>
+        <button class="seg-btn" role="tab" type="button" aria-selected="false" data-click="helpSetTab" data-arg="prompts">prompt-ים</button>
+      </div>
       <div id="help-content" class="dialog-body prose-content"><p>טוען…</p></div>
+      <div id="help-prompts" class="dialog-body" hidden><p>טוען…</p></div>
       <div class="dialog-footer">
         <button id="help-close" class="btn btn-secondary btn-block" data-click="closeHelp">סגירה</button>
       </div>

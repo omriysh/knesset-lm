@@ -257,8 +257,8 @@ document.addEventListener('DOMContentLoaded', () => {
   if (installLink) installLink.href = _landingClaudeInstallLink();
 });
 
-function landingScrollToCases(event) {
+function landingScrollToSection(event, sectionId) {
   event.preventDefault();
-  document.getElementById('lp-cases-section')
+  document.getElementById(sectionId)
     .scrollIntoView({ behavior: _landingReducedMotion() ? 'auto' : 'smooth', block: 'start' });
 }

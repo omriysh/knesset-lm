@@ -96,10 +96,37 @@ function closeHelp() {
   document.getElementById('help-overlay').classList.remove('open');
 }
 
+let _helpPromptsLoaded = false;
+async function helpSetTab(tab) {
+  document.querySelectorAll('#help-tabs .seg-btn').forEach(button => {
+    const active = button.dataset.arg === tab;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+  document.getElementById('help-content').hidden = tab !== 'about';
+  const promptsPanel = document.getElementById('help-prompts');
+  promptsPanel.hidden = tab !== 'prompts';
+  if (tab !== 'prompts' || _helpPromptsLoaded) return;
+  try {
+    const prompts = await fetch('/api/help/prompts').then(r => r.json());
+    promptsPanel.innerHTML = `<p class="help-prompts-lead">אלה ה-prompt-ים ששימשו את מודלי Gemini לבניית המידע שמוצג באתר, כלשונם.</p>`
+      + prompts.map(prompt => `<section class="help-prompt">
+          <h3>${_esc(prompt.title)}</h3>
+          <p>${_esc(prompt.used_for)}</p>
+          <pre dir="ltr">${_esc(prompt.text)}</pre>
+        </section>`).join('');
+    _helpPromptsLoaded = true;
+  } catch (exc) {
+    console.error('[app] help prompts load failed:', exc);
+    promptsPanel.innerHTML = '<p>שגיאה בטעינת ה-prompt-ים.</p>';
+  }
+}
+
 // ── Expose inline HTML handlers on window ──────────────────────────────
 window.openSettings         = openSettings;
 window.closeSettings        = closeSettings;
 window.openHelp             = openHelp;
 window.closeHelp            = closeHelp;
+window.helpSetTab           = helpSetTab;
 window.onStagesAlwaysToggle = onStagesAlwaysToggle;
 
