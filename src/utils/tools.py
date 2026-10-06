@@ -49,6 +49,7 @@ from utils.knesset_db import (
     get_person_by_id,
     mk_full_name,
     mk_roster_rows,
+    person_bills_page,
     search_bills_page,
     get_all_parties,
     get_party_members,
@@ -805,23 +806,39 @@ def _optional_knesset_num(args: dict) -> int | None:
     return None if requested in (None, "") else int(requested)
 
 
+BILL_INITIATOR_ROLES = ("initiator", "joined")
+
+
 def handle_query_bills(args: dict) -> ToolEnvelope:
     """Bill title search (OData ``contains(Name, ...)``), newest update first, paged by offset/top_k;
-    knesset_num None = every Knesset."""
+    knesset_num None = every Knesset. mk_id lists the bills that MK initiated or joined (query optional),
+    initiator_role narrows them to "initiator" or "joined"."""
     query = (args.get("query") or "").strip()
+    mk_id = str(args.get("mk_id") or "").strip()
+    initiator_role = str(args.get("initiator_role") or "").strip()
     knesset_num = _optional_knesset_num(args)
     top_k = max(1, min(int(args.get("top_k") or 10), ODATA_PAGE_SIZE))
     offset = max(0, int(args.get("offset") or 0))
-    provenance = {"query": query, "knesset_num": knesset_num, "top_k": top_k, "offset": offset}
+    provenance = {"query": query, "mk_id": mk_id, "initiator_role": initiator_role, "knesset_num": knesset_num,
+                  "top_k": top_k, "offset": offset}
 
-    if not query:
+    search_term = _sanitize_odata_search(query)
+    if not search_term and not mk_id:
         return _validation_error("missing_query", kind="search", source="odata", **provenance)
+    if initiator_role and (not mk_id or initiator_role not in BILL_INITIATOR_ROLES):
+        return _validation_error("invalid_initiator_role", kind="search", source="odata", **provenance)
     try:
-        bills, total = search_bills_page(_sanitize_odata_search(query), knesset_num, offset, top_k)
+        if mk_id:
+            person_id = _vote_person_id(mk_id)
+            if person_id is None:
+                return _validation_error("mk_not_found", kind="search", source="odata", **provenance)
+            payload, total = person_bills_page(person_id, search_term, knesset_num, initiator_role, offset, top_k)
+        else:
+            bills, total = search_bills_page(search_term, knesset_num, offset, top_k)
+            payload = [_bill_record_to_dict(b) for b in bills]
     except Exception as exc:
         return _odata_error_envelope(exc, "search", **provenance)
 
-    payload = [_bill_record_to_dict(b) for b in bills]
     return ToolEnvelope(
         summary="",
         full=json.dumps(payload, ensure_ascii=False, default=str),

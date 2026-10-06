@@ -36,6 +36,7 @@ function switchTab(name, { writeUrl = true, push = true } = {}) {
 
   if (name === 'reading' && writeUrl && !_readingTabHasResults()) browseSearch({ push: false });
   if (name === 'chat') landingStartDemo();
+  if (name === 'profiles') profilesShow();
 
   const researchSettings = document.getElementById('settings-research');
   if (researchSettings) researchSettings.disabled = name !== 'research';
@@ -43,9 +44,15 @@ function switchTab(name, { writeUrl = true, push = true } = {}) {
   setActiveTab(name, { writeUrl, push });
 }
 
-/* ── URL routing: / (in your chat), /research, /protocols?… (url_state.js); back/forward re-applies the URL ── */
+/* ── URL routing: / (in your chat), /research, /protocols?…, /profiles… (url_state.js, profiles.js);
+   back/forward re-applies the URL ── */
 function applyUrlRoute() {
   if (location.pathname === RESEARCH_PATH) { switchTab('research', { writeUrl: false }); return; }
+  if (location.pathname === PROFILES_PATH || location.pathname.startsWith(PROFILES_PATH + '/')) {
+    switchTab('profiles', { writeUrl: false });
+    profilesApplyRoute();
+    return;
+  }
   if (location.pathname !== PROTOCOLS_PATH) { switchTab('chat', { writeUrl: false }); return; }
   switchTab('reading', { writeUrl: false });
   const target = readProtocolUrl();

@@ -133,7 +133,8 @@ class TestOtherSchemas:
 
     def test_query_bills(self):
         props = _props("query_bills")
-        assert _required("query_bills") == {"query"}
+        assert _required("query_bills") == set()
+        assert props["initiator_role"]["enum"] == ["initiator", "joined"]
         assert "default" not in props["knesset_num"]
         assert props["top_k"]["default"] == 10
         assert props["offset"]["default"] == 0

@@ -157,7 +157,11 @@ def _offset_arg(args: dict, maximum: int) -> int:
 
 
 def _query_bills_args(args: dict, limits: ToolArgumentLimits) -> dict:
+    initiator_role = valid.as_text(args.get("initiator_role"), "initiator_role").strip()
     return {"query": _search_text_arg(args, limits),
+            "mk_id": valid.numeric_id(valid.as_text(args.get("mk_id"), "mk_id"), "mk_id"),
+            "initiator_role": valid.one_of(initiator_role, ("initiator", "joined"), "initiator_role")
+                              if initiator_role else None,
             "knesset_num": _optional_knesset_num_arg(args), "top_k": _top_k_arg(args, limits.list_max_top_k),
             "offset": _offset_arg(args, limits.max_offset)}
 

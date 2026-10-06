@@ -67,6 +67,11 @@ def mk_themes_dir(knesset_num: int = 25) -> Path:
     return DATA_DIR / "mk_themes" / str(knesset_num)
 
 
+def candidate_lists_dir(election_knesset_num: int = 26) -> Path:
+    """Candidate lists of an election (lists.json, ballots/, photos/), built by scripts/build_candidate_lists.py."""
+    return DATA_DIR / "candidates" / str(election_knesset_num)
+
+
 def mk_themes_batch_state_path(knesset_num: int = 25) -> Path:
     """Resume state of scripts/summarize_mk_themes_batches.py."""
     return DATA_DIR / "summary_batches" / f"mk_themes_state_k{knesset_num}.json"
@@ -235,6 +240,7 @@ PUBLIC_API_HTTP_TIMEOUT_SECONDS  = 10
 API_RATE_LIMIT_ENABLED              = True
 API_RATE_LIMIT_UPSTREAM_PER_MINUTE  = 10   # per client IP, routes that call the Knesset APIs
 API_RATE_LIMIT_DB_PER_MINUTE        = 60   # per client IP, knesset.db-only routes
+API_RATE_LIMIT_PROFILES_PER_MINUTE  = 60   # per client IP, candidate-profile routes that call the Knesset APIs (cached)
 API_TRUST_CLOUDFLARE_IP_HEADER      = True  # True only when the server is reachable solely through Cloudflare
 API_RATE_LIMIT_AGENT_PER_MINUTE     = 5    # per client IP, web routes that run an LLM
 WEB_REQUIRE_USER_GEMINI_KEY         = True   # web agent tab bills the visitor's key (X-Gemini-Api-Key), never the server's

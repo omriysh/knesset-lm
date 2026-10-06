@@ -1,7 +1,8 @@
 """
 In-process per-client-IP sliding-window rate limits for the standalone public API.
 
-Routes that call the Knesset APIs share a low budget, knesset.db-only routes a higher one,
+Routes that call the Knesset APIs share a low budget (the profile page's own, cached OData routes a
+higher one, since one profile fires several), knesset.db-only routes a higher one,
 web-UI routes that run an LLM the lowest, every other route a generous web budget; only the page,
 static files, docs, the llms texts and stream replays are not limited.
 Limits are read from config on every request.
@@ -21,11 +22,15 @@ WINDOW_SECONDS = 60
 UPSTREAM_ROUTE_PREFIXES = ("/v1/mks", "/v1/committees", "/v1/parties", "/v1/bills", "/v1/votes")
 DB_ROUTE_PREFIXES = ("/v1/protocols", "/v1/meetings/", "/api/browse/search")
 DB_ROUTE_PATHS = ("/v1/meta", "/api/health")
+PROFILE_UPSTREAM_ROUTE_PATTERN = re.compile(
+    r"^/api/profiles/(bill/\d+/text|party/\d+/candidate/\d+(/(vote-summary|votes|bills|cosponsors|roles))?)$")
+PROFILE_DB_ROUTE_PATTERN = re.compile(r"^/api/profiles/party/\d+/candidate/\d+/(themes|opinions)$")
+PROFILE_PAGE_PATTERN = re.compile(r"^/profiles(/party/\d+(/candidate/\d+)?)?/?$")
 AGENT_ROUTE_PATTERN = re.compile(r"^/api/research/(start|[^/]+/(respond|workspace/ask))$")
 STREAM_REPLAY_PATTERN = re.compile(r"^/api/research/[^/]+/stream$")
 UNLIMITED_PATHS = ("/", config.RESEARCH_PAGE_PATH, config.PROTOCOLS_PAGE_PATH, "/favicon.ico", "/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json",
                    "/llms.txt", "/llms-full.txt", "/agent-instructions")
-UNLIMITED_PREFIXES = ("/static/", "/docs-assets/")
+UNLIMITED_PREFIXES = ("/static/", "/docs-assets/", "/api/profiles/photo/", "/api/profiles/ballot/", "/api/profiles/logo/")
 
 
 def route_bucket(path: str) -> str | None:
@@ -33,9 +38,12 @@ def route_bucket(path: str) -> str | None:
         return "agent"
     if path.startswith(UPSTREAM_ROUTE_PREFIXES):
         return "upstream"
-    if path.startswith(DB_ROUTE_PREFIXES) or path in DB_ROUTE_PATHS:
+    if PROFILE_UPSTREAM_ROUTE_PATTERN.match(path):
+        return "profiles"
+    if path.startswith(DB_ROUTE_PREFIXES) or path in DB_ROUTE_PATHS or PROFILE_DB_ROUTE_PATTERN.match(path):
         return "db"
-    if path in UNLIMITED_PATHS or path.startswith(UNLIMITED_PREFIXES) or STREAM_REPLAY_PATTERN.match(path):
+    if path in UNLIMITED_PATHS or path.startswith(UNLIMITED_PREFIXES) or STREAM_REPLAY_PATTERN.match(path) \
+            or PROFILE_PAGE_PATTERN.match(path):
         return None
     return "web"
 
@@ -47,6 +55,8 @@ def bucket_limit(bucket: str) -> int:
         return config.API_RATE_LIMIT_AGENT_PER_MINUTE
     if bucket == "web":
         return config.API_RATE_LIMIT_WEB_PER_MINUTE
+    if bucket == "profiles":
+        return config.API_RATE_LIMIT_PROFILES_PER_MINUTE
     return config.API_RATE_LIMIT_DB_PER_MINUTE
 
 

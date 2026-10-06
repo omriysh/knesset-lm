@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="{{ asset('components.css') }}">
   <link rel="stylesheet" href="{{ asset('tailwind.css') }}">
   <link rel="stylesheet" href="{{ asset('style.css') }}">
+  <link rel="stylesheet" href="{{ asset('profiles.css') }}">
 </head>
 <body class="bg-surface text-on-surface h-[100dvh] flex flex-col overflow-hidden show-welcome">
 
@@ -32,9 +33,10 @@
 
       <!-- Desktop tab navigation (center) -->
       <nav class="seg hidden md:flex">
-        <button data-click="switchTab" data-arg="chat" id="dt-tab-chat" class="seg-btn app-tab-btn active">בצ'אט שלכם</button>
-        <button data-click="switchTab" data-arg="research" id="dt-tab-research" class="seg-btn app-tab-btn">מחקר אוטומטי</button>
-        <button data-click="switchTab" data-arg="reading" id="dt-tab-reading" class="seg-btn app-tab-btn">קריאה עצמית</button>
+        <button data-click="switchTab" data-arg="chat" id="dt-tab-chat" class="seg-btn app-tab-btn active" type="button">בצ'אט שלכם</button>
+        <button data-click="switchTab" data-arg="research" id="dt-tab-research" class="seg-btn app-tab-btn" type="button">בצ'אט שלנו</button>
+        <button data-click="switchTab" data-arg="reading" id="dt-tab-reading" class="seg-btn app-tab-btn" type="button">דיוני הכנסת</button>
+        <button data-click="switchTab" data-arg="profiles" id="dt-tab-profiles" class="seg-btn app-tab-btn" type="button">פרופילים</button>
       </nav>
 
       <!-- Header actions -->
@@ -254,7 +256,7 @@
       <section class="lp-wrap lp-more">
         <h2>מה עוד יש פה?</h2>
         <div class="lp-alt">
-          <a href="/protocols" data-click="landingOpenTab" data-arg="reading"><span class="material-symbols-outlined">menu_book</span><span><b>קריאה עצמית</b><span class="lp-alt-desc">חיפוש, סינון לפי ח"כ, מפלגה וועדה, וסיכום AI לכל ישיבה.</span></span></a>
+          <a href="/protocols" data-click="landingOpenTab" data-arg="reading"><span class="material-symbols-outlined">menu_book</span><span><b>דיוני הכנסת</b><span class="lp-alt-desc">חיפוש, סינון לפי ח"כ, מפלגה וועדה, וסיכום AI לכל ישיבה.</span></span></a>
           <a href="/research" data-click="landingOpenTab" data-arg="research"><span class="material-symbols-outlined">smart_toy</span><span><b>מחקר אוטומטי</b><span class="lp-alt-desc">צ'אט AI פה באתר שמציג את כל תהליך החיפוש וקישורים עמוקים יותר למקורות. דורש מפתח Gemini API.</span></span></a>
           <a href="/docs" target="_blank" rel="noopener"><span class="material-symbols-outlined">code</span><span><b>API למפתחים</b><span class="lp-alt-desc">כל הכלים, בגישה ישירה.</span></span></a>
         </div>
@@ -331,7 +333,7 @@
   </div>
 
   <!-- ══════════════════════════════════════════════════════════
-       Tab: Reading (קריאה עצמית) — protocol browser
+       Tab: Reading (דיוני הכנסת) — protocol browser
   ══════════════════════════════════════════════════════════ -->
   <div id="tab-reading" class="app-tab-panel hidden">
 
@@ -471,26 +473,63 @@
           <span class="material-symbols-outlined text-primary" style="font-size:32px;font-variation-settings:'FILL' 1">library_books</span>
         </div>
         <div>
-          <div class="text-xl font-bold text-on-surface mb-2">קריאה עצמית</div>
+          <div class="text-xl font-bold text-on-surface mb-2">דיוני הכנסת</div>
           <div class="text-sm text-on-surface-variant max-w-xs leading-relaxed">ה-מקום לקרוא את פרוטוקולי הכנסת המלאים</div>
         </div>
       </div>
     </div>
   </div>
 
+  <!-- ══════════════════════════════════════════════════════════
+       Tab: Profiles (פרופילים) — 26th Knesset party lists, candidates and profiles (profiles.js)
+  ══════════════════════════════════════════════════════════ -->
+  <div id="tab-profiles" class="app-tab-panel hidden">
+    <div id="profiles-root"></div>
+  </div>
+  <div class="pf-popup" id="pf-popup" hidden></div>
+  <div id="pf-bill-overlay" role="dialog" aria-modal="true">
+    <div class="dialog">
+      <div class="pf-bill-dialog-head">
+        <h2></h2>
+        <button class="btn btn-ghost btn-icon" type="button" title="סגירה" data-click="profilesCloseBill"><span class="material-symbols-outlined">close</span></button>
+      </div>
+      <div class="dialog-body"><div class="pf-bill-text"></div></div>
+      <div class="dialog-footer">
+        <a class="btn btn-secondary btn-sm" data-pf-bill-source href="#" target="_blank" rel="noopener" hidden><span class="material-symbols-outlined">description</span>המסמך המקורי</a>
+        <button class="btn btn-secondary btn-sm" type="button" data-pf-bill-more data-click="profilesBillMoreText" hidden><span class="material-symbols-outlined">expand_more</span>המשך הטקסט</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="pf-theme-sheet" role="dialog" aria-modal="true">
+    <aside class="pf-sheet">
+      <div class="pf-sheet-head"></div>
+      <div class="pf-sheet-body">
+        <p class="pf-sheet-summary"></p>
+        <div class="pf-sheet-timeline"></div>
+        <div class="pf-sheet-list"></div>
+        <div class="pf-center"><button class="btn btn-secondary btn-sm" type="button" data-pf-sheet-more data-click="profilesSheetMore" hidden><span class="material-symbols-outlined">expand_more</span>הצגת עוד</button></div>
+      </div>
+    </aside>
+  </div>
+
   <!-- ── Mobile bottom tab navigation ── -->
   <nav id="mobile-tab-bar" class="md:hidden fixed bottom-0 inset-x-0 z-50 bg-surface-container-lowest border-t border-surface-variant/20 flex safe-area-bottom">
     <button data-click="switchTab" data-arg="chat" id="mob-tab-chat" class="mobile-tab-btn active flex-1">
       <span class="material-symbols-outlined" style="font-size:22px">forum</span>
-      <span>בצ'אט</span>
+      <span>בצ'אט שלכם</span>
     </button>
     <button data-click="switchTab" data-arg="research" id="mob-tab-research" class="mobile-tab-btn flex-1">
-      <span class="material-symbols-outlined" style="font-size:22px">chat</span>
-      <span>מחקר</span>
+      <span class="material-symbols-outlined" style="font-size:22px">smart_toy</span>
+      <span>בצ'אט שלנו</span>
     </button>
     <button data-click="switchTab" data-arg="reading" id="mob-tab-reading" class="mobile-tab-btn flex-1">
       <span class="material-symbols-outlined" style="font-size:22px">library_books</span>
-      <span>קריאה</span>
+      <span>דיוני הכנסת</span>
+    </button>
+    <button data-click="switchTab" data-arg="profiles" id="mob-tab-profiles" class="mobile-tab-btn flex-1">
+      <span class="material-symbols-outlined" style="font-size:22px">groups</span>
+      <span>פרופילים</span>
     </button>
   </nav>
 
@@ -511,7 +550,7 @@
       <h2>הגדרות</h2>
 
       <section class="settings-group">
-        <h3 class="settings-group-title">קריאה עצמית</h3>
+        <h3 class="settings-group-title">דיוני הכנסת</h3>
         <div class="settings-row">
           <div>
             <div class="settings-label">קישורי שיתוף כוללים את החיפוש</div>
@@ -526,7 +565,7 @@
 
       <fieldset class="settings-group" id="settings-research" disabled>
         <h3 class="settings-group-title">מחקר אוטומטי</h3>
-        <div class="settings-group-note">ההגדרות האלה זמינות בלשונית מחקר אוטומטי</div>
+        <div class="settings-group-note">ההגדרות האלה זמינות בלשונית בצ'אט שלנו</div>
         <div class="settings-row">
           <div>
             <div class="settings-label">הצגת שלבי עיבוד תמיד</div>
@@ -588,6 +627,7 @@
   <script src="{{ asset('url_state.js') }}"></script>
   <script src="{{ asset('landing.js') }}"></script>
   <script src="{{ asset('browser.js') }}"></script>
+  <script src="{{ asset('profiles.js') }}"></script>
   <script src="{{ asset('tabs.js') }}"></script>
   <script src="{{ asset('filters.js') }}"></script>
   <script src="{{ asset('actions.js') }}"></script>

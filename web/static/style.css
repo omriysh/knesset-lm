@@ -2175,6 +2175,9 @@ body > header {
   align-items: center;
 }
 
+/* Profiles tab scrolls as one page */
+#tab-profiles.app-tab-panel { display: block; overflow-y: auto; }
+
 /* Filter dropdowns must overflow the tab panel */
 #tab-reading.app-tab-panel {
   overflow: visible;
@@ -2565,7 +2568,8 @@ input.field--sm { padding: 8px 12px; }
   #tab-reading,
   #tab-history,
   #tab-research,
-  #tab-chat {
+  #tab-chat,
+  #tab-profiles {
     padding-bottom: calc(60px + env(safe-area-inset-bottom, 0px));
   }
   /* Reduce welcome-centering shift on short mobile screens */

@@ -821,9 +821,16 @@ function browserFocusSpeech(speechIdx, range = null) {
                         length: mark ? textRange.length : null });
   }
 
-  const target = Math.max(0, _anchorCenterInCol(col, mark || card) - col.clientHeight / 2);
+  const anchor = mark || card;
+  const targetTop = () => Math.max(0, _anchorCenterInCol(col, anchor) - col.clientHeight / 2);
+  const target = targetTop();
   const alreadyThere = Math.abs(col.scrollTop - target) < 4;
-  if (mark) _afterScrollSettles(col, alreadyThere, () => marks.forEach(m => m.classList.add('sweep')));
+  /* The layout can still reflow during a long scroll (the filter bar folds, the scrollbar appears), so
+     land on the anchor again once it settles. */
+  _afterScrollSettles(col, alreadyThere, () => {
+    if (Math.abs(col.scrollTop - targetTop()) > 8) col.scrollTo({ top: targetTop(), behavior: 'instant' });
+    if (mark) marks.forEach(m => m.classList.add('sweep'));
+  });
   col.scrollTo({ top: target, behavior: 'smooth' });
 }
 

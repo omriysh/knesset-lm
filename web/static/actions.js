@@ -4,7 +4,7 @@
  * (Enter key) = a key of PAGE_ACTIONS, with its argument in data-arg or other data-* attributes.
  * Only the actions listed here can run; sanitized markdown never carries data-* attributes.
  *
- * Non-module script, loaded after url_state.js / landing.js / browser.js / tabs.js / filters.js (whose functions it calls) and
+ * Non-module script, loaded after url_state.js / landing.js / browser.js / profiles.js / tabs.js / filters.js (whose functions it calls) and
  * before app.js; app.js and gemini_key.js expose their functions on window.
  */
 const PAGE_ACTIONS = {
@@ -62,6 +62,35 @@ const PAGE_ACTIONS = {
   browserShareMeeting:          (el) => browserShareMeeting(el),
   browserShareSpeech:           (el) => browserShareSpeech(el),
   browserShareQuote:            (el) => browserShareQuote(el),
+  profilesNav:                  (el, event) => profilesNav(el, event),
+  profilesFilterParties:        (el) => profilesFilterParties(el),
+  profilesFilterCandidates:     (el) => profilesFilterCandidates(el),
+  profilesTab:                  (el) => profilesTab(el),
+  profilesThemeToggle:          (el) => profilesThemeToggle(el),
+  profilesThemeJump:            (el) => profilesThemeJump(el),
+  profilesThemeQuarter:         (el, event) => profilesThemeQuarter(el, event),
+  profilesThemeSheet:           (el) => profilesThemeSheet(el),
+  profilesSheetQuarter:         (el) => profilesSheetQuarter(el),
+  profilesSheetMore:            () => profilesSheetMore(),
+  profilesCloseSheet:           () => profilesCloseSheet(),
+  profilesOpinionDates:         () => profilesOpinionDates(),
+  profilesThemesAll:            (el) => profilesThemesAll(el),
+  profilesCite:                 (el, event) => profilesCite(el, event),
+  profilesOpinionSearch:        (el) => profilesOpinionSearch(el),
+  profilesOpinionTheme:         (el) => profilesOpinionTheme(el),
+  profilesOpinionGroup:         (el) => profilesOpinionGroup(el),
+  profilesOpinionMore:          () => profilesOpinionMore(),
+  profilesOpinionPills:         () => profilesOpinionPills(),
+  profilesVoteSearch:           (el) => profilesVoteSearch(el),
+  profilesVoteFilter:           (el) => profilesVoteFilter(el),
+  profilesVoteMore:             () => profilesVoteMore(),
+  profilesBillSearch:           (el) => profilesBillSearch(el),
+  profilesBillRole:             (el) => profilesBillRole(el),
+  profilesBillStage:            (el) => profilesBillStage(el),
+  profilesBillMore:             () => profilesBillMore(),
+  profilesBillPeek:             (el) => profilesBillPeek(el),
+  profilesBillMoreText:         () => profilesBillMoreText(),
+  profilesCloseBill:            () => profilesCloseBill(),
 };
 
 function runDeclaredAction(event, actionAttribute) {

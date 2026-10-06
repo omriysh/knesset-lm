@@ -75,7 +75,8 @@ _HINTS_BY_ERROR = {
     "mk_id_not_resolved":  "pass one of the candidates' mk_id, or call find_mk with the name",
     "bill_not_found":      "bill_id comes from query_bills results",
     "meeting_not_found":   "meeting_id comes from query_protocols rows",
-    "missing_query":       "this tool needs a query (a name or Hebrew key words)",
+    "missing_query":       "this tool needs a query (a name or Hebrew key words); query_bills also accepts mk_id alone",
+    "invalid_initiator_role": "initiator_role is initiator or joined, and needs mk_id",
     "invalid_query":       f"at most {config.API_MAX_QUERY_WORDS} words; key words are AND-ed, "
                            "use one topic per call",
     "invalid_date_from":   "dates are YYYY-MM-DD, e.g. 2024-01-31",
@@ -500,9 +501,10 @@ def get_meeting_attendance(request: Request, meeting_id: str, format: str = "jso
 
 
 @router.get("/v1/bills")
-def query_bills(request: Request, q: str = "", knesset_num: int | None = None, offset: int = 0,
-                format: str = "json"):
-    return run_tool(request, "query_bills", {"query": q, "knesset_num": knesset_num, "offset": offset}, format)
+def query_bills(request: Request, q: str = "", mk_id: str | None = None, initiator_role: str = "",
+                knesset_num: int | None = None, offset: int = 0, format: str = "json"):
+    return run_tool(request, "query_bills", {"query": q, "mk_id": mk_id, "initiator_role": initiator_role,
+                                             "knesset_num": knesset_num, "offset": offset}, format)
 
 
 @router.get("/v1/bills/{bill_id}")

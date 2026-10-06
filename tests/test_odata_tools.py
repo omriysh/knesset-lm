@@ -97,7 +97,10 @@ class TestGetBill:
         assert row["bill_id"] == KNOWN_BILL_ID
         assert row["bill_name"] == KNOWN_BILL_NAME
         assert row["knesset_num"] == 25
-        assert KNOWN_BILL_INITIATOR in row["initiators"]
+        assert KNOWN_BILL_INITIATOR.items() <= next(
+            initiator for initiator in row["initiators"]
+            if initiator["person_id"] == KNOWN_BILL_INITIATOR["person_id"]).items()
+        assert row["status"]
         assert KNOWN_BILL_DOC_IDS <= {d["doc_id"] for d in row["documents"]}
         assert "text" not in row
 
@@ -343,6 +346,49 @@ class TestLiveBills:
     def test_bills_of_knesset_20(self, live_odata):
         rows = _rows(tools.handle_query_bills({"query": "חינוך", "knesset_num": 20, "top_k": 5}))
         assert rows and {r["knesset_num"] for r in rows} == {20}
+
+
+class TestLiveBillsOfMk:
+    def test_initiated_and_joined_add_up_to_every_bill(self, live_odata):
+        totals = {role: _paging(tools.handle_query_bills({"mk_id": "30807", "initiator_role": role, "top_k": 1}))["total"]
+                  for role in ("", "initiator", "joined")}
+        assert totals["initiator"] > 0 and totals["joined"] > 0
+        assert totals[""] == totals["initiator"] + totals["joined"]
+
+    def test_rows_are_the_mks_bills_with_named_initiators(self, live_odata):
+        rows = _rows(tools.handle_query_bills({"mk_id": "30807", "initiator_role": "joined", "top_k": 5}))
+        assert rows
+        for row in rows:
+            mk_row = next(i for i in row["initiators"] if i["person_id"] == 30807)
+            assert row["mk_is_initiator"] is False and mk_row["is_initiator"] is False
+            assert all(i["full_name"] for i in row["initiators"])
+            assert row["status"]
+
+    def test_query_and_knesset_narrow_the_mks_bills(self, live_odata):
+        rows = _rows(tools.handle_query_bills({"mk_id": "30839", "query": "שוברים", "knesset_num": 25}))
+        assert KNOWN_BILL_ID in {r["bill_id"] for r in rows}
+        assert {r["knesset_num"] for r in rows} == {25}
+        known = next(r for r in rows if r["bill_id"] == KNOWN_BILL_ID)
+        assert known["first_document_date"] and known["first_document_date"] <= known["last_updated"][:10]
+
+    def test_unknown_mk(self, live_odata):
+        assert tools.handle_query_bills({"mk_id": "999999999"}).error == "mk_not_found"
+
+    def test_role_needs_an_mk(self):
+        assert tools.handle_query_bills({"query": "חינוך", "initiator_role": "joined"}).error == "invalid_initiator_role"
+        assert tools.handle_query_bills({"mk_id": "30807", "initiator_role": "author"}).error == "invalid_initiator_role"
+
+
+class TestLivePersonVoteSummary:
+    def test_counts_add_up_and_fit_the_plenum_votes(self, live_odata):
+        summary = kdb.get_person_vote_summary(30807, 25)
+        assert summary["votes_cast"] == sum(summary["by_result"].values()) > 0
+        assert summary["plenum_votes"] >= summary["votes_cast"]
+        assert summary["first_vote"] <= summary["last_vote"]
+
+    def test_person_without_votes(self, live_odata):
+        summary = kdb.get_person_vote_summary(30807, 20)
+        assert summary["votes_cast"] == summary["plenum_votes"] == 0
 
 
 class TestLiveFindMkOlderKnesset:

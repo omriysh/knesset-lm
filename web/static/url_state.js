@@ -16,6 +16,7 @@
 
 const PROTOCOLS_PATH = '/protocols';
 const RESEARCH_PATH  = '/research';
+const PROFILES_PATH  = '/profiles';
 const CHAT_PATH      = '/';
 
 const _LIST_FILTER_PARAMS = { committee: 'committees', mk: 'mks', party: 'parties' };
@@ -123,6 +124,7 @@ function setActiveTab(name, { writeUrl, push }) {
   _activeTab = name;
   if (!writeUrl) return;
   if (name === 'chat') _writeUrl(CHAT_PATH, push);
+  else if (name === 'profiles') _writeUrl(profilesCurrentPath(), push);
   else _writeUrl(name === 'research' ? RESEARCH_PATH : protocolPath(_protocolUrlState), push);
 }
 
