@@ -44,16 +44,17 @@ function switchTab(name, { writeUrl = true, push = true } = {}) {
   setActiveTab(name, { writeUrl, push });
 }
 
-/* ── URL routing: / (in your chat), /research, /protocols?…, /profiles… (url_state.js, profiles.js);
+/* ── URL routing: / (home), /chat, /research, /protocols?…, /profiles… (url_state.js, profiles.js);
    back/forward re-applies the URL ── */
 function applyUrlRoute() {
   if (location.pathname === RESEARCH_PATH) { switchTab('research', { writeUrl: false }); return; }
+  if (location.pathname === CHAT_PATH) { switchTab('chat', { writeUrl: false }); return; }
   if (location.pathname === PROFILES_PATH || location.pathname.startsWith(PROFILES_PATH + '/')) {
     switchTab('profiles', { writeUrl: false });
     profilesApplyRoute();
     return;
   }
-  if (location.pathname !== PROTOCOLS_PATH) { switchTab('chat', { writeUrl: false }); return; }
+  if (location.pathname !== PROTOCOLS_PATH) { switchTab('home', { writeUrl: false }); return; }
   switchTab('reading', { writeUrl: false });
   const target = readProtocolUrl();
   setProtocolUrlState(target);

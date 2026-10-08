@@ -626,6 +626,7 @@ class ResearchRespondRequest(BaseModel):
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+@app.get(config.CHAT_PAGE_PATH, response_class=HTMLResponse, include_in_schema=False)
 @app.get(config.RESEARCH_PAGE_PATH, response_class=HTMLResponse, include_in_schema=False)
 @app.get(config.PROTOCOLS_PAGE_PATH, response_class=HTMLResponse, include_in_schema=False)
 @app.get(PROFILE_PAGE_PATHS[0], response_class=HTMLResponse, include_in_schema=False)

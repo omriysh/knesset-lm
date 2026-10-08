@@ -33,7 +33,8 @@
 
       <!-- Desktop tab navigation (center) -->
       <nav class="seg hidden md:flex">
-        <button data-click="switchTab" data-arg="chat" id="dt-tab-chat" class="seg-btn app-tab-btn active" type="button">בצ'אט שלכם</button>
+        <button data-click="switchTab" data-arg="home" id="dt-tab-home" class="seg-btn app-tab-btn active" type="button">ראשי</button>
+        <button data-click="switchTab" data-arg="chat" id="dt-tab-chat" class="seg-btn app-tab-btn" type="button">בצ'אט שלכם</button>
         <button data-click="switchTab" data-arg="research" id="dt-tab-research" class="seg-btn app-tab-btn" type="button">בצ'אט שלנו</button>
         <button data-click="switchTab" data-arg="reading" id="dt-tab-reading" class="seg-btn app-tab-btn" type="button">דיוני הכנסת</button>
         <button data-click="switchTab" data-arg="profiles" id="dt-tab-profiles" class="seg-btn app-tab-btn" type="button">פרופילים</button>
@@ -52,9 +53,37 @@
   </header>
 
   <!-- ══════════════════════════════════════════════════════════
+       Tab: Home (ראשי) — pick a way in: talk about it in your chat, or read the profiles
+  ══════════════════════════════════════════════════════════ -->
+  <div id="tab-home" class="app-tab-panel">
+   <div class="landing">
+    <div class="landing-content home">
+      <h1 class="lp-headline home-title">בואו להכיר את <span class="lp-mark">המועמדים</span> לכנסת</h1>
+      <div class="home-graph" id="home-graph">
+        <div class="home-card home-choices">
+          <button class="home-choice" type="button" data-click="homePick" data-arg="talk"><span class="material-symbols-outlined">forum</span>תן לי לדבר עם הצ'אט</button>
+          <button class="home-choice" type="button" data-click="homePick" data-arg="read"><span class="material-symbols-outlined">menu_book</span>תן לי לקרוא בעצמי</button>
+        </div>
+        <div class="home-edge" aria-hidden="true"></div>
+        <div class="home-next">
+          <a class="home-card home-next-card" data-option="talk" href="/chat" data-click="landingOpenTab" data-arg="chat" hidden>
+            <p>נותנים לצ'אט גישה לאתר הכנסת ומבינים מה העמדות של הפוליטיקאים ומה הם עשו.</p>
+            <span class="material-symbols-outlined home-next-arrow">arrow_back</span>
+          </a>
+          <a class="home-card home-next-card" data-option="read" href="/profiles" data-click="landingOpenTab" data-arg="profiles" hidden>
+            <p>סיכום ציטוטים של חברי הכנסת מהדיונים בארבע השנים האחרונות.</p>
+            <span class="material-symbols-outlined home-next-arrow">arrow_back</span>
+          </a>
+        </div>
+      </div>
+    </div>
+   </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════
        Tab: In your chat (בצ'אט שלכם) — landing page, connect the MCP to Claude / ChatGPT
   ══════════════════════════════════════════════════════════ -->
-  <div id="tab-chat" class="app-tab-panel">
+  <div id="tab-chat" class="app-tab-panel hidden">
    <div class="landing">
     <div class="landing-content">
 
@@ -516,7 +545,11 @@
 
   <!-- ── Mobile bottom tab navigation ── -->
   <nav id="mobile-tab-bar" class="md:hidden fixed bottom-0 inset-x-0 z-50 bg-surface-container-lowest border-t border-surface-variant/20 flex safe-area-bottom">
-    <button data-click="switchTab" data-arg="chat" id="mob-tab-chat" class="mobile-tab-btn active flex-1">
+    <button data-click="switchTab" data-arg="home" id="mob-tab-home" class="mobile-tab-btn active flex-1">
+      <span class="material-symbols-outlined" style="font-size:22px">home</span>
+      <span>ראשי</span>
+    </button>
+    <button data-click="switchTab" data-arg="chat" id="mob-tab-chat" class="mobile-tab-btn flex-1">
       <span class="material-symbols-outlined" style="font-size:22px">forum</span>
       <span>בצ'אט שלכם</span>
     </button>
@@ -632,6 +665,7 @@
   <script src="{{ asset('markdown.js') }}"></script>
   <script src="{{ asset('url_state.js') }}"></script>
   <script src="{{ asset('landing.js') }}"></script>
+  <script src="{{ asset('home.js') }}"></script>
   <script src="{{ asset('browser.js') }}"></script>
   <script src="{{ asset('profiles.js') }}"></script>
   <script src="{{ asset('tabs.js') }}"></script>

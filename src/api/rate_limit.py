@@ -28,7 +28,7 @@ PROFILE_DB_ROUTE_PATTERN = re.compile(r"^/api/profiles/party/\d+/candidate/\d+/(
 PROFILE_PAGE_PATTERN = re.compile(r"^/profiles(/party/\d+(/candidate/\d+)?)?/?$")
 AGENT_ROUTE_PATTERN = re.compile(r"^/api/research/(start|[^/]+/(respond|workspace/ask))$")
 STREAM_REPLAY_PATTERN = re.compile(r"^/api/research/[^/]+/stream$")
-UNLIMITED_PATHS = ("/", config.RESEARCH_PAGE_PATH, config.PROTOCOLS_PAGE_PATH, "/favicon.ico", "/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json",
+UNLIMITED_PATHS = ("/", config.CHAT_PAGE_PATH, config.RESEARCH_PAGE_PATH, config.PROTOCOLS_PAGE_PATH, "/favicon.ico", "/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json",
                    "/llms.txt", "/llms-full.txt", "/agent-instructions")
 UNLIMITED_PREFIXES = ("/static/", "/docs-assets/", "/api/profiles/photo/", "/api/profiles/ballot/", "/api/profiles/logo/")
 

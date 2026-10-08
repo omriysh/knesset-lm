@@ -6,7 +6,8 @@
  *                                  → reading tab: the search and filters, the open meeting, a speech in it,
  *                                    and a character range in that speech (src/utils/source_links.py
  *                                    builds the same links for the API)
- *   /                              → the default tab, URL left as is until the user moves
+ *   /chat                          → in-your-chat tab (connect the MCP)
+ *   /                              → the home tab, URL left as is until the user moves
  *
  * The reading tab's state lives in _protocolUrlState; browser.js / tabs.js update it through
  * updateProtocolUrl, and the address bar always shows it, so copying the address shares the view.
@@ -17,7 +18,8 @@
 const PROTOCOLS_PATH = '/protocols';
 const RESEARCH_PATH  = '/research';
 const PROFILES_PATH  = '/profiles';
-const CHAT_PATH      = '/';
+const CHAT_PATH      = '/chat';
+const HOME_PATH      = '/';
 
 const _LIST_FILTER_PARAMS = { committee: 'committees', mk: 'mks', party: 'parties' };
 const _MEETING_ID_RE  = /^p?\d{1,12}$/;
@@ -123,7 +125,8 @@ let _activeTab = null;
 function setActiveTab(name, { writeUrl, push }) {
   _activeTab = name;
   if (!writeUrl) return;
-  if (name === 'chat') _writeUrl(CHAT_PATH, push);
+  if (name === 'home') _writeUrl(HOME_PATH, push);
+  else if (name === 'chat') _writeUrl(CHAT_PATH, push);
   else if (name === 'profiles') _writeUrl(profilesCurrentPath(), push);
   else _writeUrl(name === 'research' ? RESEARCH_PATH : protocolPath(_protocolUrlState), push);
 }

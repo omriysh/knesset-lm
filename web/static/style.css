@@ -2970,7 +2970,55 @@ body.show-welcome .research-slot { display: block; }
 .prompt-text { direction: ltr; unicode-bidi: plaintext; }
 
 /* ══════════════════════════════════════════════════════════════════
-   "בצ'אט שלכם" tab (/) — landing page: live-quote demo, prompt cards, connect-to-chat steps
+   "ראשי" tab (/) — the headline and a two-card graph: the choice card draws an edge to the chosen way in
+   ══════════════════════════════════════════════════════════════════ */
+.home { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 44px; padding: 48px 16px 96px; }
+.home-title { margin: 0; text-align: center; text-wrap: balance; }
+.home-graph { --home-edge-len: 72px; --home-next-width: 340px; display: flex; align-items: center; justify-content: center; }
+.home-card { padding: 16px; border-radius: var(--radius-lg); background: var(--surface-lowest); box-shadow: var(--shadow-raised); }
+.home-choices { display: flex; flex-direction: column; gap: 8px; width: 280px; }
+.home-choice { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-radius: var(--radius); background: var(--surface-low); color: var(--ink); font-size: 1rem; font-weight: 700; text-align: start; transition: background 0.2s, color 0.2s, transform 0.2s; }
+.home-choice .material-symbols-outlined { color: var(--primary); transition: color 0.2s; }
+.home-choice:hover { background: var(--primary-soft); color: var(--primary-dim); }
+.home-choice.active { background: var(--primary); color: var(--on-primary); }
+.home-choice.active .material-symbols-outlined { color: var(--on-primary); }
+.home-choice:active { transform: scale(0.98); }
+
+.home-edge { position: relative; flex: none; width: 0; height: 2px; transition: width 0.5s cubic-bezier(.6,0,.2,1); }
+.home-edge::before { content: ''; position: absolute; inset: 0; background: var(--primary); transform: scaleX(0); transform-origin: right; transition: transform 0.35s 0.15s ease-out; }
+.home-edge::after { content: ''; position: absolute; top: 50%; left: 0; width: 8px; height: 8px; margin-top: -4px; margin-left: -4px; border-radius: 50%; background: var(--primary); opacity: 0; transition: opacity 0.2s 0.45s; }
+.home-next { flex: none; width: 0; transition: width 0.5s cubic-bezier(.6,0,.2,1); }
+.home-next-card { display: flex; align-items: flex-end; gap: 16px; width: var(--home-next-width); padding: 22px; color: var(--ink-soft); text-decoration: none; opacity: 0; visibility: hidden; transform: translateX(-8px); transition: opacity 0.3s 0.4s, transform 0.3s 0.4s, visibility 0s 0.4s, box-shadow 0.2s, background 0.2s; }
+.home-next-card[hidden] { display: none; }
+.home-next-card:hover { background: var(--primary-soft); }
+.home-next-card p { flex: 1; margin: 0; font-size: 1rem; line-height: 1.7; text-wrap: pretty; }
+.home-next-arrow { flex: none; color: var(--primary); transition: transform 0.2s; }
+.home-next-card:hover .home-next-arrow { transform: translateX(-4px); }
+.home-graph--swapped .home-next-card { animation: home-fade 0.35s ease-out both; }
+@keyframes home-fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+.home-graph--open .home-edge { width: var(--home-edge-len); }
+.home-graph--open .home-edge::before { transform: scaleX(1); }
+.home-graph--open .home-edge::after { opacity: 1; }
+.home-graph--open .home-next { width: var(--home-next-width); }
+.home-graph--open .home-next-card { opacity: 1; visibility: visible; transform: none; }
+
+@media (max-width: 860px) {
+  .home { justify-content: flex-start; gap: 32px; padding-top: 56px; }
+  .home-graph { --home-edge-len: 40px; flex-direction: column; }
+  .home-choices, .home-next-card { width: min(340px, calc(100vw - 32px)); }
+  .home-edge { width: 2px; height: 0; transition-property: height; }
+  .home-edge::before { transform: scaleY(0); transform-origin: top; }
+  .home-edge::after { top: auto; bottom: 0; left: 50%; margin: 0 0 -4px -4px; }
+  .home-next { width: auto; height: 0; transition-property: height; }
+  .home-next-card { transform: translateY(-8px); }
+  .home-graph--open .home-edge { width: 2px; height: var(--home-edge-len); }
+  .home-graph--open .home-edge::before { transform: scaleY(1); }
+  .home-graph--open .home-next { width: auto; height: auto; }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   "בצ'אט שלכם" tab (/chat) — landing page: live-quote demo, prompt cards, connect-to-chat steps
    ══════════════════════════════════════════════════════════════════ */
 .landing { flex: 1; min-height: 0; overflow-y: auto; direction: ltr; }
 .landing-content { direction: rtl; }

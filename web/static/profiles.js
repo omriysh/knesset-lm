@@ -12,7 +12,7 @@ const PROFILE_TABS = {
   votes:  ['הצבעות', 'how_to_vote'],
   bills:  ['הצעות חוק', 'gavel'],
 };
-const PROFILE_TABS_BY_DEPTH = { full: ['roles', 'themes', 'votes', 'bills'], bills: ['roles', 'votes', 'bills'] };
+const PROFILE_TABS_BY_DEPTH = { full: ['themes', 'votes', 'bills', 'roles'], bills: ['votes', 'bills', 'roles'] };
 const THEME_COLORS = ['#7c3aed', '#1d4ed8', '#c2410c', '#0f766e', '#a16207', '#be185d', '#005f99', '#4d7c0f',
                       '#9333ea', '#b45309', '#0e7490', '#991b1b', '#475569', '#db2777', '#15803d', '#6d28d9'];
 const THEMES_SHOWN = 6;

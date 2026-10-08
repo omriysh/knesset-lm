@@ -150,13 +150,13 @@ def web_client(real_db, tmp_path):
 
 
 class TestWebPages:
-    @pytest.mark.parametrize("path", ["/", config.RESEARCH_PAGE_PATH, config.PROTOCOLS_PAGE_PATH])
+    @pytest.mark.parametrize("path", ["/", config.CHAT_PAGE_PATH, config.RESEARCH_PAGE_PATH, config.PROTOCOLS_PAGE_PATH])
     def test_every_tab_path_serves_the_page(self, web_client, path):
         response = web_client.get(path, params={"meeting": "123", "speech": "4"})
         assert response.status_code == 200
         assert "/static/url_state.js" in response.text
 
-    @pytest.mark.parametrize("path", [config.RESEARCH_PAGE_PATH, config.PROTOCOLS_PAGE_PATH])
+    @pytest.mark.parametrize("path", [config.CHAT_PAGE_PATH, config.RESEARCH_PAGE_PATH, config.PROTOCOLS_PAGE_PATH])
     def test_mcp_host_does_not_serve_the_page(self, web_client, path):
         assert web_client.get(path, headers={"Host": "mcp.meorav.com"}).status_code == 404
 

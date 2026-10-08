@@ -282,6 +282,7 @@ AGENT_LIST_MAX_TOP_K          = 100      # bills / votes; the OData service caps
 
 # Web page paths and the links the API/MCP rows carry to them (utils/source_links.py)
 PUBLIC_SITE_URL               = "https://meorav.com"
+CHAT_PAGE_PATH                = "/chat"
 RESEARCH_PAGE_PATH            = "/research"
 PROTOCOLS_PAGE_PATH           = "/protocols"
 
