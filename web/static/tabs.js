@@ -35,14 +35,38 @@ function switchTab(name, { writeUrl = true, push = true } = {}) {
   if (mobBtn) mobBtn.classList.add('active');
 
   if (name === 'reading' && writeUrl && !_readingTabHasResults()) browseSearch({ push: false });
-  if (name === 'chat') landingStartDemo();
   if (name === 'profiles') profilesShow();
+  if (name === 'research') setResearchTabShown(true);
 
   const researchSettings = document.getElementById('settings-research');
   if (researchSettings) researchSettings.disabled = name !== 'research';
 
   setActiveTab(name, { writeUrl, push });
 }
+
+/* ── "בצ'אט שלנו" tab: hidden until turned on in the settings or opened by a link ── */
+const _RESEARCH_TAB_SHOWN_KEY = 'showResearchTab';
+
+function researchTabShown() {
+  try {
+    return localStorage.getItem(_RESEARCH_TAB_SHOWN_KEY) === 'true';
+  } catch (exc) {
+    console.warn('[tabs] localStorage unavailable:', exc);
+    return false;
+  }
+}
+
+function setResearchTabShown(shown) {
+  document.documentElement.classList.toggle('research-tab-shown', shown);
+  try {
+    localStorage.setItem(_RESEARCH_TAB_SHOWN_KEY, shown ? 'true' : 'false');
+  } catch (exc) {
+    console.warn('[tabs] localStorage unavailable:', exc);
+  }
+  if (!shown && _activeTab === 'research') switchTab('home');
+}
+
+document.documentElement.classList.toggle('research-tab-shown', researchTabShown());
 
 /* ── URL routing: / (home), /chat, /research, /protocols?…, /profiles… (url_state.js, profiles.js);
    back/forward re-applies the URL ── */
@@ -118,6 +142,9 @@ function _readingTabHasResults() {
   return !!document.querySelector('#reading-browser-area .browser-standalone-wrapper, #browse-loading-overlay');
 }
 
+/* The filters stay open over the first results, and fold away over later ones. */
+let _browseSearchedBefore = false;
+
 /* push: false when the search only loads what the current URL already says (a link, the first visit). */
 async function browseSearch({ push = true } = {}) {
   const input = document.getElementById('reading-search-input');
@@ -170,7 +197,9 @@ async function browseSearch({ push = true } = {}) {
       }
     );
 
-    _collapseRfb();
+    if (_browseSearchedBefore) _collapseRfb();
+    else document.querySelector('.rfb')?.classList.add('rfb-has-results');
+    _browseSearchedBefore = true;
 
   } catch (err) {
     console.error('[tabs] browse search failed:', err);
@@ -218,11 +247,22 @@ document.addEventListener('scroll', (event) => {
   const previous = _lastScrollTop.get(scroller) ?? scroller.scrollTop;
   _lastScrollTop.set(scroller, scroller.scrollTop);
   const rfb = document.querySelector('.rfb');
-  if (!rfb?.classList.contains('rfb-has-results') || rfb.classList.contains('rfb-collapsed')) return;
+  if (!rfb?.classList.contains('rfb-has-results')) return;
+  if (rfb.classList.contains('rfb-collapsed')) {
+    if (_scrolledUpToTranscriptTop(scroller, previous)) rfbExpand();
+    return;
+  }
   if (document.querySelector('.rfb-dropdown:not(.hidden)')) return;
   _scrolledSinceExpand += Math.abs(scroller.scrollTop - previous);
   if (_scrolledSinceExpand > _AUTO_COLLAPSE_SCROLL_PX) _collapseRfb();
 }, true);
+
+/* Reaching the top of the transcript by scrolling (not by a jump, like opening another meeting) unfolds the filters. */
+const _MAX_SCROLL_STEP_PX = 400;
+function _scrolledUpToTranscriptTop(scroller, previousScrollTop) {
+  return scroller.id === 'browser-transcript-col' && scroller.scrollTop <= 0
+    && previousScrollTop > 0 && previousScrollTop < _MAX_SCROLL_STEP_PX;
+}
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
 function _setBrowseLoading(on) {

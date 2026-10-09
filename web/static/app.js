@@ -68,6 +68,7 @@ function openSettings() {
   document.getElementById('toggle-stages-always').checked =
     localStorage.getItem('showStagesAlways') === 'true';
   document.getElementById('toggle-share-search').checked = window.shareIncludesSearch();
+  document.getElementById('toggle-research-tab').checked = researchTabShown();
   refreshGeminiKeySettingsStatus();
   refreshModelSettings();
 }
@@ -85,7 +86,9 @@ async function openHelp() {
   if (_helpLoaded) return;
   try {
     const md = await fetch('/api/help').then(r => r.text());
-    document.getElementById('help-content').innerHTML = renderMarkdown(md);
+    const content = document.getElementById('help-content');
+    content.innerHTML = renderMarkdown(md);
+    content.querySelector('h2').after(document.getElementById('help-steps-template').content.cloneNode(true));
     _helpLoaded = true;
   } catch (exc) {
     console.error('[app] help load failed:', exc);

@@ -147,7 +147,7 @@ async function _pfRenderParties(root, current) {
       <p>${data.parties.length} רשימות, כפי שהוגשו <a href="${pfEsc(data.source)}" target="_blank" rel="noopener">לוועדת הבחירות המרכזית</a> (טרם אושרו סופית).</p></div>
       <input type="text" class="field field--sm pf-search" placeholder="חיפוש רשימה או מועמד בראשה" data-input="profilesFilterParties">
     </div>
-    <div class="pf-party-grid" id="pf-party-grid">${data.parties.map(party => _pfLink(`${PROFILES_PATH}/party/${party.id}`, `
+    <div class="pf-party-grid pf-stagger" id="pf-party-grid">${data.parties.map(party => _pfLink(`${PROFILES_PATH}/party/${party.id}`, `
       ${_pfBallot(party)}
       <div class="pf-party-body">
         <div class="pf-party-name">${pfEsc(party.name)}</div>
@@ -155,6 +155,13 @@ async function _pfRenderParties(root, current) {
         <div class="pf-party-stats">${_pfPartyTags(party)}</div>
       </div>`, 'pf-party').replace('<a ', `<a data-search="${pfEsc(`${party.name} ${party.leader} ${party.letters}`)}" `)).join('')}</div>
   </div>`;
+  _pfStaggerIn(root);
+}
+
+function _pfStaggerIn(root) {
+  root.querySelectorAll('.pf-stagger').forEach(grid => {
+    [...grid.children].forEach((card, i) => card.style.setProperty('--pf-i', i));
+  });
 }
 
 function profilesFilterParties(input) {
@@ -198,9 +205,10 @@ async function _pfRenderParty(root, partyId, current) {
       <div class="pf-legend-keys"><span class="pf-tag pf-tag--mk">${pfIcon('verified')}פרופיל מלא</span><span class="pf-tag pf-tag--former">${pfIcon('history')}כיהן בכנסת קודמת</span></div>
       <div class="seg seg--sm"><button class="seg-btn active" type="button" data-click="profilesFilterCandidates" data-arg="all">כל המועמדים</button><button class="seg-btn" type="button" data-click="profilesFilterCandidates" data-arg="mks">רק חברי כנסת</button></div>
     </div>
-    <div class="pf-cand-grid" id="pf-cand-grid">${party.candidates.map(card).join('')}</div>
+    <div class="pf-cand-grid pf-stagger" id="pf-cand-grid">${party.candidates.map(card).join('')}</div>
     <p class="pf-note">תמונות מאתר הכנסת, ולמועמדים שלא כיהנו בכנסת מוויקיפדיה כשיש. המספר הוא המקום ברשימה.</p>
   </div>`;
+  _pfStaggerIn(root);
 }
 
 function profilesFilterCandidates(button) {

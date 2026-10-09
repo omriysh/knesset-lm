@@ -1,24 +1,10 @@
 /**
- * landing.js — the "בצ'אט שלכם" tab (/): the live-quote demo, the review prompt builder and the connect-to-chat steps.
+ * landing.js — the "בצ'אט שלכם" tab (/chat): the connect-to-chat steps and the review prompt builder.
  *
- * Non-module script, loaded before actions.js (whose PAGE_ACTIONS call these functions) and tabs.js
- * (switchTab starts the demo).
+ * Non-module script, loaded before actions.js (whose PAGE_ACTIONS call these functions).
  */
 
 const LANDING_MCP_URL = 'https://meorav.com/mcp';
-const LANDING_DEMO_STEP_MS = 4500;
-
-const LANDING_DEMO_SOURCES = [
-  { who: 'דוד ביטן · הליכוד', where: 'ועדת הכלכלה · 31.05.2026',
-    quote: 'אתה לא יכול לתעדף בלי שיש לך תחבורה ציבורית. עם כל הכבוד, נת"צים זה לא הדבר הכי חשוב בתחבורה ציבורית.',
-    url: '/protocols?meeting=2243047&speech=94&offset=0&length=100' },
-  { who: 'שלי טל מירון · יש עתיד', where: 'ועדת הכלכלה · 24.05.2026',
-    quote: 'זה נחמד מאוד שדברים כתובים על הדף והם כתובים נורא יפה, אבל אם בפועל אנחנו לא מקבלים נתונים, התפקיד שלנו פה זה לעשות פיקוח פרלמנטרי על עבודת הממשלה.',
-    url: '/protocols?meeting=2243051&speech=96&offset=0&length=200' },
-  { who: 'אורי מקלב · יהדות התורה', where: 'ועדת הכספים · 10.06.2026',
-    quote: 'אני יזמתי הצעת חוק והשקעתי רבות בנושא הזה של לא לקשור את הרכב, את הנסיעה ברכב, לדמי נסיעות שנותנים במשכורת.',
-    url: '/protocols?meeting=2243927&speech=15&offset=0&length=166' },
-];
 
 const LANDING_PROMPT_GUIDELINES = `Guidelines and rules:
 Give short and concise answers.
@@ -41,7 +27,7 @@ ${LANDING_PROMPT_GUIDELINES}
 
 Reply briefly that you are ready, and wait for my first question.`;
 
-const _landingBuilder = { order: 'party', depth: 'deep' };
+const _landingBuilder = { depth: 'deep' };
 
 const _LANDING_PARTIES_STEP_OPENER = 'Present the user with a list of the large parties, and ask them if they wish to profile all of them or only some (recommend to go with all of them, for a balanced read).';
 const _LANDING_MEORAV_SEARCH_GUIDELINES = `Candidates: ${LANDING_CANDIDATES_URL}
@@ -58,13 +44,12 @@ ${_LANDING_MEORAV_SEARCH_GUIDELINES}`;
 
 function _landingResearchStep(builder) {
   if (builder.depth === 'quick') return _landingQuickResearchStep();
-  const depth = LANDING_DEPTHS[builder.depth];
-  const order = builder.order === 'party'
-    ? 'Profile each of the selected parties based on the list of subjects. Output each profile to the user.'
-    : 'Then go over the subjects one at a time. For each subject, find the approach of each selected party and present them side by side, before moving to the next subject. After each subject, ask the user if they want to dig deeper before moving on.';
   return `Step 3
-${_LANDING_PARTIES_STEP_OPENER} ${order}
-In order to "profile a party" on a subject, take the first ${depth.candidates} contenders from the list of each party. For each of them, check the Knesset sources and search the web for them referring to the subject. Combine the approach of the candidates and present it as the approach of the party. Keep track of your sources of information and present them to the user. Dive deep and present well-based answers.
+${_LANDING_PARTIES_STEP_OPENER}
+Then ask the user how they want to go over the results: party by party, or subject by subject.
+Party by party: profile each of the selected parties based on the list of subjects. Output each profile to the user.
+Subject by subject: go over the subjects one at a time. For each subject, find the approach of each selected party and present them side by side, before moving to the next subject. After each subject, ask the user if they want to dig deeper before moving on.
+In order to "profile a party" on a subject, take the first ${LANDING_DEPTHS.deep.candidates} contenders from the list of each party. For each of them, check the Knesset sources and search the web for them referring to the subject. Combine the approach of the candidates and present it as the approach of the party. Keep track of your sources of information and present them to the user. Dive deep and present well-based answers.
 If you can, profile each party and even each of the top candidates using a new agent.
 ${_LANDING_MEORAV_SEARCH_GUIDELINES}`;
 }
@@ -73,11 +58,10 @@ function _landingSummaryStep(builder) {
   if (builder.depth === 'quick') return `Step 4
 Ask the user if they want to dig deeper into any party, subject or cell of the table. If so, profile it fully, with quotes and sources. Use visualizations when relevant to create a clear image of the comparison.
 Encourage the user to share their results and thoughts at the end of the process.`;
-  if (builder.order === 'party') return `Step 4
-Ask the user if they are interested in any comparisons between the different parties. If so, use the profiles you created and compare. Use visualizations when relevant to create a clear image of the comparison.
-Encourage the user to share their results and thoughts at the end of the process.`;
   return `Step 4
-Summarize the comparison across all the subjects. Use visualizations when relevant to create a clear image of the comparison. Ask the user if they want a full profile of any of the parties.
+If you went party by party, ask the user if they are interested in any comparisons between the different parties. If so, use the profiles you created and compare.
+If you went subject by subject, summarize the comparison across all the subjects, and ask the user if they want a full profile of any of the parties.
+Use visualizations when relevant to create a clear image of the comparison.
 Encourage the user to share their results and thoughts at the end of the process.`;
 }
 
@@ -102,42 +86,8 @@ ${LANDING_PROMPT_GUIDELINES}
 Before you begin a step, explain to the user what the step will be and the logic behind it.`;
 }
 
-let _landingDemoTimers = [];
-let _landingDemoStarted = false;
-
 function _landingReducedMotion() {
   return matchMedia('(prefers-reduced-motion: reduce)').matches;
-}
-
-function landingShowSource(index) {
-  const card = document.getElementById('lp-source');
-  if (!card) return;
-  const source = LANDING_DEMO_SOURCES[index];
-  document.querySelectorAll('.lp-cite').forEach(c => c.classList.toggle('on', c.dataset.arg === String(index)));
-  card.classList.remove('lit');
-  card.classList.add('hide');
-  setTimeout(() => {
-    document.getElementById('lp-src-who').textContent = source.who;
-    document.getElementById('lp-src-where').textContent = source.where;
-    document.getElementById('lp-src-quote').textContent = source.quote;
-    document.getElementById('lp-src-link').href = source.url;
-    card.classList.remove('hide');
-    requestAnimationFrame(() => requestAnimationFrame(() => card.classList.add('lit')));
-  }, 180);
-}
-
-function landingPickSource(el) {
-  _landingDemoTimers.forEach(clearTimeout);
-  landingShowSource(Number(el.dataset.arg));
-}
-
-function landingStartDemo() {
-  if (_landingDemoStarted) return;
-  _landingDemoStarted = true;
-  if (_landingReducedMotion()) { landingShowSource(0); return; }
-  LANDING_DEMO_SOURCES.forEach((_, i) => {
-    _landingDemoTimers.push(setTimeout(() => landingShowSource(i), 2800 + i * LANDING_DEMO_STEP_MS));
-  });
 }
 
 function _landingFallbackCopy(text) {
@@ -164,23 +114,93 @@ function _landingCopy(text, button, doneHtml) {
   });
 }
 
-function landingCopyMcpUrl(button) {
-  _landingCopy(LANDING_MCP_URL, button, '✓');
+const LANDING_STEP_COPY_TEXTS = { name: 'Meorav Yerushalmi', url: LANDING_MCP_URL };
+const LANDING_STEP_OPEN_MS = 500;
+const LANDING_STEP_EDGE_GAP_FRACTION = 0.2;
+
+function _landingEaseInOut(t) {
+  return t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
 }
 
-function landingGoInstall() {
+/* Where the next step (its card and arrowhead) lands once its open transition ends: open it with
+   transitions off, measure, then close it again so the real open still animates. */
+function _landingOpenedStepRect(track, next) {
+  track.classList.add('lp-measure');
+  next.classList.add('home-graph--open');
+  const rect = next.querySelector('.lp-step-body').getBoundingClientRect();
+  next.classList.remove('home-graph--open');
+  void track.offsetWidth;
+  track.classList.remove('lp-measure');
+  void track.offsetWidth;
+  return rect;
+}
+
+/* How far the track must scroll so the step keeps a gap of 20% of the track's width from its left edge
+   (a row of steps), or of its height from its bottom (a column on mobile). */
+function _landingStepScrollNeeded(track, stepRect, isRow) {
+  const trackRect = track.getBoundingClientRect();
+  if (isRow) return Math.min(0, stepRect.left - (trackRect.left + trackRect.width * LANDING_STEP_EDGE_GAP_FRACTION));
+  return Math.max(0, stepRect.bottom - (trackRect.bottom - trackRect.height * LANDING_STEP_EDGE_GAP_FRACTION));
+}
+
+function _landingScrollTrack(track, isRow, distance, behavior) {
+  track.scrollBy(isRow ? { left: distance, behavior } : { top: distance, behavior });
+}
+
+/* Scrolls the track along with the open transition, then corrects whatever the still-growing track
+   could not scroll yet. */
+function _landingKeepStepInView(track, next, isRow, stepRect) {
+  const distance = _landingStepScrollNeeded(track, stepRect, isRow);
+  if (!distance) return;
+  if (_landingReducedMotion()) { _landingScrollTrack(track, isRow, distance, 'auto'); return; }
+  const axis = isRow ? 'scrollLeft' : 'scrollTop';
+  const startScroll = track[axis];
+  const startTime = performance.now();
+  const frame = (now) => {
+    const progress = Math.min(1, (now - startTime) / LANDING_STEP_OPEN_MS);
+    track[axis] = startScroll + distance * _landingEaseInOut(progress);
+    if (progress < 1) { requestAnimationFrame(frame); return; }
+    const remaining = _landingStepScrollNeeded(track, next.querySelector('.lp-step-body').getBoundingClientRect(), isRow);
+    if (Math.abs(remaining) > 1) _landingScrollTrack(track, isRow, remaining, 'smooth');
+  };
+  requestAnimationFrame(frame);
+}
+
+function landingStepNext(el) {
+  const step = el.closest('.lp-step');
+  const next = step.nextElementSibling;
+  if (!next || next.classList.contains('home-graph--open')) return;
+  const track = step.closest('.lp-steps');
+  const isRow = getComputedStyle(track).flexDirection === 'row';
+  const stepRect = _landingOpenedStepRect(track, next);
+  step.classList.add('lp-step--done');
+  next.classList.add('home-graph--open');
+  _landingKeepStepInView(track, next, isRow, stepRect);
+}
+
+function landingScrollToSection(event, sectionId) {
+  event.preventDefault();
+  document.getElementById(sectionId).scrollIntoView({ behavior: _landingReducedMotion() ? 'auto' : 'smooth', block: 'start' });
+}
+
+function landingCopyField(button) {
+  _landingCopy(LANDING_STEP_COPY_TEXTS[button.dataset.arg], button.querySelector('.material-symbols-outlined'), 'check');
+}
+
+function _landingGoInstall() {
   const section = document.getElementById('lp-install');
   section.scrollIntoView({ behavior: _landingReducedMotion() ? 'auto' : 'smooth', block: 'start' });
-  const card = document.getElementById('lp-install-card');
-  card.classList.remove('flash');
-  void card.offsetWidth;
-  card.classList.add('flash');
+  document.querySelectorAll('.lp-step:first-child .home-next-card').forEach(step => {
+    step.classList.remove('flash');
+    void step.offsetWidth;
+    step.classList.add('flash');
+  });
 }
 
 function _landingCopiedThenInstall(name) {
   document.getElementById('lp-copied-name').textContent = `"${name}"`;
   document.getElementById('lp-copied-banner').hidden = false;
-  setTimeout(landingGoInstall, 600);
+  setTimeout(_landingGoInstall, 600);
 }
 
 function landingCopyReview(button) {
@@ -198,7 +218,7 @@ function landingSetInstallTab(button) {
     b.classList.toggle('active', b === button);
     b.setAttribute('aria-selected', b === button);
   });
-  document.querySelectorAll('[data-lp-panel]').forEach(p => { p.hidden = p.dataset.lpPanel !== button.dataset.arg; });
+  document.querySelectorAll('[data-lp-panel]').forEach(p => { p.classList.toggle('lp-panel-off', p.dataset.lpPanel !== button.dataset.arg); });
 }
 
 function _landingEscape(text) {
@@ -227,21 +247,23 @@ function _renderLandingBuilder() {
   });
 
   const flowmap = document.getElementById('lp-flowmap');
-  flowmap.dataset.order = b.order;
   flowmap.dataset.depth = b.depth;
-  flowmap.querySelectorAll('[data-click="landingBuilderSwapOrder"]').forEach(swap => { swap.disabled = b.depth === 'quick'; });
   document.getElementById('lp-review-prompt').innerHTML = _landingPromptHtml(landingBuildReviewPrompt(b));
 }
 
 function landingBuilderSet(button) {
   const [setting, value] = button.dataset.arg.split(':');
+  if (_landingBuilder[setting] === value) return;
   _landingBuilder[setting] = value;
   _renderLandingBuilder();
+  _landingBumpCopyButton();
 }
 
-function landingBuilderSwapOrder() {
-  _landingBuilder.order = _landingBuilder.order === 'party' ? 'topic' : 'party';
-  _renderLandingBuilder();
+function _landingBumpCopyButton() {
+  const copy = document.querySelector('.lp-copy');
+  copy.classList.remove('lp-copy--bump');
+  void copy.offsetWidth;
+  copy.classList.add('lp-copy--bump');
 }
 
 function _landingClaudeInstallLink() {
@@ -255,10 +277,13 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('lp-guidelines-prompt').innerHTML = _landingPromptHtml(LANDING_GUIDELINES_ONLY_PROMPT);
   const installLink = document.getElementById('lp-claude-install');
   if (installLink) installLink.href = _landingClaudeInstallLink();
+  _landingObserveReveals();
 });
 
-function landingScrollToSection(event, sectionId) {
-  event.preventDefault();
-  document.getElementById(sectionId)
-    .scrollIntoView({ behavior: _landingReducedMotion() ? 'auto' : 'smooth', block: 'start' });
+function _landingObserveReveals() {
+  const sections = document.querySelectorAll('.lp-reveal');
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(entry => entry.target.classList.toggle('lp-in', entry.isIntersecting));
+  }, { root: sections[0].closest('.landing'), rootMargin: '-20% 0px' });
+  sections.forEach(section => observer.observe(section));
 }
