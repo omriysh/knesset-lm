@@ -8,7 +8,7 @@
  * before app.js; app.js and gemini_key.js expose their functions on window.
  */
 const PAGE_ACTIONS = {
-  switchTab:                    (el) => switchTab(el.dataset.arg),
+  switchTab:                    (el) => { if (el.dataset.arg === 'profiles' && _activeTab === 'profiles') profilesGo(PROFILES_PATH); else switchTab(el.dataset.arg); },
   landingOpenTab:               (el, event) => { event.preventDefault(); switchTab(el.dataset.arg); },
   homePick:                     (el) => homePick(el.dataset.arg),
   landingScrollToSection:       (el, event) => landingScrollToSection(event, el.getAttribute('href').slice(1)),
@@ -69,7 +69,6 @@ const PAGE_ACTIONS = {
   profilesTab:                  (el) => profilesTab(el),
   profilesThemeToggle:          (el) => profilesThemeToggle(el),
   profilesThemeJump:            (el) => profilesThemeJump(el),
-  profilesThemeQuarter:         (el, event) => profilesThemeQuarter(el, event),
   profilesThemeSheet:           (el) => profilesThemeSheet(el),
   profilesSheetQuarter:         (el) => profilesSheetQuarter(el),
   profilesSheetMore:            () => profilesSheetMore(),

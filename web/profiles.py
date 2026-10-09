@@ -119,7 +119,8 @@ def profile_parties():
     """Lists with a current or former MK first, each group in alphabetical order."""
     lists = candidate_lists()
     return {"source": lists.get("source"), "built_at": lists.get("built_at"),
-            "parties": sorted((_party_card(party) for party in lists["parties"]),
+            "parties": sorted(({**_party_card(party), "candidates": [[c["position"], c["name"] or c["name_raw"]] for c in party["candidates"]]}
+                               for party in lists["parties"]),
                               key=lambda card: (not (card["full_profiles"] or card["former_mks"]), card["name"]))}
 
 

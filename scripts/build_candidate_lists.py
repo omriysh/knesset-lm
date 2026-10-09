@@ -374,6 +374,12 @@ _PARTIAL_MATCH_MIN_KNESSET = 20
 _NEWER_SITE_IDS_START = 850
 # MKs the Knesset site names by a nickname no source lists (בני גנץ = בנימין גנץ).
 SITE_IDS_BY_PERSON_ID = {30657: 988}
+# Candidates the lists name by a legal name, extra surname or spelling the MK roster doesn't have (חילי = יחיאל משה).
+PERSON_IDS_BY_CANDIDATE_NAME = {
+    "טרופר יחיאל משה": 30683, "כהן אליהו": 30083, "מעוז אביגדור": 30814, "לסקי שוץ גבריאלה": 30818,
+    "ביילין יוסף": 2192, "שיטרית שמעון": 2634, "בר עם עוזי": 861, "פורז פוזמנטיר אברהם": 519,
+    "יזבק היבא": 30715, "שיטרית קטרין": 30706,
+}
 _SITE_IDS_SCANNED_PAST_CURRENT = 50
 _SITE_API_ATTEMPTS = 4
 _SITE_API_RETRY_SECONDS = 10
@@ -532,7 +538,8 @@ def build() -> None:
     for page in raw_pages:
         candidates = []
         for candidate in parse_candidates(page["text"]):
-            person, note = match_mk(candidate["name_raw"], list(people.values()))
+            known_person_id = PERSON_IDS_BY_CANDIDATE_NAME.get(candidate["name_raw"])
+            person, note = (people[known_person_id], "") if known_person_id else match_mk(candidate["name_raw"], list(people.values()))
             if person and person.get("site_id") and _died(person["site_id"]):
                 note, person = f"matches {person['first_name']} {person['last_name']} ({person['person_id']}), who died", None
             if note:
