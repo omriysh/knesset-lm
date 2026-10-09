@@ -2995,21 +2995,39 @@ body.show-welcome .research-slot { display: block; }
 .home-edge { position: relative; flex: none; width: 0; height: 2px; transition: width 0.5s cubic-bezier(.6,0,.2,1); }
 .home-edge::before { content: ''; position: absolute; inset: 0; background: var(--primary); transform: scaleX(0); transform-origin: right; transition: transform 0.35s 0.15s ease-out; }
 .home-edge::after { content: ''; position: absolute; top: 50%; left: 0; width: 8px; height: 8px; margin-top: -4px; margin-left: -4px; border-radius: 50%; background: var(--primary); opacity: 0; transition: opacity 0.2s 0.45s; }
-.home-next { flex: none; width: 0; transition: width 0.5s cubic-bezier(.6,0,.2,1); }
+.home-next { display: flex; flex: none; flex-direction: column; gap: 12px; width: 0; transition: width 0.5s cubic-bezier(.6,0,.2,1); }
 .home-next-card { display: flex; align-items: flex-end; gap: 16px; width: var(--home-next-width); padding: 22px; color: var(--ink-soft); text-decoration: none; opacity: 0; visibility: hidden; transform: translateX(-8px); transition: opacity 0.3s 0.4s, transform 0.3s 0.4s, visibility 0s 0.4s, box-shadow 0.2s, background 0.2s; }
 .home-graph[hidden], .home-next-card[hidden] { display: none; }
 .home-next-card:hover { background: var(--primary-soft); }
 .home-next-card p { flex: 1; margin: 0; font-size: 1rem; line-height: 1.7; text-wrap: pretty; }
 .home-next-arrow { flex: none; color: var(--primary); transition: transform 0.2s; }
 .home-next-card:hover .home-next-arrow { transform: translateX(-4px); }
-.home-graph--swapped .home-next-card { animation: home-fade 0.35s ease-out both; }
-@keyframes home-fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
 .home-graph--open .home-edge { width: var(--home-edge-len); }
 .home-graph--open .home-edge::before { transform: scaleX(1); }
 .home-graph--open .home-edge::after { opacity: 1; }
 .home-graph--open .home-next { width: var(--home-next-width); }
 .home-graph--open .home-next-card { opacity: 1; visibility: visible; transform: none; }
+
+/* The home choice: picking an option draws the line out and slides its cards in; switching folds them back first (home.js). */
+#home-graph .home-next-card { transform: translateX(16px); transition: opacity 0.18s, transform 0.22s ease-in, visibility 0s 0.22s, box-shadow 0.2s, background 0.2s; }
+#home-graph.home-graph--open:not(.home-graph--folding) .home-next-card { opacity: 1; visibility: visible; transform: none; transition: opacity 0.35s 0.35s, transform 0.55s 0.35s cubic-bezier(0.2, 0.7, 0.3, 1), visibility 0s 0.35s, box-shadow 0.2s, background 0.2s; }
+#home-graph.home-graph--open:not(.home-graph--folding) .home-next-card--advanced { transition-delay: 0.47s, 0.47s, 0.47s, 0s, 0s; }
+#home-graph.home-graph--folding .home-next-card { opacity: 0; visibility: hidden; transform: translateX(16px); }
+#home-graph.home-graph--folding .home-edge::before { transform: scaleX(0); transition: transform 0.2s 0.06s ease-in; }
+#home-graph.home-graph--folding .home-edge::after { opacity: 0; transition: opacity 0.1s; }
+
+.home-fork { display: none; }
+@media (min-width: 861px) {
+  .home { justify-content: flex-start; padding-top: clamp(48px, 18vh, 200px); }
+  #home-graph { min-height: 236px; }
+  #home-graph:has(.home-next-card--advanced:not([hidden])) .home-edge::before, #home-graph:has(.home-next-card--advanced:not([hidden])) .home-edge::after { display: none; }
+  #home-graph:has(.home-next-card--advanced:not([hidden])) .home-next { position: relative; display: grid; grid-auto-rows: 1fr; gap: 0; }
+  #home-graph:has(.home-next-card--advanced:not([hidden])) .home-next-card { margin-block: 6px; }
+  #home-graph:has(.home-next-card--advanced:not([hidden])) .home-fork { position: absolute; top: 0; right: calc(-1 * var(--home-edge-len)); display: block; width: var(--home-edge-len); height: 100%; overflow: visible; clip-path: inset(-4px -4px -4px calc(100% + 4px)); transition: clip-path 0.22s 0.05s ease-in; }
+  #home-graph.home-graph--open:not(.home-graph--folding):has(.home-next-card--advanced:not([hidden])) .home-fork { clip-path: inset(-4px); transition: clip-path 0.5s 0.1s cubic-bezier(0.45, 0, 0.2, 1); }
+  .home-fork path { fill: none; stroke: var(--primary); stroke-width: 2; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+}
 
 @media (max-width: 860px) {
   .home { justify-content: flex-start; gap: 32px; padding-top: 56px; }
@@ -3024,6 +3042,8 @@ body.show-welcome .research-slot { display: block; }
   .home-graph--open .home-edge { width: 2px; height: var(--home-edge-len); }
   .home-graph--open .home-edge::before { transform: scaleY(1); }
   .home-graph--open .home-next { width: auto; height: auto; }
+  #home-graph .home-next-card, #home-graph.home-graph--folding .home-next-card { transform: translateY(-12px); }
+  #home-graph.home-graph--folding .home-edge::before { transform: scaleY(0); }
 }
 
 /* ══════════════════════════════════════════════════════════════════
