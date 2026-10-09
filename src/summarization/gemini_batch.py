@@ -76,6 +76,25 @@ def extract_text(response: dict) -> tuple[str | None, str]:
     return text or None, finish_reason
 
 
+def describe_failure(result: dict, answer_text: str | None = None) -> str:
+    """Why a batch result gave no usable answer: its error, the prompt block reason, or the finish reason
+    and the start of the answer."""
+    response = result.get("response") or {}
+    error = result.get("error") or response.get("error")
+    if error:
+        return error.get("message", str(error)) if isinstance(error, dict) else str(error)
+    block_reason = (response.get("promptFeedback") or {}).get("blockReason")
+    if block_reason:
+        return f"prompt blocked: {block_reason}"
+    candidates = response.get("candidates") or []
+    if not candidates:
+        return "no candidates in the response"
+    finish_reason = candidates[0].get("finishReason") or "unknown"
+    if not answer_text:
+        return f"empty answer (finishReason {finish_reason})"
+    return f"unparsable answer (finishReason {finish_reason}): {answer_text[:120]!r}"
+
+
 def download_results(client: genai.Client, job) -> list[dict]:
     dest = getattr(job, "dest", None)
     if dest is None:

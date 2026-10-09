@@ -70,8 +70,8 @@ from utils.protocol_download import json_files_by_meeting, safe_dirname, transcr
 from summarization.prompts import SYSTEM_PROMPT_TOPICS, SYSTEM_PROMPT_OPINIONS
 from summarization.output_parsing import parse_topics, parse_opinions, verify_quotes
 from summarization.summary_io import summary_path_for_transcript
-from summarization.gemini_batch import (estimate_request_tokens, extract_text, load_state, resume_active_jobs,
-                                        run_pool, save_state, split_batches, write_jsonl)
+from summarization.gemini_batch import (describe_failure, estimate_request_tokens, extract_text, load_state,
+                                        resume_active_jobs, run_pool, save_state, split_batches, write_jsonl)
 from summarization.transcript_chunks import opinion_chunk_spans, split_span, topic_chunk_spans
 
 # ── Batch constants ───────────────────────────────────────────────────────────
@@ -97,6 +97,7 @@ PROMPTS = {
     OPINIONS_TASK: SYSTEM_PROMPT_OPINIONS,
 }
 TRUNCATED_FINISH_REASON = "MAX_TOKENS"
+COMPLETE_FINISH_REASON = "STOP"
 
 # Published batch prices (USD per 1M tokens) used only for the dry-run estimate.
 BATCH_PRICE_PER_M = {
@@ -292,12 +293,17 @@ def _apply_task_result(entry: dict, task: str, text: str | None, finish_reason: 
     """Parse one answer into entry["results"]. Returns False when the output is unusable.
     An answer cut off by the output cap is split and re-requested (opinions) or kept without its
     cut-off last line (topics, or an opinions chunk too short to split). "Not a protocol" from a
-    whole-transcript topics answer ends the meeting; from a topics chunk it counts only if every chunk says so."""
+    whole-transcript topics answer ends the meeting; from a topics chunk it counts only if every chunk says so.
+    An empty opinions answer that finished normally means nobody stated an opinion in that part."""
+    is_opinions = _task_kind(task) == OPINIONS_TASK
+    if text is None and is_opinions and finish_reason == COMPLETE_FINISH_REASON:
+        tqdm.write(f"  [no opinions] {Path(entry['proto']).name} {task}: empty answer, keeping no opinions")
+        entry["results"][task] = []
+        return True
     if text is None:
         return False
     truncated = finish_reason == TRUNCATED_FINISH_REASON
     span = _span_of_task(task)
-    is_opinions = _task_kind(task) == OPINIONS_TASK
     if truncated and is_opinions and _resplit_truncated_span(entry, span):
         state["stats"]["truncated_resplit"] += 1
         tqdm.write(f"  [truncated] {Path(entry['proto']).name} opinions {span}: output cap reached, "
@@ -322,8 +328,9 @@ def _process_results(results: list[dict], keys_in_batch: list[str], state: dict)
 
     A key with an error, an unparsable answer, or no result at all counts as
     one attempt for that request; MAX_PASS_ATTEMPTS drops the meeting (no file
-    is written, so a later run retries it). A meeting whose requests are all
-    in is written to disk and removed from the queue.
+    is written, so a later run retries it) and records the reason of every attempt
+    in state["failures"]. A meeting whose requests are all in is written to disk
+    and removed from the queue.
     """
     queue = state["queue"]
     entries_by_id = {e["meeting_id"]: e for e in queue}
@@ -332,9 +339,13 @@ def _process_results(results: list[dict], keys_in_batch: list[str], state: dict)
 
     def _fail(entry: dict, task: str, reason: str) -> None:
         attempts = entry["attempts"][task] = entry["attempts"].get(task, 0) + 1
+        reasons = entry.setdefault("failure_reasons", {}).setdefault(task, [])
+        reasons.append(reason)
         tqdm.write(f"  [ERROR] {Path(entry['proto']).name} ({task}): {reason}  attempt {attempts}/{MAX_PASS_ATTEMPTS}")
         if attempts >= MAX_PASS_ATTEMPTS:
             state["stats"]["failed"] += 1
+            state.setdefault("failures", []).append(
+                {"meeting_id": entry["meeting_id"], "transcript": entry["proto"], "task": task, "reasons": reasons})
             done_ids.add(entry["meeting_id"])
 
     for result in results:
@@ -351,9 +362,7 @@ def _process_results(results: list[dict], keys_in_batch: list[str], state: dict)
         response = result.get("response") or {}
         text, finish_reason = extract_text(response)
         if not _apply_task_result(entry, task, text, finish_reason, state):
-            err_src = result.get("error") or response.get("error") or {}
-            reason = err_src.get("message", "empty or unparsable response") if isinstance(err_src, dict) else str(err_src)
-            _fail(entry, task, reason)
+            _fail(entry, task, describe_failure(result, text))
             continue
 
         if not _pending_tasks(entry) or entry["not_protocol"]:
@@ -558,6 +567,7 @@ def summarize_knesset(knesset_num: int, *, skip_patterns: list[str] = (), force_
         state = _new_state(knesset_num, [])
     state.setdefault("active_jobs", [])
     state["stats"] = dict.fromkeys(RUN_COUNTERS, 0)
+    state["failures"] = []
     if state.get("model") and state["model"] != SETTINGS["model"] and state["queue"]:
         print(f"[WARN] state file was created for model {state['model']}, running with {SETTINGS['model']}")
     state["model"] = SETTINGS["model"]
@@ -591,7 +601,18 @@ def summarize_knesset(knesset_num: int, *, skip_patterns: list[str] = (), force_
         rescan_into_state()
         _run(client, state, state_path, tmp_dir)
     save_state(state, state_path)
+    _print_failures(state, state_path)
     return {**state["stats"], "queued": len(state["queue"])}
+
+
+def _print_failures(state: dict, state_path: Path) -> None:
+    if not state["failures"]:
+        return
+    print(f"\n{len(state['failures'])} meeting(s) failed every attempt (also saved under \"failures\" in {state_path}):")
+    for failure in state["failures"]:
+        print(f"  {failure['transcript']} ({failure['task']})")
+        for attempt, reason in enumerate(failure["reasons"], start=1):
+            print(f"    attempt {attempt}: {reason}")
 
 
 def main() -> None:
