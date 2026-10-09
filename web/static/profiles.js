@@ -173,7 +173,58 @@ function profilesFilterParties(input) {
 
 /* ── a party's candidates ────────────────────────────────────────── */
 
+/* Candidates who were never MKs have no Knesset data; their card offers a prompt for researching them in the visitor's own chat. */
+let _pfPartyNewcomers = null;
+const NEWCOMERS_PROMPT_MAX_POSITION = 50;
+function _pfNewcomersPrompt({ partyName, candidates }) {
+  const candidateLines = candidates.filter(c => c.position <= NEWCOMERS_PROMPT_MAX_POSITION).map(c => `${c.position}. ${c.name}`).join('\n');
+  return `Your goal is to help me prepare for the 2026 Israel elections. I want your help learning about the candidates of ${partyName} that were not previously members of the Knesset. At the end of this message is the list of those candidates, with their places on the party's list. Not all of them have a realistic chance of entering the Knesset, so first search online for recent polls to estimate how many seats ${partyName} is expected to win. Then cover the listed candidates whose places are within that estimate, plus 5 more to spare.
+Search the web for current news, statements and social media posts. Describe each of these candidates in one paragraph. I'm mostly interested in their personal background - where do they live, how old are they, and what did they do for a living until now. What is their education and military experience if there is any.
+For now, don't focus on political opinions. If a candidate is very clearly associated with a specific political agenda, state that briefly. Ask me if I want a deeper dive into any of the candidates after the brief paragraphs, in which you may also try and identify political stances.
+
+Full candidates list for future reference: ${LANDING_CANDIDATES_URL}
+After you answer regarding the provided candidates, ask me if I want you to look at candidates of more parties.
+
+Guidelines and rules:
+Give short and concise answers.
+Answer only in Hebrew.
+Eliminate any political bias; be as balanced as possible.
+Always provide sources to the answers you write. Provide quotes when relevant, integrating the sources into the answer and not just writing a list at the end. Split sources into 3 categories: Knesset data, journalism, social media. Prefer Knesset sources over anything else, and then prefer recent information over old. In this case you are unlikely to find Knesset data, since the candidates were not previously members of the Knesset.
+Help inspire critical thinking. Make sure to frame narratives as narratives.
+Don't be critical of the user's world view unless they ask you to. If you think it's important for the process, ask the user before you do so. It's better to challenge and ask questions than to provide criticism.
+
+Candidates of ${partyName} who were not previously members of the Knesset (place on the list. name):
+${candidateLines}`;
+}
+
+function profilesNewcomer(card) {
+  const overlay = document.getElementById('pf-newcomer-overlay');
+  overlay.querySelector('p').textContent = `אין מידע על ${card.dataset.name} באתר הכנסת. אפשר לבקש מהצ'אט שלכם לחפש בגוגל רקע על כל המועמדים של "${_pfPartyNewcomers.partyName}" שלא היו בכנסת עדיין.`;
+  overlay.querySelector('pre').textContent = _pfNewcomersPrompt(_pfPartyNewcomers);
+  overlay.querySelector('details').open = false;
+  overlay.classList.add('open');
+}
+
+function profilesCopyNewcomersPrompt(button) {
+  _landingCopy(_pfNewcomersPrompt(_pfPartyNewcomers), button, `${pfIcon('check')}הועתק`);
+}
+
+function profilesCloseNewcomer() { document.getElementById('pf-newcomer-overlay').classList.remove('open'); }
+
 const JOINT_LIST_MAIN_PARTY_MAX_SHARE = 0.75;
+const KNESSET_START_YEARS = [1949, 1951, 1955, 1959, 1961, 1965, 1969, 1974, 1977, 1981, 1984, 1988, 1992,
+  1996, 1999, 2003, 2006, 2009, 2013, 2015, 2019, 2019, 2020, 2021, 2022, 2026];
+
+/* The years of the latest run of consecutive Knessets, e.g. [18, 20, 21, 22] → 2015–2020. */
+function _pfLatestServiceYears(knessets) {
+  const sorted = [...knessets].sort((a, b) => a - b);
+  const last = sorted[sorted.length - 1];
+  let first = last;
+  while (sorted.includes(first - 1)) first--;
+  const startYear = KNESSET_START_YEARS[first - 1];
+  const endYear = KNESSET_START_YEARS[last] ?? new Date().getFullYear();
+  return startYear === endYear ? `${startYear}` : `${startYear}–${endYear}`;
+}
 async function _pfRenderParty(root, partyId, current) {
   root.innerHTML = `<div class="pf-page">${pfSpinner('טוען את הרשימה…')}</div>`;
   let party;
@@ -183,14 +234,15 @@ async function _pfRenderParty(root, partyId, current) {
   party.candidates.forEach(c => { fromPartyCounts[c.from_party] = (fromPartyCounts[c.from_party] || 0) + 1; });
   const [mainFromParty, mainFromPartyCount] = Object.entries(fromPartyCounts).sort((a, b) => b[1] - a[1])[0] || [];
   const isJointList = mainFromPartyCount < party.candidates.length * JOINT_LIST_MAIN_PARTY_MAX_SHARE;
+  _pfPartyNewcomers = { partyName: party.name, candidates: party.candidates.filter(c => c.profile === 'none') };
   const card = c => {
     const inner = `<span class="pf-cand-pos">${c.position}</span>${pfAvatar(c.photo_url, c.name)}
       <div class="pf-cand-name">${pfEsc(c.name)}</div>
-      ${c.profile === 'full' ? `<span class="pf-tag pf-tag--mk">${pfIcon('verified')}ח"כ בכנסת ה-25</span>`
-        : c.profile === 'bills' ? `<span class="pf-tag pf-tag--former">${pfIcon('history')}כנסת ${c.knessets[c.knessets.length - 1]}</span>` : ''}
+      ${c.profile === 'full' ? `<span class="pf-tag pf-tag--mk">${pfIcon('verified')}פרופיל מלא</span>`
+        : c.profile === 'bills' ? `<span class="pf-tag pf-tag--former">${pfIcon('history')}ח"כ ${_pfLatestServiceYears(c.knessets)}</span>` : ''}
       ${c.from_party && (isJointList || c.from_party !== mainFromParty) ? `<div class="pf-cand-from">מטעם ${pfEsc(c.from_party)}</div>` : ''}`;
     return c.profile === 'none'
-      ? `<div class="pf-cand pf-cand--none" data-profile="none">${inner}</div>`
+      ? `<button class="pf-cand pf-cand--none" type="button" data-profile="none" data-click="profilesNewcomer" data-name="${pfEsc(c.name)}">${inner}</button>`
       : _pfLink(`${PROFILES_PATH}/party/${partyId}/candidate/${c.position}`, inner, `pf-cand pf-cand--${c.profile}`).replace('<a ', `<a data-profile="${_esc(c.profile)}" `);
   };
   root.innerHTML = `<div class="pf-page">
@@ -960,9 +1012,10 @@ document.addEventListener('click', event => {
   if (!(event.target instanceof Element)) return;
   if (!event.target.closest('#pf-popup') && !event.target.closest('sup.pf-cite, .pf-spark i')) _pfHidePopup();
   if (event.target.id === 'pf-bill-overlay') profilesCloseBill();
+  if (event.target.id === 'pf-newcomer-overlay') profilesCloseNewcomer();
   if (event.target.id === 'pf-theme-sheet') profilesCloseSheet();
 });
-document.addEventListener('keydown', event => { if (event.key === 'Escape') { _pfHidePopup(); profilesCloseBill(); profilesCloseSheet(); } });
+document.addEventListener('keydown', event => { if (event.key === 'Escape') { _pfHidePopup(); profilesCloseBill(); profilesCloseNewcomer(); profilesCloseSheet(); } });
 document.addEventListener('scroll', event => { if (!(event.target instanceof Element && event.target.closest('#pf-popup'))) _pfHidePopup(); }, { capture: true, passive: true });
 
 function profilesNav(link, event) {

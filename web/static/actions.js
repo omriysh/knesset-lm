@@ -92,6 +92,9 @@ const PAGE_ACTIONS = {
   profilesBillPeek:             (el) => profilesBillPeek(el),
   profilesBillMoreText:         () => profilesBillMoreText(),
   profilesCloseBill:            () => profilesCloseBill(),
+  profilesNewcomer:             (el) => profilesNewcomer(el),
+  profilesCopyNewcomersPrompt:  (el) => profilesCopyNewcomersPrompt(el),
+  profilesCloseNewcomer:        () => profilesCloseNewcomer(),
 };
 
 function runDeclaredAction(event, actionAttribute) {

@@ -56,7 +56,9 @@
 .pf-cand-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
 .pf-cand { position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; background: var(--surface-lowest); border-radius: var(--radius-lg); padding: 16px 10px 12px; box-shadow: var(--shadow-raised); text-decoration: none; color: inherit; transition: transform 0.15s, box-shadow 0.15s; }
 a.pf-cand:hover { transform: translateY(-2px); box-shadow: 0 6px 18px color-mix(in srgb, var(--ink) 10%, transparent); }
-.pf-cand--none { box-shadow: none; background: color-mix(in srgb, var(--surface-lowest) 60%, transparent); }
+.pf-cand--none { box-shadow: none; background: color-mix(in srgb, var(--surface-lowest) 60%, transparent); border: 0; font: inherit; cursor: pointer; }
+.pf-cand--none:hover { transform: translateY(-2px); background: var(--surface-lowest); box-shadow: 0 6px 18px color-mix(in srgb, var(--ink) 8%, transparent); }
+.pf-cand--none:hover .pf-cand-name { color: var(--ink-soft); }
 .pf-cand-pos { position: absolute; top: 8px; right: 8px; min-width: 24px; height: 24px; padding: 0 6px; border-radius: 12px; background: var(--surface-low); color: var(--ink-muted); font-size: 0.72rem; font-weight: 800; display: grid; place-items: center; font-variant-numeric: tabular-nums; }
 .pf-avatar { width: 84px; height: 84px; border-radius: 50%; background: var(--surface-low); overflow: hidden; display: grid; place-items: center; color: var(--ink-faint); font-weight: 800; font-size: 1.3rem; flex: 0 0 auto; }
 .pf-avatar img { width: 100%; height: 100%; object-fit: cover; object-position: center 18%; }
@@ -308,8 +310,20 @@ a.pf-ally:hover .pf-ally-name { color: var(--primary); }
 .pf-note { font-size: 0.7rem; color: var(--ink-faint); margin-top: 8px; line-height: 1.5; }
 
 /* Bill text dialog */
-#pf-bill-overlay { position: fixed; inset: 0; z-index: 200; display: none; align-items: center; justify-content: center; padding: 16px; background: color-mix(in srgb, var(--ink) 40%, transparent); }
-#pf-bill-overlay.open { display: flex; }
+#pf-newcomer-overlay, #pf-bill-overlay { position: fixed; inset: 0; z-index: 200; display: none; align-items: center; justify-content: center; padding: 16px; background: color-mix(in srgb, var(--ink) 40%, transparent); }
+#pf-newcomer-overlay.open, #pf-bill-overlay.open { display: flex; }
+#pf-newcomer-overlay .dialog { width: min(460px, 100%); }
+#pf-newcomer-overlay .dialog { position: relative; max-height: 86vh; }
+#pf-newcomer-overlay .dialog-body { padding: 22px 22px 6px; overflow-y: auto; font-size: 0.95rem; line-height: 1.8; color: var(--ink-soft); }
+#pf-newcomer-overlay .dialog-body > p { padding-left: 32px; }
+.pf-newcomer-close { position: absolute; top: 10px; left: 10px; }
+.pf-newcomer-prompt { margin-top: 10px; }
+.pf-newcomer-prompt summary { display: inline-flex; align-items: center; gap: 4px; list-style: none; cursor: pointer; font-size: 0.85rem; font-weight: 700; color: var(--primary-dim); }
+.pf-newcomer-prompt summary::-webkit-details-marker { display: none; }
+.pf-newcomer-prompt summary .material-symbols-outlined { font-size: 20px; transition: transform 0.2s; }
+.pf-newcomer-prompt[open] summary .material-symbols-outlined { transform: rotate(180deg); }
+.pf-newcomer-prompt .help-prompt { margin-top: 8px; }
+#pf-newcomer-overlay .dialog-footer { padding: 12px 22px 18px; }
 #pf-bill-overlay .dialog { width: min(760px, 100%); height: min(86vh, 900px); }
 .pf-bill-dialog-head { display: flex; align-items: flex-start; gap: 10px; padding: 18px 22px 12px; border-bottom: 1px solid var(--surface-low); }
 .pf-bill-dialog-head h2 { flex: 1; font-size: 1rem; font-weight: 800; line-height: 1.45; color: var(--ink); }

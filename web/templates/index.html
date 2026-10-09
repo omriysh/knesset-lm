@@ -429,6 +429,18 @@
     <div id="profiles-root"></div>
   </div>
   <div class="pf-popup" id="pf-popup" hidden></div>
+  <div id="pf-newcomer-overlay" role="dialog" aria-modal="true">
+    <div class="dialog">
+      <button class="btn btn-ghost btn-icon pf-newcomer-close" type="button" title="סגירה" data-click="profilesCloseNewcomer"><span class="material-symbols-outlined">close</span></button>
+      <div class="dialog-body">
+        <p></p>
+        <details class="pf-newcomer-prompt"><summary><span class="material-symbols-outlined">expand_more</span>הצגת ה-prompt</summary><div class="help-prompt"><pre dir="ltr"></pre></div></details>
+      </div>
+      <div class="dialog-footer">
+        <button class="btn btn-primary btn-block" type="button" data-click="profilesCopyNewcomersPrompt"><span class="material-symbols-outlined">content_copy</span>העתקת ה-prompt</button>
+      </div>
+    </div>
+  </div>
   <div id="pf-bill-overlay" role="dialog" aria-modal="true">
     <div class="dialog">
       <div class="pf-bill-dialog-head">
