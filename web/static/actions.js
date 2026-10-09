@@ -4,13 +4,23 @@
  * (Enter key) = a key of PAGE_ACTIONS, with its argument in data-arg or other data-* attributes.
  * Only the actions listed here can run; sanitized markdown never carries data-* attributes.
  *
- * Non-module script, loaded after url_state.js / landing.js / home.js / browser.js / profiles.js / tabs.js / filters.js (whose functions it calls) and
+ * Non-module script, loaded after url_state.js / landing.js / home.js / browser.js / profiles.js / game.js / tabs.js / filters.js (whose functions it calls) and
  * before app.js; app.js and gemini_key.js expose their functions on window.
  */
 const PAGE_ACTIONS = {
   switchTab:                    (el) => { if (el.dataset.arg === 'profiles' && _activeTab === 'profiles') profilesGo(PROFILES_PATH); else switchTab(el.dataset.arg); },
   landingOpenTab:               (el, event) => { event.preventDefault(); switchTab(el.dataset.arg); },
   homePick:                     (el) => homePick(el.dataset.arg),
+  gameStart:                    () => gameStart(),
+  gameVote:                     (el) => gameVote(el),
+  gameResults:                  () => gameResults(),
+  gameContinue:                 () => gameContinue(),
+  gameHome:                     () => gameHome(),
+  gameSlice:                    (el) => gameSlice(el),
+  gameTheme:                    (el) => gameTheme(el),
+  gameCloseTheme:               () => gameCloseTheme(),
+  gameThemeBackdrop:            (el, event) => { if (event.target === el) gameCloseTheme(); },
+  gameOpenProfile:              (el, event) => gameOpenProfile(el, event),
   landingScrollToSection:       (el, event) => landingScrollToSection(event, el.getAttribute('href').slice(1)),
   landingStepNext:              (el) => landingStepNext(el),
   landingCopyField:             (el) => landingCopyField(el),

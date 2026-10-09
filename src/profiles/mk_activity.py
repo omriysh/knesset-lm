@@ -51,43 +51,94 @@ def _theme_ids_by_opinion(conn: sqlite3.Connection, mk_id: str, knesset_num: int
     return themes_of
 
 
-def _spread_evidence(opinions: list[dict]) -> list[dict]:
-    """EVIDENCE_PER_THEME opinions spread evenly over the theme's time range, preferring verified short quotes."""
+def _spread_evidence(opinions: list[dict], count: int = EVIDENCE_PER_THEME) -> list[dict]:
+    """count opinions spread evenly over the theme's time range, preferring verified short quotes."""
     low, high = EVIDENCE_QUOTE_CHARS
     quotable = [o for o in opinions if o["quote_verified"] and low < len(o["quote"] or "") < high] or opinions
-    if len(quotable) <= EVIDENCE_PER_THEME:
+    if len(quotable) <= count:
         return quotable
-    step = (len(quotable) - 1) / (EVIDENCE_PER_THEME - 1)
-    return [quotable[round(k * step)] for k in range(EVIDENCE_PER_THEME)]
+    step = (len(quotable) - 1) / (count - 1)
+    return [quotable[round(k * step)] for k in range(count)]
+
+
+_THEME_FIELDS = ("id", "rank", "title", "summary", "first_date", "last_date", "meeting_count", "opinion_count")
+
+
+def _mk_opinion_span(conn: sqlite3.Connection, mk_id: str, knesset_num: int) -> tuple[int, list[str]]:
+    """(the MK's opinion count, the quarters from their first opinion to their last)."""
+    total_opinions, first_date, last_date = conn.execute(
+        """SELECT COUNT(*), MIN(m.date), MAX(m.date) FROM opinions o JOIN meetings m ON m.meeting_id = o.meeting_id
+           WHERE o.mk_id = ? AND o.knesset_num = ?""", (mk_id, knesset_num)).fetchone()
+    return total_opinions, _quarters_between(first_date, last_date) if first_date else []
+
+
+def _add_theme_details(conn: sqlite3.Connection, theme: dict, quarters: list[str],
+                       evidence_count: int = EVIDENCE_PER_THEME) -> dict:
+    opinions = [_opinion_row(row) for row in conn.execute(f"""
+        SELECT {_OPINION_COLUMNS} FROM mk_theme_opinions l
+        JOIN opinions o ON o.meeting_id = l.meeting_id AND o.idx = l.opinion_idx
+        JOIN meetings m ON m.meeting_id = o.meeting_id
+        WHERE l.theme_id = ? ORDER BY m.date, o.meeting_id, o.idx""", (theme["id"],))]
+    per_quarter = Counter(_quarter(o["date"]) for o in opinions)
+    theme["quarter_counts"] = [per_quarter.get(q, 0) for q in quarters]
+    theme["top_committees"] = Counter(o["committee"] for o in opinions).most_common(3)
+    theme["evidence"] = _spread_evidence(opinions, evidence_count)
+    return theme
 
 
 def mk_themes(conn: sqlite3.Connection, mk_id: str, knesset_num: int) -> dict:
     """Themes in rank order, each with counts, top committees, a per-quarter opinion count and evidence."""
-    themes = [dict(zip(("id", "rank", "title", "summary", "first_date", "last_date", "meeting_count",
-                        "opinion_count"), row))
-              for row in conn.execute("""
-                  SELECT id, rank, title, summary, first_date, last_date, meeting_count, opinion_count
-                  FROM mk_themes WHERE mk_id = ? AND knesset_num = ? ORDER BY rank""", (mk_id, knesset_num))]
-    total_opinions, first_date, last_date = conn.execute(
-        """SELECT COUNT(*), MIN(m.date), MAX(m.date) FROM opinions o JOIN meetings m ON m.meeting_id = o.meeting_id
-           WHERE o.mk_id = ? AND o.knesset_num = ?""", (mk_id, knesset_num)).fetchone()
+    themes = [dict(zip(_THEME_FIELDS, row)) for row in conn.execute(f"""
+                  SELECT {', '.join(_THEME_FIELDS)} FROM mk_themes WHERE mk_id = ? AND knesset_num = ? ORDER BY rank""",
+                  (mk_id, knesset_num))]
+    total_opinions, quarters = _mk_opinion_span(conn, mk_id, knesset_num)
     in_a_theme = conn.execute("""
         SELECT COUNT(*) FROM (SELECT DISTINCT l.meeting_id, l.opinion_idx FROM mk_theme_opinions l
                               JOIN mk_themes t ON t.id = l.theme_id WHERE t.mk_id = ? AND t.knesset_num = ?)""",
                               (mk_id, knesset_num)).fetchone()[0]
-    quarters = _quarters_between(first_date, last_date) if first_date else []
     for theme in themes:
-        opinions = [_opinion_row(row) for row in conn.execute(f"""
-            SELECT {_OPINION_COLUMNS} FROM mk_theme_opinions l
-            JOIN opinions o ON o.meeting_id = l.meeting_id AND o.idx = l.opinion_idx
-            JOIN meetings m ON m.meeting_id = o.meeting_id
-            WHERE l.theme_id = ? ORDER BY m.date, o.meeting_id, o.idx""", (theme["id"],))]
-        per_quarter = Counter(_quarter(o["date"]) for o in opinions)
-        theme["quarter_counts"] = [per_quarter.get(q, 0) for q in quarters]
-        theme["top_committees"] = Counter(o["committee"] for o in opinions).most_common(3)
-        theme["evidence"] = _spread_evidence(opinions)
+        _add_theme_details(conn, theme, quarters)
     return {"themes": themes, "quarters": quarters, "total_opinions": total_opinions,
             "opinions_in_a_theme": in_a_theme}
+
+
+def mk_theme(conn: sqlite3.Connection, theme_id: int, evidence_count: int = EVIDENCE_PER_THEME) -> dict | None:
+    """
+    One theme as an item of mk_themes, with the MK's quarters and color_index, its index in the MK's rank
+    order (the profile page colors themes by it). None when there is no such theme.
+    """
+    row = conn.execute(f"SELECT {', '.join(_THEME_FIELDS)}, mk_id, knesset_num FROM mk_themes WHERE id = ?",
+                       (theme_id,)).fetchone()
+    if row is None:
+        return None
+    theme, (mk_id, knesset_num) = dict(zip(_THEME_FIELDS, row)), row[len(_THEME_FIELDS):]
+    _, quarters = _mk_opinion_span(conn, mk_id, knesset_num)
+    color_index = conn.execute("SELECT COUNT(*) FROM mk_themes WHERE mk_id = ? AND knesset_num = ? AND rank < ?",
+                               (mk_id, knesset_num, theme["rank"])).fetchone()[0]
+    return {"theme": _add_theme_details(conn, theme, quarters, evidence_count), "quarters": quarters,
+            "color_index": color_index}
+
+
+def themes_of_mks(conn: sqlite3.Connection, mk_ids: list[str], knesset_num: int) -> list[tuple[int, str, str, int]]:
+    """(theme id, mk_id, title, opinion_count) of every theme of these MKs."""
+    if not mk_ids:
+        return []
+    return conn.execute(f"""SELECT id, mk_id, title, opinion_count FROM mk_themes
+                            WHERE knesset_num = ? AND mk_id IN ({','.join('?' * len(mk_ids))})""",
+                        [knesset_num, *mk_ids]).fetchall()
+
+
+def mk_names(conn: sqlite3.Connection, mk_ids: list[str], knesset_num: int) -> dict[str, list[str]]:
+    """mk_id → the names a text may call them by: full name, first and last name, aliases."""
+    if not mk_ids:
+        return {}
+    names = {}
+    for mk_id, first, last, full, aliases in conn.execute(f"""
+            SELECT mk_id, first_name, last_name, full_name, aliases FROM mks
+            WHERE knesset_num = ? AND mk_id IN ({','.join('?' * len(mk_ids))})""", [knesset_num, *mk_ids]):
+        alias_list = [a.strip() for a in (aliases or "").split("|")]
+        names[mk_id] = [n for n in (full, first, last, *alias_list) if n and n.strip()]
+    return names
 
 
 def mk_opinions(conn: sqlite3.Connection, mk_id: str, knesset_num: int, *, fts_match: str | None = None,

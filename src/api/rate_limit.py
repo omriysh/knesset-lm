@@ -20,15 +20,15 @@ import config
 
 WINDOW_SECONDS = 60
 UPSTREAM_ROUTE_PREFIXES = ("/v1/mks", "/v1/committees", "/v1/parties", "/v1/bills", "/v1/votes")
-DB_ROUTE_PREFIXES = ("/v1/protocols", "/v1/meetings/", "/api/browse/search")
+DB_ROUTE_PREFIXES = ("/v1/protocols", "/v1/meetings/", "/api/browse/search", "/api/game/")
 DB_ROUTE_PATHS = ("/v1/meta", "/api/health")
 PROFILE_UPSTREAM_ROUTE_PATTERN = re.compile(
     r"^/api/profiles/(bill/\d+/text|party/\d+/candidate/\d+(/(vote-summary|votes|bills|cosponsors|roles))?)$")
-PROFILE_DB_ROUTE_PATTERN = re.compile(r"^/api/profiles/party/\d+/candidate/\d+/(themes|opinions)$")
+PROFILE_DB_ROUTE_PATTERN = re.compile(r"^/api/profiles/(party/\d+/candidate/\d+/(themes|opinions)|theme/\d+)$")
 PROFILE_PAGE_PATTERN = re.compile(r"^/profiles(/party/\d+(/candidate/\d+)?)?/?$")
 AGENT_ROUTE_PATTERN = re.compile(r"^/api/research/(start|[^/]+/(respond|workspace/ask))$")
 STREAM_REPLAY_PATTERN = re.compile(r"^/api/research/[^/]+/stream$")
-UNLIMITED_PATHS = ("/", config.CHAT_PAGE_PATH, config.RESEARCH_PAGE_PATH, config.PROTOCOLS_PAGE_PATH, "/favicon.ico", "/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json",
+UNLIMITED_PATHS = ("/", config.CHAT_PAGE_PATH, config.RESEARCH_PAGE_PATH, config.PROTOCOLS_PAGE_PATH, config.GAME_PAGE_PATH, "/favicon.ico", "/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json",
                    "/llms.txt", "/llms-full.txt", "/agent-instructions")
 UNLIMITED_PREFIXES = ("/static/", "/docs-assets/", "/api/profiles/photo/", "/api/profiles/ballot/", "/api/profiles/logo/")
 

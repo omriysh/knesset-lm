@@ -32,6 +32,11 @@ const KNESSET_SITE_BILL_URL = 'https://main.knesset.gov.il/activity/legislation/
 let _pfRoute = { party: null, candidate: null, tab: null };
 let _pfRenderToken = 0;
 let _pf = null;
+/* Theme cards outside the profile page (the game's results) carry data-pf-source="<name>" and register
+   their own { themes, quarters, evidence, api }; the profile page's themes are the "profile" source. */
+const _pfThemeSources = {};
+function pfSetThemeSource(name, source) { _pfThemeSources[name] = source; }
+const _pfThemeSourceOf = el => _pfThemeSources[el.closest('[data-pf-source]')?.dataset.pfSource || 'profile'];
 const _pfCache = new Map();
 
 /* ── helpers ─────────────────────────────────────────────────────── */
@@ -144,7 +149,7 @@ async function _pfRenderParties(root, current) {
   root.innerHTML = `<div class="pf-page">
     <div class="pf-head">
       <div><h1>הרשימות לכנסת ה-26</h1>
-      <p>${data.parties.length} רשימות, כפי שהוגשו <a href="${pfEsc(data.source)}" target="_blank" rel="noopener">לוועדת הבחירות המרכזית</a> (טרם אושרו סופית).</p></div>
+      <p>${data.parties.length} רשימות, כפי שהוגשו <a href="${pfEsc(data.source)}" target="_blank" rel="noopener">לוועדת הבחירות המרכזית</a> (טרם אושרו סופית), בסדר אלפאביתי.</p></div>
       <input type="text" class="field field--sm pf-search" placeholder="חיפוש רשימה או מועמד" data-input="profilesFilterParties">
     </div>
     <div class="pf-party-grid pf-stagger" id="pf-party-grid">${data.parties.map(party => _pfLink(`${PROFILES_PATH}/party/${party.id}`, `
@@ -453,11 +458,26 @@ async function _pfLoadThemesTab() {
     theme.color = THEME_COLORS[i % THEME_COLORS.length];
     theme.evidence.forEach((e, n) => { profile.evidence[`${theme.id}-${n}`] = e; });
   });
+  pfSetThemeSource('profile', { themes: profile.themes.themes, quarters: profile.themes.quarters, evidence: profile.evidence, api: profile.api });
   _pfRenderThemes(false);
   _pfLoadOpinions(true);
 }
 
-function _pfThemeById(id) { return (_pf.themes?.themes || []).find(t => String(t.id) === String(id)); }
+function _pfThemeById(id) { return (_pf?.themes?.themes || []).find(t => String(t.id) === String(id)); }
+
+function pfThemeCard(theme) {
+  const cites = theme.evidence.map((_, n) => `<sup class="pf-cite" data-click="profilesCite" data-cite="${_esc(`${theme.id}-${n}`)}">${n + 1}</sup>`).join('');
+  return `<article class="pf-theme" id="pf-theme-${_esc(theme.id)}" style="--tc:${theme.color}">
+    <button class="pf-theme-toggle" type="button" data-click="profilesThemeToggle" aria-expanded="false">
+      <span class="pf-theme-top"><h3>${pfEsc(theme.title)}</h3>${pfIcon('expand_more').replace('material-symbols-outlined', 'material-symbols-outlined pf-theme-chev')}</span>
+      <span class="pf-theme-stats"><span>מבוסס על <b>${pfNum(theme.opinion_count)}</b> התבטאויות מתוך <b>${pfNum(theme.meeting_count)}</b> דיונים</span></span>
+    </button>
+    <div class="pf-theme-more"><div>
+      <p>${pfEsc(theme.summary)} ${cites}</p>
+      <div class="pf-theme-foot"><button class="pf-link" type="button" data-click="profilesThemeSheet" data-arg="${_esc(theme.id)}">לכל ${pfNum(theme.opinion_count)} העמדות בנושא${pfIcon('chevron_left')}</button></div>
+    </div></div>
+  </article>`;
+}
 
 function _pfRenderThemes(showAll) {
   const data = _pf.themes;
@@ -466,23 +486,10 @@ function _pfRenderThemes(showAll) {
   if (!data.themes.length) { body.innerHTML = '<div class="pf-empty">עוד לא נוצרו נושאים לחבר/ת הכנסת הזה/ו.</div>'; return; }
   sub.textContent = `חלוקה גסה של התבטאויות מדיוני הכנסת לנושאים. מתוך ${pfNum(data.total_opinions)} התבטאויות שנצפו בדיונים, ${pfNum(data.opinions_in_a_theme)} נכללות בנושאים העיקריים האלה.`;
   const shown = showAll ? data.themes : data.themes.slice(0, THEMES_SHOWN);
-  const card = theme => {
-    const cites = theme.evidence.map((_, n) => `<sup class="pf-cite" data-click="profilesCite" data-cite="${theme.id}-${n}">${n + 1}</sup>`).join('');
-    return `<article class="pf-theme" id="pf-theme-${theme.id}" style="--tc:${theme.color}">
-      <button class="pf-theme-toggle" type="button" data-click="profilesThemeToggle" aria-expanded="false">
-        <span class="pf-theme-top"><h3>${pfEsc(theme.title)}</h3>${pfIcon('expand_more').replace('material-symbols-outlined', 'material-symbols-outlined pf-theme-chev')}</span>
-        <span class="pf-theme-stats"><span>מבוסס על <b>${pfNum(theme.opinion_count)}</b> התבטאויות מתוך <b>${pfNum(theme.meeting_count)}</b> דיונים</span></span>
-      </button>
-      <div class="pf-theme-more"><div>
-        <p>${pfEsc(theme.summary)} ${cites}</p>
-        <div class="pf-theme-foot"><button class="pf-link" type="button" data-click="profilesThemeSheet" data-arg="${_esc(theme.id)}">לכל ${pfNum(theme.opinion_count)} העמדות בנושא${pfIcon('chevron_left')}</button></div>
-      </div></div>
-    </article>`;
-  };
   body.innerHTML = `
     <div class="pf-ai-band">${pfIcon('auto_awesome')}<span>נוצר אוטומטית (Gemini) מסיכומי הפרוטוקולים · לחצו על נושא לסיכום ולכל העמדות בו</span></div>
     <div class="pf-theme-map">${data.themes.map(t => `<button type="button" style="flex:${t.opinion_count};--tc:${t.color}" title="${pfEsc(t.title)} · ${pfNum(t.opinion_count)} עמדות" data-click="profilesThemeJump" data-arg="${_esc(t.id)}"></button>`).join('')}</div>
-    <div class="pf-themes">${shown.map(card).join('')}</div>
+    <div class="pf-themes">${shown.map(pfThemeCard).join('')}</div>
     ${data.themes.length > THEMES_SHOWN ? `<div class="pf-center"><button class="btn btn-secondary btn-sm" type="button" data-click="profilesThemesAll" data-arg="${_esc(showAll ? '' : '1')}">${showAll ? `${pfIcon('expand_less')}הצגת ${THEMES_SHOWN} הנושאים הראשונים` : `${pfIcon('expand_more')}הצגת כל ${data.themes.length} הנושאים`}</button></div>` : ''}`;
 }
 
@@ -503,15 +510,16 @@ function _pfSpark(theme, quarters, top, height, action) {
     : '<i class="empty"></i>').join('')}</span>`;
 }
 
-const _pfOpinionsUrl = params => `${_pf.api}/opinions?${new URLSearchParams(Object.entries(params).filter(([, v]) => v !== '' && v != null))}`;
+const _pfOpinionsUrl = (params, api = _pf.api) => `${api}/opinions?${new URLSearchParams(Object.entries(params).filter(([, v]) => v !== '' && v != null))}`;
 
 /* All of a theme's opinions: a side sheet with the theme's timeline, filterable by quarter. */
 let _pfSheet = null;
 function profilesThemeSheet(button) {
-  const theme = _pfThemeById(button.dataset.arg);
+  const source = _pfThemeSourceOf(button);
+  const theme = (source?.themes || []).find(t => String(t.id) === String(button.dataset.arg));
   if (!theme) return;
   _pfHidePopup();
-  _pfSheet = { theme, quarter: button.dataset.quarter || '', rows: [], total: 0 };
+  _pfSheet = { theme, source, quarter: button.dataset.quarter || '', rows: [], total: 0 };
   const sheet = document.getElementById('pf-theme-sheet');
   sheet.style.setProperty('--tc', theme.color);
   sheet.querySelector('.pf-sheet-head').innerHTML = `<div class="pf-sheet-title"><h2>${pfEsc(theme.title)}</h2>
@@ -525,7 +533,7 @@ function profilesThemeSheet(button) {
 
 function _pfRenderSheetTimeline() {
   const { theme, quarter } = _pfSheet;
-  const quarters = _pf.themes.quarters, top = Math.max(1, ...theme.quarter_counts);
+  const quarters = _pfSheet.source.quarters, top = Math.max(1, ...theme.quarter_counts);
   const timeline = document.querySelector('#pf-theme-sheet .pf-sheet-timeline');
   timeline.innerHTML = `${_pfSpark(theme, quarters, top, 56, 'profilesSheetQuarter')}
     <div class="pf-spark-axis"><span>${quarters[0]?.slice(0, 4) || ''}</span><span>${quarters[quarters.length - 1]?.slice(0, 4) || ''}</span></div>
@@ -550,7 +558,7 @@ async function _pfLoadSheet(reset) {
   const [from, to] = sheetState.quarter ? pfQuarterRange(sheetState.quarter) : ['', ''];
   more.disabled = true;
   let page;
-  try { page = await pfFetch(_pfOpinionsUrl({ theme: sheetState.theme.id, date_from: from, date_to: to, offset: sheetState.rows.length })); } catch (err) { if (sheetState === _pfSheet) list.innerHTML = pfErrorBox(err); return; } finally { more.disabled = false; }
+  try { page = await pfFetch(_pfOpinionsUrl({ theme: sheetState.theme.id, date_from: from, date_to: to, offset: sheetState.rows.length }, sheetState.source.api)); } catch (err) { if (sheetState === _pfSheet) list.innerHTML = pfErrorBox(err); return; } finally { more.disabled = false; }
   if (sheetState !== _pfSheet) return;
   sheetState.rows = sheetState.rows.concat(page.opinions);
   sheetState.total = page.total;
@@ -559,7 +567,7 @@ async function _pfLoadSheet(reset) {
     const quarter = pfQuarterOf(o.date);
     const head = quarter !== lastQuarter ? `<div class="pf-op-group-head">${pfIcon('date_range')}${pfQuarterLabel(quarter)}</div>` : '';
     lastQuarter = quarter;
-    return head + _pfOpinionRow(o, { showTheme: false });
+    return head + _pfOpinionRow(o, { showTheme: false, theme: sheetState.theme });
   }).join('') || '<div class="pf-empty">אין עמדות ברבעון הזה</div>';
   more.hidden = sheetState.rows.length >= sheetState.total;
 }
@@ -602,7 +610,7 @@ function _pfProtocolUrl(o) {
 let _pfPopupAnchor = null;
 function profilesCite(sup, event) {
   event.stopPropagation();
-  const e = _pf.evidence[sup.dataset.cite];
+  const e = _pfThemeSourceOf(sup)?.evidence[sup.dataset.cite];
   if (!e) return;
   const popup = document.getElementById('pf-popup');
   if (_pfPopupAnchor === sup && !popup.hidden) { _pfHidePopup(); return; }
@@ -682,8 +690,8 @@ function _pfRenderOpinions() {
     `<div><div class="pf-op-group-head">${pfIcon('meeting_room')}${pfEsc(committee)} <span class="pf-count">${rows.length}</span></div>${rows.map(row).join('')}</div>`).join('');
 }
 
-function _pfOpinionRow(o, { query = '', showCommittee = true, showTheme = true } = {}) {
-  const theme = o.theme_ids.length ? _pfThemeById(o.theme_ids[0]) : null;
+function _pfOpinionRow(o, { query = '', showCommittee = true, showTheme = true, theme = null } = {}) {
+  theme = theme || (o.theme_ids.length ? _pfThemeById(o.theme_ids[0]) : null);
   const meta = [showTheme ? (theme ? pfEsc(theme.title) : OTHER_THEME_LABEL) : '', showCommittee ? pfEsc(o.committee) : ''].filter(Boolean).join(' · ');
   return `<article class="pf-op" style="--tc:${theme ? theme.color : 'var(--outline-variant)'}">
     ${pfDateCell(o.date)}

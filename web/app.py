@@ -65,6 +65,7 @@ from api.docs import install_public_docs
 from api.mcp_server import McpSubdomainMiddleware, install_mcp_endpoint, running_mcp_sessions
 from api.validation import install_error_handlers
 from web.concurrency import ResearchRunSlots
+from web.game import router as game_router
 from web.gemini_keys import (forget_server_gemini_keys, gemini_text_models, stop_on_rejected_gemini_key,
                               unavailable_models_error, visitor_gemini_key_or_error)
 from web.middleware import RequestBodyLimitMiddleware, SecurityHeadersMiddleware
@@ -462,6 +463,7 @@ class RevalidatedStaticFiles(StaticFiles):
 app.mount("/static", RevalidatedStaticFiles(directory=str(_STATIC_DIR)), name="static")
 app.include_router(api_router)
 app.include_router(profiles_router)
+app.include_router(game_router)
 install_mcp_endpoint(app, rate_limiter)
 install_public_docs(app, WEB_API_TITLE)
 install_error_handlers(app)
@@ -629,6 +631,7 @@ class ResearchRespondRequest(BaseModel):
 @app.get(config.CHAT_PAGE_PATH, response_class=HTMLResponse, include_in_schema=False)
 @app.get(config.RESEARCH_PAGE_PATH, response_class=HTMLResponse, include_in_schema=False)
 @app.get(config.PROTOCOLS_PAGE_PATH, response_class=HTMLResponse, include_in_schema=False)
+@app.get(config.GAME_PAGE_PATH, response_class=HTMLResponse, include_in_schema=False)
 @app.get(PROFILE_PAGE_PATHS[0], response_class=HTMLResponse, include_in_schema=False)
 @app.get(PROFILE_PAGE_PATHS[1], response_class=HTMLResponse, include_in_schema=False)
 @app.get(PROFILE_PAGE_PATHS[2], response_class=HTMLResponse, include_in_schema=False)

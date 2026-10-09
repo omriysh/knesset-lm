@@ -13,6 +13,7 @@
   <link rel="stylesheet" href="{{ asset('tailwind.css') }}">
   <link rel="stylesheet" href="{{ asset('style.css') }}">
   <link rel="stylesheet" href="{{ asset('profiles.css') }}">
+  <link rel="stylesheet" href="{{ asset('game.css') }}">
 </head>
 <body class="bg-surface text-on-surface h-[100dvh] flex flex-col overflow-hidden show-welcome">
 
@@ -33,8 +34,9 @@
 
       <!-- Desktop tab navigation (center) -->
       <nav class="seg hidden md:flex">
-        <button data-click="switchTab" data-arg="chat" id="dt-tab-chat" class="seg-btn app-tab-btn" type="button">בצ'אט שלכם</button>
+        <button data-click="switchTab" data-arg="game" id="dt-tab-game" class="seg-btn app-tab-btn" type="button">היכרות</button>
         <button data-click="switchTab" data-arg="profiles" id="dt-tab-profiles" class="seg-btn app-tab-btn" type="button">פרופילים</button>
+        <button data-click="switchTab" data-arg="chat" id="dt-tab-chat" class="seg-btn app-tab-btn" type="button">בצ'אט שלכם</button>
         <button data-click="switchTab" data-arg="research" id="dt-tab-research" class="seg-btn app-tab-btn" type="button">בצ'אט שלנו</button>
         <button data-click="switchTab" data-arg="reading" id="dt-tab-reading" class="seg-btn app-tab-btn" type="button">דיוני הכנסת</button>
       </nav>
@@ -60,8 +62,9 @@
       <h1 class="lp-headline home-title">בואו להכיר את <span class="lp-mark">המועמדים</span> לכנסת</h1>
       <div class="home-graph" id="home-graph">
         <div class="home-card home-choices">
-          <button class="home-choice" type="button" data-click="homePick" data-arg="talk"><span class="material-symbols-outlined">forum</span>תן לי לדבר עם הצ'אט</button>
+          <button class="home-choice" type="button" data-click="homePick" data-arg="play"><span class="material-symbols-outlined">favorite</span>בואו נכיר</button>
           <button class="home-choice" type="button" data-click="homePick" data-arg="read"><span class="material-symbols-outlined">menu_book</span>תן לי לקרוא בעצמי</button>
+          <button class="home-choice" type="button" data-click="homePick" data-arg="talk"><span class="material-symbols-outlined">forum</span>תן לי לדבר עם הצ'אט</button>
         </div>
         <div class="home-edge" aria-hidden="true"></div>
         <div class="home-next">
@@ -69,8 +72,12 @@
             <path d="M100 50 L64 50 C32 50 32 25 0 25"/>
             <path d="M64 50 C32 50 32 75 0 75"/>
           </svg>
+          <a class="home-card home-next-card" data-option="play" href="/game" data-click="landingOpenTab" data-arg="game" hidden>
+            <p>משחק היכרות - עמדות של חברי כנסת, בלי השמות. מסכימים או לא, ובסוף מגלים עם מי הסכמתם.</p>
+            <span class="material-symbols-outlined home-next-arrow">arrow_back</span>
+          </a>
           <a class="home-card home-next-card" data-option="talk" href="/chat" data-click="landingOpenTab" data-arg="chat" hidden>
-            <p>נותנים לצ'אט גישה לאתר הכנסת ומבינים מה העמדות של הפוליטיקאים ומה הם עשו.</p>
+            <p>למתקדמים - נותנים לצ'אט שלכם גישה לאתר הכנסת ומבינים מה העמדות של הפוליטיקאים ומה הם עשו.</p>
             <span class="material-symbols-outlined home-next-arrow">arrow_back</span>
           </a>
           <a class="home-card home-next-card" data-option="read" href="/profiles" data-click="landingOpenTab" data-arg="profiles" hidden>
@@ -99,7 +106,7 @@
         <h2>דקה והצ'אט שלכם מחובר לאתר הכנסת</h2>
         <p class="lp-section-lede">מעורב ירושלמי הוא תוסף לצ'אט שלכם שנותן לו לחפש בדיונים ולבדוק מה הצביעו חברי הכנסת שלנו.</p>
         <div class="lp-install" id="lp-install-card">
-          <div class="lp-copied-banner" id="lp-copied-banner" hidden><span class="material-symbols-outlined">check_circle</span><span><span id="lp-copied-name"></span> הועתק. עכשיו מחברים, ואז מדביקים בצ'אט חדש.</span></div>
+          <div class="lp-copied-banner" id="lp-copied-banner" hidden><span class="material-symbols-outlined">check_circle</span><span>הפרומפט הועתק. עכשיו מחברים, ואז מדביקים בצ'אט חדש.</span></div>
           <div class="seg" id="lp-install-tabs" role="tablist">
             <button class="seg-btn active" role="tab" type="button" aria-selected="true" data-click="landingSetInstallTab" data-arg="claude">Claude<span class="lp-badge">הכי פשוט</span></button>
             <button class="seg-btn" role="tab" type="button" aria-selected="false" data-click="landingSetInstallTab" data-arg="chatgpt">ChatGPT</button>
@@ -113,7 +120,7 @@
               </div>
               <div class="lp-step">
                 <div class="home-edge" aria-hidden="true"></div>
-                <div class="home-next"><div class="lp-step-body"><a class="home-card home-next-card" id="lp-claude-install" href="https://claude.ai/customize/connectors" target="_blank" rel="noopener" data-click="landingStepNext"><span class="lp-step-text"><b>מוסיפים את מעורב</b><span>ייפתח לכם טופס, צריך רק ללחוץ Add.</span></span><span class="material-symbols-outlined lp-step-icon">open_in_new</span></a><button class="lp-step-skip" type="button" data-click="landingStepNext" aria-label="לשלב הבא"><span class="material-symbols-outlined">chevron_left</span></button></div></div>
+                <div class="home-next"><div class="lp-step-body"><a class="home-card home-next-card" id="lp-claude-install" href="https://claude.ai/customize/connectors" target="_blank" rel="noopener" data-click="landingStepNext"><span class="lp-step-text"><b>מוסיפים את מעורב</b><span>ייפתח לכם טופס, צריך רק לאשר.</span></span><span class="material-symbols-outlined lp-step-icon">open_in_new</span></a><button class="lp-step-skip" type="button" data-click="landingStepNext" aria-label="לשלב הבא"><span class="material-symbols-outlined">chevron_left</span></button></div></div>
               </div>
               <div class="lp-step">
                 <div class="home-edge" aria-hidden="true"></div>
@@ -123,7 +130,7 @@
 
             <div class="home-graph lp-steps lp-panel-off" data-lp-panel="chatgpt">
               <div class="lp-step home-graph--open">
-                <div class="home-next"><div class="lp-step-body"><a class="home-card home-next-card" href="https://chatgpt.com/#settings/Security?section=developer-mode" target="_blank" rel="noopener" data-click="landingStepNext"><span class="lp-step-text"><b>מפעילים Developer mode</b><span>בהגדרות האבטחה של ChatGPT מדליקים את המתג.</span></span><span class="material-symbols-outlined lp-step-icon">open_in_new</span></a><button class="lp-step-skip" type="button" data-click="landingStepNext" aria-label="לשלב הבא"><span class="material-symbols-outlined">chevron_left</span></button></div></div>
+                <div class="home-next"><div class="lp-step-body"><a class="home-card home-next-card" href="https://chatgpt.com/#settings/Security?section=developer-mode" target="_blank" rel="noopener" data-click="landingStepNext"><span class="lp-step-text"><b>מפעילים Developer mode</b><span>בהגדרות האבטחה של ChatGPT.</span></span><span class="material-symbols-outlined lp-step-icon">open_in_new</span></a><button class="lp-step-skip" type="button" data-click="landingStepNext" aria-label="לשלב הבא"><span class="material-symbols-outlined">chevron_left</span></button></div></div>
               </div>
               <div class="lp-step">
                 <div class="home-edge" aria-hidden="true"></div>
@@ -423,6 +430,44 @@
   </div>
 
   <!-- ══════════════════════════════════════════════════════════
+       Tab: Game (היכרות) — swipe MK themes with the names blacked out, then see the parties (game.js)
+  ══════════════════════════════════════════════════════════ -->
+  <div id="tab-game" class="app-tab-panel hidden">
+    <div class="gm-page">
+      <section class="gm-intro" id="gm-intro" hidden>
+        <button class="btn btn-primary gm-start" type="button" data-click="gameStart"><span id="gm-start-label">בואו נתחיל</span><span class="material-symbols-outlined">arrow_back</span></button>
+        <h2 class="gm-intro-title">איך זה עובד?</h2>
+        <ol class="gm-steps">
+          <li><span class="gm-step-icon"><span class="material-symbols-outlined">forum</span></span><span>בכל פעם תראו נושא שדיבר עליו אחד מחברי הכנסת בדיונים רשמיים</span></li>
+          <li><span class="gm-step-icon"><span class="material-symbols-outlined">format_quote</span></span><span>תראו סיכום AI קצר לצד ציטוטים מדיוני הכנסת</span></li>
+          <li><span class="gm-step-icon"><span class="material-symbols-outlined">swipe</span></span><span>תחליקו ימינה כדי להסכים ושמאלה כדי לא להסכים</span></li>
+          <li><span class="gm-step-icon"><span class="material-symbols-outlined">pie_chart</span></span><span>אחרי שעברתם על מספיק עמדות, תראו מי חברי הכנסת שהסכמתם איתם ותוכלו לקרוא עליהם עוד</span></li>
+        </ol>
+      </section>
+      <section class="gm-play" id="gm-play" hidden>
+        <div class="gm-stack" id="gm-stack"><div class="gm-stack-empty" id="gm-stack-empty"></div></div>
+        <div class="gm-vote-row">
+          <button class="gm-vote-btn gm-vote-btn--yes" type="button" title="התחברתי" data-click="gameVote" data-arg="1"><span class="material-symbols-outlined">favorite</span></button>
+          <button class="gm-vote-btn gm-vote-btn--unsure" type="button" title="לא בטוח/ה" data-click="gameVote" data-arg="2"><span class="material-symbols-outlined">question_mark</span></button>
+          <button class="gm-vote-btn gm-vote-btn--no" type="button" title="לא התחברתי" data-click="gameVote" data-arg="0"><span class="material-symbols-outlined">heart_broken</span></button>
+        </div>
+        <div class="gm-bottom" id="gm-bottom"></div>
+      </section>
+      <section class="gm-results" id="gm-results" hidden></section>
+    </div>
+  </div>
+  <div id="gm-theme-overlay" role="dialog" aria-modal="true" data-pf-source="game" data-click="gameThemeBackdrop">
+    <div class="dialog">
+      <div class="gm-theme-head">
+        <div class="gm-theme-who"></div>
+        <button class="btn btn-ghost btn-icon" type="button" title="סגירה" data-click="gameCloseTheme"><span class="material-symbols-outlined">close</span></button>
+      </div>
+      <div class="dialog-body gm-theme-body"></div>
+    </div>
+  </div>
+
+
+  <!-- ══════════════════════════════════════════════════════════
        Tab: Profiles (פרופילים) — 26th Knesset party lists, candidates and profiles (profiles.js)
   ══════════════════════════════════════════════════════════ -->
   <div id="tab-profiles" class="app-tab-panel hidden">
@@ -469,13 +514,17 @@
 
   <!-- ── Mobile bottom tab navigation ── -->
   <nav id="mobile-tab-bar" class="md:hidden fixed bottom-0 inset-x-0 z-50 bg-surface-container-lowest border-t border-surface-variant/20 flex safe-area-bottom">
-    <button data-click="switchTab" data-arg="chat" id="mob-tab-chat" class="mobile-tab-btn flex-1">
-      <span class="material-symbols-outlined" style="font-size:22px">forum</span>
-      <span>בצ'אט שלכם</span>
+    <button data-click="switchTab" data-arg="game" id="mob-tab-game" class="mobile-tab-btn flex-1">
+      <span class="material-symbols-outlined" style="font-size:22px">favorite</span>
+      <span>היכרות</span>
     </button>
     <button data-click="switchTab" data-arg="profiles" id="mob-tab-profiles" class="mobile-tab-btn flex-1">
       <span class="material-symbols-outlined" style="font-size:22px">groups</span>
       <span>פרופילים</span>
+    </button>
+    <button data-click="switchTab" data-arg="chat" id="mob-tab-chat" class="mobile-tab-btn flex-1">
+      <span class="material-symbols-outlined" style="font-size:22px">forum</span>
+      <span>בצ'אט שלכם</span>
     </button>
     <button data-click="switchTab" data-arg="research" id="mob-tab-research" class="mobile-tab-btn flex-1">
       <span class="material-symbols-outlined" style="font-size:22px">smart_toy</span>
@@ -621,6 +670,7 @@
   <script src="{{ asset('home.js') }}"></script>
   <script src="{{ asset('browser.js') }}"></script>
   <script src="{{ asset('profiles.js') }}"></script>
+  <script src="{{ asset('game.js') }}"></script>
   <script src="{{ asset('tabs.js') }}"></script>
   <script src="{{ asset('filters.js') }}"></script>
   <script src="{{ asset('actions.js') }}"></script>

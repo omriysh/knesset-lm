@@ -285,6 +285,11 @@ PUBLIC_SITE_URL               = "https://meorav.com"
 CHAT_PAGE_PATH                = "/chat"
 RESEARCH_PAGE_PATH            = "/research"
 PROTOCOLS_PAGE_PATH           = "/protocols"
+GAME_PAGE_PATH                = "/game"
+
+# "היכרות" game (web/game.py): the browser sends the theme ids it has seen / voted on
+GAME_MAX_IDS                  = 2500     # per list in a request; above the number of themes in the pool
+GAME_MAX_CARDS_PER_FETCH      = 3
 
 # MCP endpoint (src/api/mcp_server.py): POST /mcp on both servers, and the whole of MCP_SUBDOMAIN_HOSTS
 MCP_ENABLED                   = True

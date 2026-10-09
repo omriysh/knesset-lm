@@ -36,6 +36,7 @@ function switchTab(name, { writeUrl = true, push = true } = {}) {
 
   if (name === 'reading' && writeUrl && !_readingTabHasResults()) browseSearch({ push: false });
   if (name === 'profiles') profilesShow();
+  if (name === 'game') gameShow();
   if (name === 'research') setResearchTabShown(true);
 
   const researchSettings = document.getElementById('settings-research');
@@ -73,6 +74,7 @@ document.documentElement.classList.toggle('research-tab-shown', researchTabShown
 function applyUrlRoute() {
   if (location.pathname === RESEARCH_PATH) { switchTab('research', { writeUrl: false }); return; }
   if (location.pathname === CHAT_PATH) { switchTab('chat', { writeUrl: false }); return; }
+  if (location.pathname === GAME_PATH) { switchTab('game', { writeUrl: false }); return; }
   if (location.pathname === PROFILES_PATH || location.pathname.startsWith(PROFILES_PATH + '/')) {
     switchTab('profiles', { writeUrl: false });
     profilesApplyRoute();

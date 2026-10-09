@@ -230,6 +230,10 @@ class TestRateLimitBuckets:
         (f"{BASE}/1", "profiles"),
         (f"{BASE}/1/bills", "profiles"),
         ("/api/profiles/bill/123/text", "profiles"),
+        ("/api/profiles/theme/12", "db"),
+        ("/api/game/next", "db"),
+        ("/api/game/results", "db"),
+        ("/game", None),
     ])
     def test_bucket(self, path, bucket):
         assert route_bucket(path) == bucket

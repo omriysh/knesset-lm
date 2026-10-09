@@ -3181,7 +3181,7 @@ body.show-welcome .research-slot { display: block; }
 .home-graph--open.lp-step--done .lp-step-skip { opacity: 1; pointer-events: none; }
 .lp-step--done .lp-step-skip .material-symbols-outlined { opacity: 0; }
 .lp-step--done .lp-step-skip::before { transform: none; }
-.lp-step:first-child .home-next-card.flash { animation: lp-flash 1.2s; }
+.lp-step .home-next-card.flash { animation: lp-flash 1.2s; }
 @keyframes lp-flash { 30% { box-shadow: 0 0 0 3px var(--highlight-strong), var(--shadow-raised); } }
 .lp-copied-banner { display: flex; margin: 0 14px 10px; align-items: center; gap: 8px; padding: 10px 14px; border-radius: var(--radius); background: var(--primary-soft); color: var(--primary-dim); font-size: 0.88rem; font-weight: 600; }
 .lp-copied-banner[hidden] { display: none; }

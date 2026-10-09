@@ -187,30 +187,44 @@ function landingCopyField(button) {
   _landingCopy(LANDING_STEP_COPY_TEXTS[button.dataset.arg], button.querySelector('.material-symbols-outlined'), 'check');
 }
 
+const LANDING_INSTALL_SCROLL_MS = 500;
+
 function _landingGoInstall() {
   const section = document.getElementById('lp-install');
   section.scrollIntoView({ behavior: _landingReducedMotion() ? 'auto' : 'smooth', block: 'start' });
-  document.querySelectorAll('.lp-step:first-child .home-next-card').forEach(step => {
-    step.classList.remove('flash');
-    void step.offsetWidth;
-    step.classList.add('flash');
-  });
+  setTimeout(_landingRevealNewChatStep, LANDING_INSTALL_SCROLL_MS);
 }
 
-function _landingCopiedThenInstall(name) {
-  document.getElementById('lp-copied-name').textContent = `"${name}"`;
+/* Opens the remaining steps of the shown panel one by one, as if the visitor clicked through them, then highlights the last (new chat) step. */
+function _landingRevealNewChatStep() {
+  const steps = document.querySelectorAll('.lp-steps:not(.lp-panel-off) .lp-step');
+  const newChatStep = steps[steps.length - 1];
+  if (newChatStep.classList.contains('home-graph--open')) {
+    const card = newChatStep.querySelector('.home-next-card');
+    card.scrollIntoView({ behavior: _landingReducedMotion() ? 'auto' : 'smooth', block: 'nearest', inline: 'nearest' });
+    card.classList.remove('flash');
+    void card.offsetWidth;
+    card.classList.add('flash');
+    return;
+  }
+  const openSteps = [...steps].filter(step => step.classList.contains('home-graph--open'));
+  landingStepNext(openSteps[openSteps.length - 1]);
+  setTimeout(_landingRevealNewChatStep, LANDING_STEP_OPEN_MS);
+}
+
+function _landingCopiedThenInstall() {
   document.getElementById('lp-copied-banner').hidden = false;
   setTimeout(_landingGoInstall, 600);
 }
 
 function landingCopyReview(button) {
   _landingCopy(landingBuildReviewPrompt(_landingBuilder), button, '<span class="material-symbols-outlined">check</span>הועתק');
-  _landingCopiedThenInstall('סקירה מקיפה');
+  _landingCopiedThenInstall();
 }
 
 function landingCopyGuidelines(button) {
   _landingCopy(LANDING_GUIDELINES_ONLY_PROMPT, button, '<span class="material-symbols-outlined">check</span>הועתק');
-  _landingCopiedThenInstall('ההנחיות');
+  _landingCopiedThenInstall();
 }
 
 function landingSetInstallTab(button) {
