@@ -327,7 +327,7 @@ function _pfDetails(details) {
   const blocks = rows.filter(row => !isShort(row)).map(row => `<div class="pf-detail-block"><div class="pf-detail-head">${pfIcon(row.icon)}${row.label}</div>${row.items.length > 1
     ? `<ul class="pf-detail-list">${row.items.map(item => `<li>${pfEsc(item)}</li>`).join('')}</ul>` : `<p>${pfEsc(row.items[0])}</p>`}</div>`).join('');
   if (!facts && !blocks) return '';
-  return `<div class="pf-details">${facts ? `<div class="pf-facts">${facts}</div>` : ''}${blocks ? `<div class="pf-detail-blocks">${blocks}</div>` : ''}</div>`;
+  return `<div class="pf-details">${facts ? `<div class="pf-facts">${facts}</div>` : ''}${blocks ? `<div class="pf-detail-blocks">${blocks}</div>` : ''}<div class="pf-details-source">מקור הפרטים: אתר הכנסת</div></div>`;
 }
 
 function _pfStat(id, num, label, bar = null, wait = false) {
@@ -526,7 +526,7 @@ function _pfRenderThemes(showAll) {
   sub.textContent = `חלוקה גסה של התבטאויות מדיוני הכנסת לנושאים. מתוך ${pfNum(data.total_opinions)} התבטאויות שנצפו בדיונים, ${pfNum(data.opinions_in_a_theme)} נכללות בנושאים העיקריים האלה.`;
   const shown = showAll ? data.themes : data.themes.slice(0, THEMES_SHOWN);
   body.innerHTML = `
-    <div class="pf-ai-band">${pfIcon('auto_awesome')}<span>נוצר אוטומטית (Gemini) מסיכומי הפרוטוקולים · לחצו על נושא לסיכום ולכל העמדות בו</span></div>
+    <div class="pf-ai-band">${pfIcon('auto_awesome')}<span>נוצר על ידי AI מסיכומי הפרוטוקולים · לחצו על נושא לסיכום ולכל העמדות בו</span></div>
     <div class="pf-theme-map">${data.themes.map(t => `<button type="button" style="flex:${t.opinion_count};--tc:${t.color}" title="${pfEsc(t.title)} · ${pfNum(t.opinion_count)} עמדות" data-click="profilesThemeJump" data-arg="${_esc(t.id)}"></button>`).join('')}</div>
     <div class="pf-themes">${shown.map(pfThemeCard).join('')}</div>
     ${data.themes.length > THEMES_SHOWN ? `<div class="pf-center"><button class="btn btn-secondary btn-sm" type="button" data-click="profilesThemesAll" data-arg="${_esc(showAll ? '' : '1')}">${showAll ? `${pfIcon('expand_less')}הצגת ${THEMES_SHOWN} הנושאים הראשונים` : `${pfIcon('expand_more')}הצגת כל ${data.themes.length} הנושאים`}</button></div>` : ''}`;
@@ -657,7 +657,7 @@ function profilesCite(sup, event) {
   _pfPopupAnchor = sup;
   sup.classList.add('on');
   popup.innerHTML = `<div class="pf-popup-meeting">${pfEsc(e.committee)}</div><div class="pf-popup-date">${pfDmy(e.date)}</div>
-    <div class="pf-popup-opinion">${pfEsc(e.opinion)}</div>${e.quote ? `<q>${pfEsc(e.quote)}</q>` : ''}
+    <div class="pf-popup-opinion"><span class="pf-kind-tag pf-kind-ai">AI</span> ${pfEsc(e.opinion)}</div>${e.quote ? `<q>${pfEsc(e.quote)}</q>` : ''}
     <div class="pf-popup-foot">${e.quote_verified ? `<span class="pf-verified">${pfIcon('verified')}הציטוט אומת מול הפרוטוקול</span>` : `<span class="pf-verified pf-approx">${pfIcon('error')}ציטוט משוער</span>`}
     <a class="btn btn-secondary btn-sm" href="${pfEsc(_pfProtocolUrl(e))}" target="_blank" rel="noopener">${pfIcon('description')}לפרוטוקול</a></div>`;
   _pfPlacePopup(popup, sup);
@@ -737,8 +737,8 @@ function _pfOpinionRow(o, { query = '', showCommittee = true, showTheme = true, 
     <div>
       ${meta ? `<div class="pf-op-meta"><span class="tdot"></span>${meta}</div>` : ''}
       ${o.meeting_topic ? `<div class="pf-op-topic" title="${pfEsc(o.meeting_topic)}">${pfEsc(o.meeting_topic)}</div>` : ''}
-      <div class="pf-op-text"><span class="pf-bullet"></span><span>${pfHighlight(o.opinion, query)}</span></div>
-      ${o.quote ? `<div class="pf-op-quote${o.quote_verified ? '' : ' approx'}">${o.quote_verified ? '' : `<span class="pf-verified pf-approx">${pfIcon('error')}ציטוט משוער</span> `}"${pfHighlight(o.quote, query)}"</div>` : ''}
+      <div class="pf-op-text"><span class="pf-bullet"></span><span><span class="pf-kind-tag pf-kind-ai">AI</span> ${pfHighlight(o.opinion, query)}</span></div>
+      ${o.quote ? `<div class="pf-op-quote${o.quote_verified ? '' : ' approx'}">${o.quote_verified ? '<span class="pf-kind-tag pf-kind-quote">ציטוט מהדיון</span> ' : `<span class="pf-verified pf-approx">${pfIcon('error')}ציטוט משוער</span> `}"${pfHighlight(o.quote, query)}"</div>` : ''}
       <div class="pf-op-actions"><a class="pf-link-btn" href="${pfEsc(_pfProtocolUrl(o))}" target="_blank" rel="noopener">${pfIcon('description')}לפרוטוקול</a></div>
     </div>
   </article>`;
@@ -777,7 +777,7 @@ function _pfVoteBar(byResult, total) {
 async function _pfLoadVotesTab() {
   const profile = _pf;
   const panel = document.getElementById('pf-panel-votes');
-  panel.innerHTML = `<section class="pf-card" id="pf-votes-card">${_pfCardHead('how_to_vote', 'הצבעות במליאה', 'ההצבעות שלו/ה, מהחדשה לישנה',
+  panel.innerHTML = `<section class="pf-card" id="pf-votes-card">${_pfCardHead('how_to_vote', 'הצבעות במליאה', 'ההצבעות שלו/ה, מהחדשה לישנה · מקור: אתר הכנסת',
       `<div class="seg seg--sm">${[['all', 'הכל'], ['בעד', 'בעד'], ['נגד', 'נגד'], ['other', 'אחר']].map(([value, label], i) => `<button class="seg-btn${i ? '' : ' active'}" type="button" data-click="profilesVoteFilter" data-arg="${_esc(value)}">${label}</button>`).join('')}</div>`)}
     <div class="pf-card-body">
       <div class="pf-vote-summary" id="pf-vote-summary">${pfSpinner('מחשב סיכום הצבעות…')}</div>
@@ -862,8 +862,8 @@ function profilesVoteMore() { _pfLoadVotes(false); }
 async function _pfLoadBillsTab() {
   const profile = _pf;
   const panel = document.getElementById('pf-panel-bills');
-  panel.innerHTML = `<section class="pf-card" id="pf-allies-card">${_pfCardHead('handshake', 'שותפים לחקיקה', 'מי חתמו איתו/ה הכי הרבה על הצעות חוק')}<div class="pf-card-body" id="pf-allies">${pfSpinner('סופר חותמים על כל ההצעות…')}</div></section>
-    <section class="pf-card" id="pf-bills-card">${_pfCardHead('gavel', 'הצעות חוק <span class="pf-count" id="pf-bill-total"></span>', 'יזם/ה או הצטרף/ה, בכל הכנסות, מהעדכנית לישנה',
+  panel.innerHTML = `<section class="pf-card" id="pf-allies-card">${_pfCardHead('handshake', 'שותפים לחקיקה', 'מי חתמו איתו/ה הכי הרבה על הצעות חוק · מקור: אתר הכנסת')}<div class="pf-card-body" id="pf-allies">${pfSpinner('סופר חותמים על כל ההצעות…')}</div></section>
+    <section class="pf-card" id="pf-bills-card">${_pfCardHead('gavel', 'הצעות חוק <span class="pf-count" id="pf-bill-total"></span>', 'יזם/ה או הצטרף/ה, בכל הכנסות, מהעדכנית לישנה · מקור: אתר הכנסת',
       `<div class="seg seg--sm">${[['', 'הכל'], ['initiator', 'יזם/ה'], ['joined', 'הצטרף/ה']].map(([value, label], i) => `<button class="seg-btn${i ? '' : ' active'}" type="button" data-click="profilesBillRole" data-arg="${_esc(value)}">${label}</button>`).join('')}</div>`)}
     <div class="pf-card-body">
       <div class="pf-tools"><input type="text" class="field field--sm pf-search" placeholder="חיפוש בשם ההצעה" data-input="profilesBillSearch">
@@ -1019,8 +1019,8 @@ async function _pfLoadRolesTab() {
   const attendanceBlocks = (profile.data.activity?.attendance_by_knesset || []).filter(k => k.per_committee.length);
   const attendanceBlock = k => `<div class="pf-k-block${k === attendanceBlocks[0] ? ' current' : ''}"><div class="pf-k-head">${pfKnessetLabel(k.knesset_num)}${k.member_meetings ? ` <small>נוכחות ${pfPct(k.member_meetings_attended, k.member_meetings)}% בישיבות הוועדות שהיה/תה חבר/ה בהן</small>` : ''}</div>
       ${k.per_committee.slice(0, 10).map(([committee, count]) => `<div class="pf-att-row"><span title="${pfEsc(committee)}">${pfEsc(committee)}</span><div class="pf-att-bar"><i style="width:${count / k.per_committee[0][1] * 100}%"></i></div><b>${pfNum(count)}</b></div>`).join('')}</div>`;
-  panel.innerHTML = `<section class="pf-card">${_pfCardHead('badge', 'תפקידים', 'סיעות, ועדות ותפקידים בכל הכנסות שכיהן/ה בהן')}<div class="pf-card-body" id="pf-roles">${pfSpinner('טוען תפקידים…')}</div></section>
-    ${attendanceBlocks.length ? `<section class="pf-card">${_pfCardHead('event_available', 'נוכחות לפי ועדה', `ישיבות שנכח/ה בהן ${pfInLabel(pfKnessetsLabel(attendanceBlocks.map(k => k.knesset_num)))}, מתוך הפרוטוקולים`)}<div class="pf-card-body">
+  panel.innerHTML = `<section class="pf-card">${_pfCardHead('badge', 'תפקידים', 'סיעות, ועדות ותפקידים בכל הכנסות שכיהן/ה בהן · מקור: אתר הכנסת')}<div class="pf-card-body" id="pf-roles">${pfSpinner('טוען תפקידים…')}</div></section>
+    ${attendanceBlocks.length ? `<section class="pf-card">${_pfCardHead('event_available', 'נוכחות לפי ועדה', `ישיבות שנכח/ה בהן ${pfInLabel(pfKnessetsLabel(attendanceBlocks.map(k => k.knesset_num)))}, מתוך הפרוטוקולים · מקור: אתר הכנסת`)}<div class="pf-card-body">
       <div class="pf-roles">${attendanceBlocks.map(attendanceBlock).join('')}</div>
       <p class="pf-note">מספר הישיבות לפי רשימת הנוכחים בפרוטוקול. אחוז הנוכחות מחושב רק על ועדות שהיה/תה חבר/ה בהן, בתקופת החברות.</p>
     </div></section>` : ''}`;

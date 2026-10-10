@@ -180,6 +180,10 @@ sup.pf-cite:hover, sup.pf-cite.on { color: var(--surface-lowest); background: va
 .pf-popup-opinion { font-weight: 600; margin-bottom: 6px; color: var(--ink); }
 .pf-popup q { display: block; quotes: none; border-right: 2px solid var(--cite-line); padding-right: 8px; font-style: italic; color: var(--ink-soft); }
 .pf-popup-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; }
+.pf-kind-tag { display: inline-block; padding: 0 7px; border-radius: 999px; font-size: 0.66rem; font-weight: 700; font-style: normal; line-height: 1.6; vertical-align: 1px; }
+.pf-kind-ai { color: var(--cite-strong); background: var(--cite-soft); }
+.pf-kind-quote { color: var(--primary); background: var(--primary-soft); }
+.pf-details-source { font-size: 0.68rem; color: var(--ink-faint); }
 .pf-verified { display: inline-flex; align-items: center; gap: 3px; font-size: 0.68rem; font-weight: 700; color: var(--primary); }
 .pf-verified .material-symbols-outlined { font-size: 14px; }
 .pf-approx { color: #8a5a00; }

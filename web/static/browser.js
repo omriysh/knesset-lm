@@ -497,7 +497,8 @@ function _summaryHtml(data, m) {
   const topics    = data.topics || [];
   const committee = _esc(String(m?.committee || '').replace(/_/g, ' ').trim());
   const date      = _esc(String(m?.date || '').replace(/_/g, '/'));
-  const titleHtml = `<span class="meeting-heading"><span class="meeting-title">${committee || date}</span>${committee && date ? `<span class="meeting-date">${date}</span>` : ''}</span>`;
+  const sourceLine = date ? `תמלול דיון מהכנסת, ${date}` : 'תמלול דיון מהכנסת';
+  const titleHtml = `<span class="meeting-heading"><span class="meeting-title">${committee || sourceLine}</span>${committee ? `<span class="meeting-date">${sourceLine}</span>` : ''}</span>`;
   if (!topics.length) return `<div class="summary-panel"><div class="summary-toggle">${titleHtml}</div></div>`;
 
   return `
