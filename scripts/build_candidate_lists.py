@@ -41,6 +41,7 @@ INDEX_URL = "https://www.gov.il/he/pages/candidates-lists-26"
 KNESSET_SITE_API = "https://knesset.gov.il/WebSiteApi/knessetapi"
 WIKIPEDIA_API = "https://he.wikipedia.org/w/api.php"
 _MK_POSITION_IDS = (43, 61)
+_EXIF_ARTIST, _EXIF_COPYRIGHT = 315, 33432
 _HEADERS = {"User-Agent": "KnessetLM/1.0 (candidate lists; https://github.com/omriysh)"}
 _WIKIPEDIA_POLITICS_WORDS = ("כנסת", "פוליטיק", "מפלג", "מועמד", "ראש עיר", "ראש מועצ", "שר ", "שרה ")
 _MAX_NAME_TOKENS = 6
@@ -457,13 +458,13 @@ def _name_splits(name_raw: str, first_names: set[str]) -> list[str]:
 
 
 def wikipedia_pages(titles: list[str]) -> dict[str, dict]:
-    """title → {title, url, extract, thumbnail} for Hebrew Wikipedia articles (redirects followed, no disambiguations)."""
+    """title → {title, url, extract} for Hebrew Wikipedia articles (redirects followed, no disambiguations)."""
     pages: dict[str, dict] = {}
     for start in range(0, len(titles), 20):
         batch = titles[start:start + 20]
         response = requests.post(WIKIPEDIA_API, headers=_HEADERS, timeout=60, data={
             "action": "query", "format": "json", "redirects": 1, "titles": "|".join(batch),
-            "prop": "pageimages|extracts|pageprops", "piprop": "thumbnail", "pithumbsize": 400,
+            "prop": "extracts|pageprops",
             "exintro": 1, "explaintext": 1, "exsentences": 2, "exlimit": 20})
         response.raise_for_status()
         query = response.json().get("query", {})
@@ -473,8 +474,7 @@ def wikipedia_pages(titles: list[str]) -> dict[str, dict]:
             page = by_title.get(redirected.get(title, title))
             if page and "disambiguation" not in page.get("pageprops", {}):
                 pages[title] = {"title": page["title"], "extract": page.get("extract", ""),
-                                "url": f"https://he.wikipedia.org/wiki/{page['title'].replace(' ', '_')}",
-                                "thumbnail": (page.get("thumbnail") or {}).get("source")}
+                                "url": f"https://he.wikipedia.org/wiki/{page['title'].replace(' ', '_')}"}
         time.sleep(0.5)
     return pages
 
@@ -503,7 +503,7 @@ def knesset_site_details(site_id: int) -> tuple[str | None, dict]:
                "residence": content.get("Residence") or "", "education": content.get("Education") or "",
                "military_service": content.get("MilitaryService") or "",
                "profession": content.get("profession") or "", "immigration_year": content.get("ImmigrationYear") or ""}
-    return header.get("MkImage") or None, {key: html.unescape(value).strip() for key, value in details.items() if value and value.strip()}
+    return header.get("MkImage") or header.get("LobbyImage") or None, {key: html.unescape(value).strip() for key, value in details.items() if value and value.strip()}
 
 
 def _died(site_id: int) -> bool:
@@ -519,6 +519,18 @@ def download(url: str, path: Path) -> bool:
         return False
     path.write_bytes(response.content)
     return True
+
+
+def embedded_photo_credit(path: Path) -> str | None:
+    """The photographer the image file itself names (EXIF Artist/Copyright, else IPTC byline); None when it names none."""
+    from PIL import Image, IptcImagePlugin
+    with Image.open(path) as image:
+        exif = image.getexif()
+        iptc = IptcImagePlugin.getiptcinfo(image) or {}
+    byline = iptc.get((2, 80))
+    candidates = [exif.get(_EXIF_ARTIST), byline.decode("utf-8", "ignore") if isinstance(byline, bytes) else byline,
+                  exif.get(_EXIF_COPYRIGHT)]
+    return next((value.strip() for value in candidates if isinstance(value, str) and value.strip("- ")), None)
 
 
 def profile_mk_ids() -> set[str]:
@@ -556,7 +568,7 @@ def build() -> None:
             if note:
                 print(f"  [{page['position']}.{candidate['position']}] {candidate['name_raw']}: {note}")
             entry = {**candidate, "name": "", "mk_id": None, "person_id": None, "knessets": [],
-                     "profile": "none", "photo": None, "photo_source": None, "wikipedia": None, "details": {}}
+                     "profile": "none", "photo": None, "photo_source": None, "photo_url": None, "photo_credit": None, "wikipedia": None, "details": {}}
             if person:
                 entry.update(name=f"{person['first_name']} {person['last_name']}", person_id=person["person_id"],
                              mk_id=person.get("mk_id"), knessets=person["knessets"], site_id=person.get("site_id"))
@@ -598,10 +610,10 @@ def build() -> None:
                     print(f"  Knesset site details failed for {entry['name']} ({entry['site_id']}): {exc}")
                 if photo_url:
                     entry["photo_source"] = "knesset"
-            if not photo_url and article and article["thumbnail"]:
-                photo_url, entry["photo_source"] = article["thumbnail"], "wikipedia"
             if photo_url and download(photo_url, photo_path):
                 entry["photo"] = f"photos/{photo_path.name}"
+                entry["photo_url"] = photo_url
+                entry["photo_credit"] = embedded_photo_credit(photo_path)
             else:
                 entry["photo_source"] = None
         leader = party["candidates"][0]["name"] if party["candidates"] else ""
