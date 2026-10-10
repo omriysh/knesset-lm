@@ -31,6 +31,8 @@ const PAGE_ACTIONS = {
   openHelp:                     () => window.openHelp(),
   closeHelp:                    () => window.closeHelp(),
   helpSetTab:                   (el) => window.helpSetTab(el.dataset.arg),
+  helpCycleLang:                () => window.helpCycleLang(),
+  openHelpLink:                 (el, event) => window.openHelpLink(el, event),
   closeHelpOnBackdrop:          (el, event) => { if (event.target === el) window.closeHelp(); },
   openSettings:                 () => window.openSettings(),
   closeSettings:                () => window.closeSettings(),

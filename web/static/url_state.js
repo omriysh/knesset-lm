@@ -7,6 +7,7 @@
  *                                    and a character range in that speech (src/utils/source_links.py
  *                                    builds the same links for the API)
  *   /chat                          → in-your-chat tab (connect the MCP)
+ *   /about[/prompts|support|privacy|terms][?lang=en] → the help dialog over home (app.js)
  *   /                              → the home tab, URL left as is until the user moves
  *
  * The reading tab's state lives in _protocolUrlState; browser.js / tabs.js update it through
@@ -20,6 +21,7 @@ const RESEARCH_PATH  = '/research';
 const PROFILES_PATH  = '/profiles';
 const CHAT_PATH      = '/chat';
 const GAME_PATH      = '/game';
+const ABOUT_PATH     = '/about';
 const HOME_PATH      = '/';
 
 const _LIST_FILTER_PARAMS = { committee: 'committees', mk: 'mks', party: 'parties' };

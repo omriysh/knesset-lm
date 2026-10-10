@@ -287,6 +287,8 @@ CHAT_PAGE_PATH                = "/chat"
 RESEARCH_PAGE_PATH            = "/research"
 PROTOCOLS_PAGE_PATH           = "/protocols"
 GAME_PAGE_PATH                = "/game"
+ABOUT_PAGE_PATH               = "/about"   # the help dialog over home; /about/<tab> opens a tab, ?lang=en the English text
+ABOUT_SUBPAGE_TABS            = ("prompts", "support", "privacy", "terms")
 
 # "היכרות" game (web/game.py): the browser sends the theme ids it has seen / voted on
 GAME_MAX_IDS                  = 2500     # per list in a request; above the number of themes in the pool

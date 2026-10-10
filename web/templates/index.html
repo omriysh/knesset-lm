@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>מעורב ירושלמי</title>
+  <title>{{ page_title | default("מעורב ירושלמי") }}</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="icon" href="/favicon.ico" sizes="any">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
@@ -90,7 +90,12 @@
           </a>
         </div>
       </div>
-      <footer class="lp-footer home-footer">מעורב ירושלמי הוא פרויקט אישי במימון עצמי, לא מייצג ולא מקושר לאף גוף פוליטי.</footer>
+      <footer class="lp-footer home-footer">
+        <p>מעורב ירושלמי הוא פרויקט אישי במימון עצמי, לא מייצג ולא מקושר לאף גוף פוליטי.</p>
+        <nav class="home-footer-links">
+          {% for tab in about_legal_tabs %}<a href="/about/{{ tab }}" data-click="openHelpLink" data-arg="{{ tab }}">{{ about_tab_titles[tab].he }}</a>{% endfor %}
+        </nav>
+      </footer>
     </div>
    </div>
   </div>
@@ -571,12 +576,24 @@
   <!-- ── Help overlay ── -->
   <div id="help-overlay" data-click="closeHelpOnBackdrop">
     <div id="help-panel" class="dialog">
+      <button id="help-lang-toggle" class="btn btn-ghost btn-icon" type="button" data-click="helpCycleLang" hidden>
+        <span class="material-symbols-outlined">language</span>
+      </button>
       <div class="seg" id="help-tabs" role="tablist">
         <button class="seg-btn active" role="tab" type="button" aria-selected="true" data-click="helpSetTab" data-arg="about">אודות</button>
         <button class="seg-btn" role="tab" type="button" aria-selected="false" data-click="helpSetTab" data-arg="prompts">prompt-ים</button>
+        {% for tab in about_legal_tabs %}
+        <button class="seg-btn" role="tab" type="button" aria-selected="false" data-click="helpSetTab" data-arg="{{ tab }}">{{ about_tab_titles[tab].he }}</button>
+        {% endfor %}
       </div>
       <div id="help-content" class="dialog-body prose-content"><p>טוען…</p></div>
       <div id="help-prompts" class="dialog-body" hidden><p>טוען…</p></div>
+      {% for tab in about_legal_tabs %}
+      <div id="help-{{ tab }}" class="dialog-body help-legal" hidden>
+        <article class="prose-content" lang="he" dir="rtl"{% if about_lang == 'en' %} hidden{% endif %}>{% include "about/" ~ tab ~ ".he.html" %}</article>
+        <article class="prose-content" lang="en" dir="ltr"{% if about_lang != 'en' %} hidden{% endif %}>{% include "about/" ~ tab ~ ".en.html" %}</article>
+      </div>
+      {% endfor %}
       <div class="dialog-footer">
         <button id="help-close" class="btn btn-secondary btn-block" data-click="closeHelp">סגירה</button>
       </div>

@@ -283,7 +283,7 @@ async function _pfRenderParty(root, partyId, current) {
       <div class="seg seg--sm"><button class="seg-btn active" type="button" data-click="profilesFilterCandidates" data-arg="all">כל המועמדים</button><button class="seg-btn" type="button" data-click="profilesFilterCandidates" data-arg="mks">מועמדים שכיהנו בכנסת</button></div>
     </div>
     <div class="pf-cand-grid pf-stagger" id="pf-cand-grid">${party.candidates.map(card).join('')}</div>
-    <p class="pf-note">תמונות מאתר הכנסת, ולמועמדים שלא כיהנו בכנסת מוויקיפדיה כשיש. המספר הוא המקום ברשימה.</p>
+    <p class="pf-note">צילום: אתר הכנסת. המספר הוא המקום ברשימה.</p>
   </div>`;
   _pfStaggerIn(root);
 }
@@ -375,7 +375,7 @@ async function _pfRenderCandidate(root, partyId, candidateId, current) {
   root.innerHTML = `<div class="pf-page">
     ${crumbs}
     <section class="pf-hero">
-      <div class="pf-portrait">${pfAvatar(candidate.photo_url, candidate.name)}</div>
+      <div class="pf-portrait">${pfAvatar(candidate.photo_url, candidate.name)}${candidate.photo_url ? '<div class="pf-photo-credit">צילום: אתר הכנסת</div>' : ''}</div>
       <div class="pf-hero-main">
         <div class="pf-eyebrow">
           ${_pfLink(`${PROFILES_PATH}/party/${partyId}`, `${pfIcon('how_to_vote')}${pfEsc(party.name)}`, 'pf-chip pf-chip--party')}

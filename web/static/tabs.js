@@ -72,6 +72,11 @@ document.documentElement.classList.toggle('research-tab-shown', researchTabShown
 /* ── URL routing: / (home), /chat, /research, /protocols?…, /profiles… (url_state.js, profiles.js);
    back/forward re-applies the URL ── */
 function applyUrlRoute() {
+  if (location.pathname === ABOUT_PATH || location.pathname.startsWith(ABOUT_PATH + '/')) {
+    switchTab('home', { writeUrl: false });
+    openHelp(location.pathname.slice(ABOUT_PATH.length + 1) || 'about');
+    return;
+  }
   if (location.pathname === RESEARCH_PATH) { switchTab('research', { writeUrl: false }); return; }
   if (location.pathname === CHAT_PATH) { switchTab('chat', { writeUrl: false }); return; }
   if (location.pathname === GAME_PATH) { switchTab('game', { writeUrl: false }); return; }

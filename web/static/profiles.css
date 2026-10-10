@@ -80,6 +80,7 @@ a.pf-cand:hover { transform: translateY(-2px); box-shadow: 0 6px 18px color-mix(
 .pf-hero::before { content: ''; position: absolute; inset: 0 0 auto 0; height: 6px; background: var(--primary); }
 .pf-portrait { position: relative; width: 140px; }
 .pf-portrait .pf-avatar { width: 140px; height: 140px; font-size: 2rem; box-shadow: 0 0 0 4px var(--surface-lowest), 0 0 0 6px var(--primary); }
+.pf-photo-credit { margin-top: 10px; font-size: 0.68rem; color: var(--ink-faint); text-align: center; }
 .pf-hero-main { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
 .pf-eyebrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .pf-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 9999px; background: var(--surface-low); color: var(--ink-soft); font-size: 0.76rem; font-weight: 600; white-space: nowrap; text-decoration: none; }

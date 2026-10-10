@@ -156,6 +156,22 @@ class TestWebPages:
         assert response.status_code == 200
         assert "/static/url_state.js" in response.text
 
+    @pytest.mark.parametrize("tab", ["", *config.ABOUT_SUBPAGE_TABS])
+    def test_every_about_path_serves_the_page_with_the_legal_texts(self, web_client, tab):
+        response = web_client.get(f"{config.ABOUT_PAGE_PATH}/{tab}".rstrip("/"))
+        assert response.status_code == 200
+        for text in ("מדיניות פרטיות", "Privacy policy", "Terms of use", "omri@meorav.com", "https://meorav.com/mcp"):
+            assert text in response.text
+
+    def test_about_title_follows_tab_and_language(self, web_client):
+        assert "<title>תנאי שימוש · מעורב ירושלמי</title>" in web_client.get(f"{config.ABOUT_PAGE_PATH}/terms").text
+        english = web_client.get(f"{config.ABOUT_PAGE_PATH}/privacy", params={"lang": "en"}).text
+        assert "<title>Privacy policy · Meorav Yerushalmi</title>" in english
+        assert '<article class="prose-content" lang="en" dir="ltr">' in english
+
+    def test_unknown_about_tab_is_404(self, web_client):
+        assert web_client.get(f"{config.ABOUT_PAGE_PATH}/nope").status_code == 404
+
     @pytest.mark.parametrize("path", [config.CHAT_PAGE_PATH, config.RESEARCH_PAGE_PATH, config.PROTOCOLS_PAGE_PATH])
     def test_mcp_host_does_not_serve_the_page(self, web_client, path):
         assert web_client.get(path, headers={"Host": "mcp.meorav.com"}).status_code == 404
