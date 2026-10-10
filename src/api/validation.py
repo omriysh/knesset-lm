@@ -118,6 +118,15 @@ def knesset_num(value: int) -> int:
     return value
 
 
+def protocol_knesset_num(value: int | None) -> int | None:
+    """None (every processed Knesset) or one of config.PROTOCOL_KNESSET_NUMS."""
+    if value is None or value in config.PROTOCOL_KNESSET_NUMS:
+        return value
+    processed = ", ".join(str(k) for k in config.PROTOCOL_KNESSET_NUMS)
+    raise ApiInputError("invalid_knesset_num",
+                        f"only Knesset {processed} protocols are processed; knesset_num must be one of them")
+
+
 def offset(value: int, maximum: int | None = None) -> int:
     maximum = maximum or config.API_MAX_OFFSET
     if not 0 <= value <= maximum:

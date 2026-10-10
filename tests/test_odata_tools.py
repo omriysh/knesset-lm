@@ -419,7 +419,8 @@ class TestKnessetNumRules:
     @pytest.mark.parametrize("tool,args", [("query_protocols", {})])
     def test_protocol_tools_are_limited_to_processed_knessets(self, tool, args):
         from api.validation import ApiInputError
-        assert self._validate(tool, args)["knesset_num"] == max(config.PROTOCOL_KNESSET_NUMS)
+        assert self._validate(tool, args)["knesset_num"] is None
+        assert self._validate(tool, {**args, "knesset_num": min(config.PROTOCOL_KNESSET_NUMS)})["knesset_num"] ==             min(config.PROTOCOL_KNESSET_NUMS)
         with pytest.raises(ApiInputError) as raised:
             self._validate(tool, {**args, "knesset_num": 20})
         assert raised.value.error_code == "invalid_knesset_num"

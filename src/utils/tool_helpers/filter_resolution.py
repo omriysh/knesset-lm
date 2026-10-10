@@ -2,7 +2,7 @@
 to the exact strings stored in knesset.db, plus the cached filter vocabulary they resolve against.
 
 The vocabulary is read with a handful of small queries and cached per db file, its mtime and the
-Knesset number, so resolution and the empty-result diagnostics cost dictionary lookups.
+Knesset numbers, so resolution and the empty-result diagnostics cost dictionary lookups.
 """
 
 from __future__ import annotations
@@ -106,9 +106,20 @@ def matching_party_names(query: str, party_names: list[str]) -> list[tuple[str, 
     return [(name, score) for name, score in scored if score >= PARTY_WHOLE_WORDS_SCORE]
 
 
+def requested_knesset_nums(knesset_num: int | None) -> tuple[int, ...]:
+    """The Knessets a protocol query covers: the requested one, or every processed Knesset when omitted."""
+    return (int(knesset_num),) if knesset_num else tuple(config.PROTOCOL_KNESSET_NUMS)
+
+
+def knessets_text(knesset_nums) -> str:
+    """'Knesset 25' or 'Knessets 24, 25', for messages."""
+    nums = store.knesset_num_list(knesset_nums)
+    return f"Knesset {nums[0]}" if len(nums) == 1 else f"Knessets {', '.join(map(str, nums))}"
+
+
 @dataclass
 class FilterVocabulary:
-    knesset_num: int
+    knesset_nums: tuple[int, ...]
     knesset_nums_with_meetings: list[int]
     meeting_date_range: tuple[str | None, str | None]
     party_member_counts: dict[str, int]
@@ -144,46 +155,59 @@ def _db_file_version(conn) -> tuple[str, int]:
         return db_file, -1
 
 
-def filter_vocabulary(conn, knesset_num: int) -> FilterVocabulary:
+def filter_vocabulary(conn, knesset_nums: int | tuple[int, ...]) -> FilterVocabulary:
+    knesset_nums = tuple(store.knesset_num_list(knesset_nums))
     db_file, db_mtime_ns = _db_file_version(conn)
-    cache_key = (db_file, db_mtime_ns, knesset_num)
+    cache_key = (db_file, db_mtime_ns, knesset_nums)
     if db_mtime_ns != -1 and cache_key in _vocabulary_cache:
         return _vocabulary_cache[cache_key]
-    vocabulary = _read_vocabulary(conn, knesset_num)
+    vocabulary = _read_vocabulary(conn, knesset_nums)
     if len(_vocabulary_cache) >= _VOCABULARY_CACHE_MAX_ENTRIES:
         _vocabulary_cache.clear()
     _vocabulary_cache[cache_key] = vocabulary
     return vocabulary
 
 
-def _read_vocabulary(conn, knesset_num: int) -> FilterVocabulary:
+def _read_vocabulary(conn, knesset_nums: tuple[int, ...]) -> FilterVocabulary:
+    knesset_sql, knesset_params = store.knesset_condition("knesset_num", knesset_nums)
     committee_meeting_counts = {row[0]: row[1] for row in conn.execute(
-        "SELECT committee, COUNT(*) FROM meetings WHERE knesset_num = ? AND committee IS NOT NULL GROUP BY committee",
-        (knesset_num,))}
+        f"SELECT committee, COUNT(*) FROM meetings WHERE {knesset_sql} AND committee IS NOT NULL GROUP BY committee",
+        knesset_params)}
     committee_name_by_id = {str(row[0]): row[1] for row in conn.execute(
-        "SELECT committee_id, name FROM committees WHERE knesset_num = ?", (knesset_num,))}
+        f"SELECT committee_id, name FROM committees WHERE {knesset_sql}", knesset_params)}
     committee_names_by_key: dict[str, list[str]] = {}
     for name in [*committee_meeting_counts, *committee_name_by_id.values()]:
         names = committee_names_by_key.setdefault(normalized_name_key(name), [])
         if name not in names:
             names.append(name)
-    date_range = conn.execute("SELECT MIN(date), MAX(date) FROM meetings WHERE knesset_num = ?",
-                              (knesset_num,)).fetchone()
-    mk_name_entries = store.name_entries(conn, "mks", knesset_num)
+    date_range = conn.execute(f"SELECT MIN(date), MAX(date) FROM meetings WHERE {knesset_sql}",
+                              knesset_params).fetchone()
+    mk_name_entries = store.name_entries(conn, "mks", knesset_nums)
     return FilterVocabulary(
-        knesset_num=knesset_num,
+        knesset_nums=knesset_nums,
         knesset_nums_with_meetings=[row[0] for row in conn.execute(
             "SELECT DISTINCT knesset_num FROM meetings ORDER BY knesset_num")],
         meeting_date_range=(date_range[0], date_range[1]),
         party_member_counts={row[0]: row[1] for row in conn.execute(
-            "SELECT party, COUNT(*) FROM mks WHERE knesset_num = ? AND party IS NOT NULL GROUP BY party",
-            (knesset_num,))},
+            f"SELECT party, COUNT(*) FROM mks WHERE {knesset_sql} AND party IS NOT NULL GROUP BY party",
+            knesset_params)},
         committee_meeting_counts=committee_meeting_counts,
         committee_names_by_key=committee_names_by_key,
         committee_name_by_id=committee_name_by_id,
         mk_name_by_id={entry["id"]: entry["label"] for entry in mk_name_entries},
         mk_name_entries=mk_name_entries,
     )
+
+
+def resolve_party_in_each_knesset(conn, query: str, knesset_nums) -> list[str]:
+    """The names a party query resolves to, one per Knesset where it resolves (party names differ between
+    Knessets: ש"ס is 'ש"ס' in one and a long name in another), latest Knesset first, deduplicated."""
+    names: list[str] = []
+    for knesset_num in reversed(store.knesset_num_list(knesset_nums)):
+        resolution = resolve_party(query, list(filter_vocabulary(conn, knesset_num).party_member_counts))
+        if resolution.party is not None and resolution.party not in names:
+            names.append(resolution.party)
+    return names
 
 
 @dataclass(frozen=True)
@@ -228,7 +252,7 @@ class MkNameResolution:
 
 
 def resolve_mk_name(query: str, vocabulary: FilterVocabulary) -> MkNameResolution:
-    """An MK name → mk_id when exactly one MK of the Knesset matches confidently."""
+    """An MK name → mk_id when exactly one MK of the Knessets matches confidently."""
     index = vocabulary.mk_index()
     exact_mk_id = index.unambiguous_label_match(query)
     if exact_mk_id is not None:
@@ -245,5 +269,6 @@ def resolve_mk_name(query: str, vocabulary: FilterVocabulary) -> MkNameResolutio
 __all__ = [
     "CommitteeResolution", "FilterVocabulary", "MkNameResolution", "PartyResolution",
     "closest_names", "filter_vocabulary", "normalized_name_key", "normalized_party_key",
-    "matching_party_names", "resolve_committee", "resolve_mk_name", "resolve_party", "score_party_names",
+    "knessets_text", "matching_party_names", "requested_knesset_nums", "resolve_committee", "resolve_mk_name",
+    "resolve_party", "resolve_party_in_each_knesset", "score_party_names",
 ]

@@ -216,6 +216,23 @@ def committee_attendance(conn: sqlite3.Connection, mk_id: str, knesset_num: int,
             "member_meetings_attended": len(attended & member_meetings), "per_committee": per_committee}
 
 
+def activity_knessets(conn: sqlite3.Connection, mk_id: str, knesset_nums) -> list[int]:
+    """The Knessets among knesset_nums in which the MK has opinions or themes, latest first."""
+    nums = list(knesset_nums)
+    if not nums:
+        return []
+    placeholders = ",".join("?" * len(nums))
+    return [row[0] for row in conn.execute(f"""
+        SELECT knesset_num FROM opinions WHERE mk_id = ? AND knesset_num IN ({placeholders})
+        UNION SELECT knesset_num FROM mk_themes WHERE mk_id = ? AND knesset_num IN ({placeholders})
+        ORDER BY 1 DESC""", [mk_id, *nums, mk_id, *nums])]
+
+
+def theme_knesset(conn: sqlite3.Connection, theme_id: int) -> int | None:
+    row = conn.execute("SELECT knesset_num FROM mk_themes WHERE id = ?", (theme_id,)).fetchone()
+    return row[0] if row else None
+
+
 def opinion_counts(conn: sqlite3.Connection, mk_id: str, knesset_num: int) -> dict:
     total, verified, meetings = conn.execute(
         "SELECT COUNT(*), SUM(quote_verified), COUNT(DISTINCT meeting_id) FROM opinions WHERE mk_id = ? AND knesset_num = ?",

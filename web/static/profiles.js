@@ -126,11 +126,19 @@ function _pfRender() {
 const _pfLink = (href, inner, cls = '') => `<a href="${pfEsc(href)}" class="${cls}" data-click="profilesNav">${inner}</a>`;
 const _pfCrumbs = items => `<nav class="pf-crumbs">${items.map(([label, href]) => href ? _pfLink(href, pfEsc(label)) : `<span>${pfEsc(label)}</span>`).join(pfIcon('chevron_left'))}</nav>`;
 
+const pfKnessetLabel = knesset => `הכנסת ה-${knesset}`;
+const pfInLabel = label => `ב${label.replace(/^ה/, '')}`;
+/* [24, 25] → 'הכנסות ה-24 וה-25' */
+function pfKnessetsLabel(knessets) {
+  if (knessets.length <= 1) return knessets.length ? pfKnessetLabel(knessets[0]) : '';
+  return `הכנסות ה-${knessets.slice(0, -1).join(', ה-')} וה-${knessets[knessets.length - 1]}`;
+}
+
 /* ── party grid ──────────────────────────────────────────────────── */
 function _pfPartyTags(party) {
   return [
-    party.full_profiles ? `<span class="pf-tag pf-tag--mk">${pfIcon('verified')}${party.full_profiles} ח"כ בכנסת ה-25</span>` : '',
-    party.former_mks ? `<span class="pf-tag pf-tag--former">${pfIcon('history')}${party.former_mks} כיהנו בעבר</span>` : '',
+    party.full_profiles ? `<span class="pf-tag pf-tag--mk">${pfIcon('verified')}${party.full_profiles} פרופילים מלאים</span>` : '',
+    party.former_mks ? `<span class="pf-tag pf-tag--former">${pfIcon('history')}${party.former_mks} פרופילים חלקיים</span>` : '',
     `<span class="pf-tag">${party.candidate_count} מועמדים</span>`,
   ].join('');
 }
@@ -257,7 +265,7 @@ async function _pfRenderParty(root, partyId, current) {
       <div class="pf-cand-name">${pfEsc(c.name)}</div>
       ${c.profile === 'full' ? `<span class="pf-tag pf-tag--mk">${pfIcon('verified')}פרופיל מלא</span>`
         : c.profile === 'bills' ? `<span class="pf-tag pf-tag--former">${pfIcon('history')}ח"כ ${_pfLatestServiceYears(c.knessets)}</span>` : ''}
-      ${c.from_party && (isJointList || c.from_party !== mainFromParty) ? `<div class="pf-cand-from">מטעם ${pfEsc(c.from_party)}</div>` : ''}`;
+      ${c.from_party && (isJointList || c.from_party !== mainFromParty) ? `<div class="pf-cand-from">${pfEsc(c.from_party)}</div>` : ''}`;
     return c.profile === 'none'
       ? `<button class="pf-cand pf-cand--none" type="button" data-profile="none" data-click="profilesNewcomer" data-name="${pfEsc(c.name)}">${inner}</button>`
       : _pfLink(`${PROFILES_PATH}/party/${partyId}/candidate/${c.position}`, inner, `pf-cand pf-cand--${c.profile}`).replace('<a ', `<a data-profile="${_esc(c.profile)}" `);
@@ -296,9 +304,10 @@ function _pfHeroRole(data) {
     roles.knesset_roles.forEach(r => parts.push(`<b>${pfEsc(r.position)}</b>`));
   }
   const knessets = candidate.knessets;
-  const served = knessets.length === 1 ? `הכנסת ה-${knessets[0]}` : `הכנסות ה-${knessets.slice(0, -1).join(', ה-')} וה-${knessets[knessets.length - 1]}`;
+  const served = pfKnessetsLabel(knessets);
   const faction = roles && roles.factions.length ? roles.factions[roles.factions.length - 1].faction_name : '';
-  parts.push(`${candidate.profile === 'full' ? 'חבר/ת' : 'כיהן/ה ב'}${candidate.profile === 'full' ? ` ${served}` : served}${faction ? ` · סיעת ${pfEsc(faction)}` : ''}`);
+  parts.push(`${candidate.profile === 'full' ? 'חבר/ת' : 'כיהן/ה '}${candidate.profile === 'full' ? ` ${served}` : pfInLabel(served)}${faction ? ` · סיעת ${pfEsc(faction)}` : ''}`);
+  if (candidate.from_party && candidate.from_party !== data.party.name) parts.push(`מטעם ${pfEsc(candidate.from_party)}`);
   return parts.join(' · ');
 }
 
@@ -333,11 +342,12 @@ function _pfHeroStats(data) {
   }
   const attendance = activity.attendance;
   const committeePct = pfPct(attendance.member_meetings_attended, attendance.member_meetings);
+  const inKnesset = pfInLabel(pfKnessetLabel(activity.knesset_num));
   return [
-    _pfStat('pf-stat-opinions', pfNum(activity.opinions), `עמדות בפרוטוקולים, ב-${pfNum(activity.meetings_spoke)} ישיבות`),
+    _pfStat('pf-stat-opinions', pfNum(activity.opinions), `עמדות בפרוטוקולים ${inKnesset}, ב-${pfNum(activity.meetings_spoke)} ישיבות`),
     attendance.member_meetings
-      ? _pfStat('pf-stat-committee', `${committeePct}<small>%</small>`, `נוכחות בוועדות: ${pfNum(attendance.member_meetings_attended)} מתוך ${pfNum(attendance.member_meetings)} ישיבות של ועדות שהיה/תה חבר/ה בהן`, committeePct)
-      : _pfStat('pf-stat-committee', pfNum(attendance.meetings_attended), 'ישיבות ועדה שנכח/ה בהן'),
+      ? _pfStat('pf-stat-committee', `${committeePct}<small>%</small>`, `נוכחות בוועדות ${inKnesset}: ${pfNum(attendance.member_meetings_attended)} מתוך ${pfNum(attendance.member_meetings)} ישיבות של ועדות שהיה/תה חבר/ה בהן`, committeePct)
+      : _pfStat('pf-stat-committee', pfNum(attendance.meetings_attended), `ישיבות ועדה שנכח/ה בהן ${inKnesset}`),
     _pfStat('pf-stat-votes', '…', 'נוכחות בהצבעות במליאה', 0, true),
     _pfStat('pf-stat-bills', '…', 'הצעות חוק', null, true),
   ].join('');
@@ -358,7 +368,7 @@ async function _pfRenderCandidate(root, partyId, candidateId, current) {
     return;
   }
   const tabs = PROFILE_TABS_BY_DEPTH[candidate.profile];
-  _pf = { api, base, data, tabs, loaded: {}, themes: null, evidence: {},
+  _pf = { api, base, data, tabs, loaded: {}, themes: null, evidence: {}, knesset: null,
           opinions: { q: '', theme: '', from: '', to: '', group: 'date', rows: [], total: 0, facets: null, loading: false },
           votes: { q: '', filter: 'all', rows: [], total: 0, loading: false },
           bills: { q: '', role: '', stage: '', rows: [], total: 0, loading: false } };
@@ -435,7 +445,7 @@ const _pfCardHead = (icon, title, sub, extra = '') => `<div class="pf-card-head"
 async function _pfLoadThemesTab() {
   const profile = _pf;
   const panel = document.getElementById('pf-panel-themes');
-  panel.innerHTML = `<section class="pf-card" id="pf-themes-card">${_pfCardHead('insights', 'נושאי ההתבטאות העיקריים מהכנסת האחרונה', ' ')}<div class="pf-card-body">${pfSpinner('טוען נושאים…')}</div></section>
+  panel.innerHTML = `<section class="pf-card" id="pf-themes-card">${_pfCardHead('insights', 'נושאי ההתבטאות העיקריים', ' ', '<div class="seg seg--sm" id="pf-knesset-seg" hidden></div>')}<div class="pf-card-body">${pfSpinner('טוען נושאים…')}</div></section>
     <section class="pf-card" id="pf-opinions-card">${_pfCardHead('format_quote', 'כל העמדות <span class="pf-count" id="pf-op-total"></span>', 'מתוך סיכומי הפרוטוקולים, מהחדש לישן',
       `<div class="seg seg--sm"><button class="seg-btn active" type="button" data-click="profilesOpinionGroup" data-arg="date">לפי תאריך</button><button class="seg-btn" type="button" data-click="profilesOpinionGroup" data-arg="committee">לפי ועדה</button></div>`)}
       <div class="pf-card-body">
@@ -447,20 +457,49 @@ async function _pfLoadThemesTab() {
         <div id="pf-op-list">${pfSpinner('טוען עמדות…')}</div>
         <div class="pf-center"><button class="btn btn-secondary btn-sm" type="button" id="pf-op-more" data-click="profilesOpinionMore" hidden>${pfIcon('expand_more')}הצגת עוד</button></div>
       </div></section>`;
+  _pfLoadKnessetActivity(profile, null);
+}
+
+/* Themes and opinions of one Knesset (null: the latest with activity); no combined view, so the
+   selector shows how positions changed from one Knesset to the next. */
+async function _pfLoadKnessetActivity(profile, knesset) {
+  const body = document.querySelector('#pf-themes-card .pf-card-body');
+  body.innerHTML = pfSpinner('טוען נושאים…');
+  _pfHidePopup();
   try {
-    profile.themes = await pfFetch(`${profile.api}/themes`);
+    profile.themes = await pfFetch(knesset ? `${profile.api}/themes?knesset=${encodeURIComponent(knesset)}` : `${profile.api}/themes`);
   } catch (err) {
-    if (profile === _pf) panel.querySelector('#pf-themes-card .pf-card-body').innerHTML = pfErrorBox(err);
-    profile.themes = { themes: [], quarters: [] };
+    if (profile === _pf) body.innerHTML = pfErrorBox(err);
+    profile.themes = { themes: [], quarters: [], knessets: profile.themes?.knessets || [], knesset_num: knesset, failed: true };
   }
   if (profile !== _pf) return;
+  profile.knesset = profile.themes.knesset_num;
+  profile.evidence = {};
   profile.themes.themes.forEach((theme, i) => {
     theme.color = THEME_COLORS[i % THEME_COLORS.length];
     theme.evidence.forEach((e, n) => { profile.evidence[`${theme.id}-${n}`] = e; });
   });
+  _pfRenderKnessetSeg();
+  if (profile.knesset) document.querySelector('#pf-themes-card .pf-card-title').textContent = `נושאי ההתבטאות העיקריים ${pfInLabel(pfKnessetLabel(profile.knesset))} (${_pfLatestServiceYears([profile.knesset])})`;
   pfSetThemeSource('profile', { themes: profile.themes.themes, quarters: profile.themes.quarters, evidence: profile.evidence, api: profile.api });
-  _pfRenderThemes(false);
-  _pfLoadOpinions(true);
+  if (!profile.themes.failed) _pfRenderThemes(false);
+  Object.assign(profile.opinions, { theme: '', facets: null, rows: [], total: 0 });
+  if (profile.knesset) _pfLoadOpinions(true);
+}
+
+function _pfRenderKnessetSeg() {
+  const seg = document.getElementById('pf-knesset-seg');
+  const knessets = _pf.themes.knessets || [];
+  seg.hidden = knessets.length < 2;
+  seg.innerHTML = knessets.map(k => `<button class="seg-btn${k === _pf.knesset ? ' active' : ''}" type="button" data-click="profilesKnesset" data-arg="${_esc(k)}">${pfKnessetLabel(k)}</button>`).join('');
+}
+
+function profilesKnesset(button) {
+  const knesset = Number(button.dataset.arg);
+  if (!_pf || knesset === _pf.knesset) return;
+  _pf.knesset = knesset;
+  _pfRenderKnessetSeg();
+  _pfLoadKnessetActivity(_pf, knesset);
 }
 
 function _pfThemeById(id) { return (_pf?.themes?.themes || []).find(t => String(t.id) === String(id)); }
@@ -644,12 +683,12 @@ function _pfHidePopup() {
 async function _pfLoadOpinions(reset) {
   const profile = _pf, state = profile.opinions;
   if (reset) state.rows = [];
-  const params = new URLSearchParams({ offset: state.rows.length });
+  const params = new URLSearchParams({ offset: state.rows.length, knesset: profile.knesset });
   if (state.q) params.set('q', state.q);
   if (state.theme) params.set('theme', state.theme);
   if (state.from) params.set('date_from', state.from);
   if (state.to) params.set('date_to', state.to);
-  const key = `${state.q}|${state.theme}|${state.from}|${state.to}`;
+  const key = `${profile.knesset}|${state.q}|${state.theme}|${state.from}|${state.to}`;
   state.key = key;
   const list = document.getElementById('pf-op-list');
   if (reset) list.innerHTML = pfSpinner('טוען עמדות…');
@@ -668,7 +707,7 @@ function _pfRenderOpinions() {
   const state = _pf.opinions;
   const themes = _pf.themes?.themes || [];
   const counts = state.facets?.themes || {};
-  document.getElementById('pf-op-total').textContent = pfNum(_pf.data.activity?.opinions);
+  document.getElementById('pf-op-total').textContent = pfNum(_pf.themes?.total_opinions ?? _pf.data.activity?.opinions);
   const pill = (id, label, color, count) => `<button class="pf-pill${String(state.theme) === String(id) ? ' on' : ''}" type="button" data-click="profilesOpinionTheme" data-arg="${_esc(id)}" style="--tc:${color}" title="${pfEsc(label)}"><span class="dot"></span><span>${pfEsc(label)}</span> · ${pfNum(count)}</button>`;
   const themed = themes.filter(t => counts[t.id]);
   const shown = state.pillsOpen ? themed : themed.filter((t, i) => i < THEME_PILLS_SHOWN || String(t.id) === String(state.theme));
@@ -977,11 +1016,13 @@ function _pfKnessetBlock(k, isCurrent) {
 async function _pfLoadRolesTab() {
   const profile = _pf;
   const panel = document.getElementById('pf-panel-roles');
-  const attendance = profile.data.activity?.attendance;
+  const attendanceBlocks = (profile.data.activity?.attendance_by_knesset || []).filter(k => k.per_committee.length);
+  const attendanceBlock = k => `<div class="pf-k-block${k === attendanceBlocks[0] ? ' current' : ''}"><div class="pf-k-head">${pfKnessetLabel(k.knesset_num)}${k.member_meetings ? ` <small>נוכחות ${pfPct(k.member_meetings_attended, k.member_meetings)}% בישיבות הוועדות שהיה/תה חבר/ה בהן</small>` : ''}</div>
+      ${k.per_committee.slice(0, 10).map(([committee, count]) => `<div class="pf-att-row"><span title="${pfEsc(committee)}">${pfEsc(committee)}</span><div class="pf-att-bar"><i style="width:${count / k.per_committee[0][1] * 100}%"></i></div><b>${pfNum(count)}</b></div>`).join('')}</div>`;
   panel.innerHTML = `<section class="pf-card">${_pfCardHead('badge', 'תפקידים', 'סיעות, ועדות ותפקידים בכל הכנסות שכיהן/ה בהן')}<div class="pf-card-body" id="pf-roles">${pfSpinner('טוען תפקידים…')}</div></section>
-    ${attendance && attendance.per_committee.length ? `<section class="pf-card">${_pfCardHead('event_available', 'נוכחות לפי ועדה', 'ישיבות בכנסת ה-25 שנכח/ה בהן, מתוך הפרוטוקולים')}<div class="pf-card-body">
-      ${attendance.per_committee.slice(0, 10).map(([committee, count]) => `<div class="pf-att-row"><span title="${pfEsc(committee)}">${pfEsc(committee)}</span><div class="pf-att-bar"><i style="width:${count / attendance.per_committee[0][1] * 100}%"></i></div><b>${pfNum(count)}</b></div>`).join('')}
-      <p class="pf-note">מספר הישיבות לפי רשימת הנוכחים בפרוטוקול. אחוז הנוכחות בראש העמוד מחושב רק על ועדות שהיה/תה חבר/ה בהן, בתקופת החברות.</p>
+    ${attendanceBlocks.length ? `<section class="pf-card">${_pfCardHead('event_available', 'נוכחות לפי ועדה', `ישיבות שנכח/ה בהן ${pfInLabel(pfKnessetsLabel(attendanceBlocks.map(k => k.knesset_num)))}, מתוך הפרוטוקולים`)}<div class="pf-card-body">
+      <div class="pf-roles">${attendanceBlocks.map(attendanceBlock).join('')}</div>
+      <p class="pf-note">מספר הישיבות לפי רשימת הנוכחים בפרוטוקול. אחוז הנוכחות מחושב רק על ועדות שהיה/תה חבר/ה בהן, בתקופת החברות.</p>
     </div></section>` : ''}`;
   try {
     const data = await pfFetch(`${profile.api}/roles`);

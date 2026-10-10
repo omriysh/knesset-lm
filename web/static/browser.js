@@ -401,23 +401,24 @@ async function _loadMeeting(meetingId, { pushUrl = true } = {}) {
       fetch(`/api/research/${_sid}/meeting/${encodeURIComponent(meetingId)}/transcript`).then(r => r.json()),
     ]);
 
-    if (summaryData.error) throw new Error(summaryData.error);
     if (transcriptData.error) throw new Error(transcriptData.error);
+    if (summaryData.error) console.warn(`[browser] ${meetingId}: ${summaryData.error}; showing the transcript only`);
+    const meetingSummary = summaryData.error ? { topics: [] } : summaryData;
 
-    _summary = summaryData;
+    _summary = meetingSummary;
     col.innerHTML =
       `<div class="transcript-inner">` +
-        _summaryHtml(summaryData, m) +
+        _summaryHtml(meetingSummary, m) +
         _transcriptHtml(transcriptData) +
       `</div>`;
 
     // Populate header summary bar (desktop)
     const summaryBar = _panel?.querySelector('#browser-summary-bar');
     if (summaryBar) {
-      summaryBar.innerHTML = '<div class="summary-bar-inner">' + _summaryBodyHtml(summaryData) + '</div>';
+      summaryBar.innerHTML = '<div class="summary-bar-inner">' + _summaryBodyHtml(meetingSummary) + '</div>';
     }
     const summaryBtn = _panel?.querySelector('#browser-summary-btn');
-    if (summaryBtn) summaryBtn.style.display = 'flex';
+    if (summaryBtn) summaryBtn.style.display = meetingSummary.topics.length ? 'flex' : 'none';
     _wireTopicHits(col);
     _wireTopicHits(_panel?.querySelector('#browser-summary-bar'));
     _wireSummaryJumps(col);

@@ -335,19 +335,21 @@ _READ_THE_RESPONSE = "Read `hint` (next step), `diagnostics` (why a filter match
 _PROTOCOL_KNESSETS_TEXT = ", ".join(map(str, config.PROTOCOL_KNESSET_NUMS))
 _ROSTER_KNESSETS_TEXT = f"{config.API_KNESSET_NUM_RANGE[0]}-{config.API_KNESSET_NUM_RANGE[1]}"
 _EVERY_KNESSET_TEXT = "knesset_num is optional: omit it to search every Knesset (live Knesset API)."
+_EVERY_PROCESSED_KNESSET_TEXT = f"Omit knesset_num to cover every processed Knesset ({_PROTOCOL_KNESSETS_TEXT})."
 _PUBLIC_USAGE_NOTES = {
     "find_mk":         (f"Returns up to {config.API_FIND_PAGE_SIZE} matches. "
-                        f"knesset_num {_ROSTER_KNESSETS_TEXT}, default 25."),
-    "find_committee":  (f"Returns up to {config.API_FIND_PAGE_SIZE} matches; an empty query lists every committee. "
-                        f"Committees of Knesset {_PROTOCOL_KNESSETS_TEXT} only."),
+                        f"knesset_num {_ROSTER_KNESSETS_TEXT}; {_EVERY_PROCESSED_KNESSET_TEXT}"),
+    "find_committee":  (f"Returns up to {config.API_FIND_PAGE_SIZE} matches; an empty query lists every committee "
+                        f"that has meetings, one row per Knesset. {_EVERY_PROCESSED_KNESSET_TEXT}"),
     "find_party":      ("An empty query lists every party. "
-                        f"knesset_num {_ROSTER_KNESSETS_TEXT}, default 25."),
+                        f"knesset_num {_ROSTER_KNESSETS_TEXT}, default {config.ROSTER_DEFAULT_KNESSET_NUM}."),
     "query_protocols": (f"Pages are about {config.API_PROTOCOLS_PAGE_CHARS} characters of whole rows per scope, "
                         "and offset counts rows: follow `next` for more. Texts are never cut or split: a "
                         "long row comes whole, so a page can run over. "
                         "Query: 1-2 Hebrew key words, all must appear; one topic per call. mk_id, party and "
                         "committees accept names, the server resolves them. Protocols cover Knesset "
-                        f"{_PROTOCOL_KNESSETS_TEXT} only, meetings from {{meeting_date_from}} to {{meeting_date_to}}. "
+                        f"{_PROTOCOL_KNESSETS_TEXT}, meetings from {{meeting_date_from}} to {{meeting_date_to}}; "
+                        "omit knesset_num to search all of them, rows carry their knesset_num. "
                         "Cite committee, date and meeting_id for every claim and link the row's `url` (the source "
                         "in the protocol reader: the meeting, the speech, or the quote highlighted); quote `quote` "
                         "or speech `text`, never an `opinion` paraphrase as a quote."),
@@ -433,7 +435,7 @@ def public_tool_schema(spec) -> dict:
             properties["query"]["examples"] = _PUBLIC_QUERY_EXAMPLES[spec.name]
     if "party" in properties:
         properties["party"]["maxLength"] = config.API_MAX_NAME_CHARS
-    if "knesset_num" in properties and spec.name in ("query_protocols", "find_committee"):
+    if "knesset_num" in properties and spec.name == "query_protocols":
         properties["knesset_num"].update(enum=list(config.PROTOCOL_KNESSET_NUMS))
     elif "knesset_num" in properties:
         properties["knesset_num"].update(minimum=config.API_KNESSET_NUM_RANGE[0],
@@ -453,22 +455,23 @@ def public_tool_schema(spec) -> dict:
 
 # ── tool routes ──────────────────────────────────────────────────────────────
 
-def _find(request: Request, tool: str, q: str, knesset_num: int, format: str):
+def _find(request: Request, tool: str, q: str, knesset_num: int | None, format: str):
     return run_tool(request, tool, {"query": q, "knesset_num": knesset_num}, format)
 
 
 @router.get("/v1/mks")
-def find_mk(request: Request, q: str = "", knesset_num: int = 25, format: str = "json"):
+def find_mk(request: Request, q: str = "", knesset_num: int | None = None, format: str = "json"):
     return _find(request, "find_mk", q, knesset_num, format)
 
 
 @router.get("/v1/committees")
-def find_committee(request: Request, q: str = "", knesset_num: int = 25, format: str = "json"):
+def find_committee(request: Request, q: str = "", knesset_num: int | None = None, format: str = "json"):
     return _find(request, "find_committee", q, knesset_num, format)
 
 
 @router.get("/v1/parties")
-def find_party(request: Request, q: str = "", knesset_num: int = 25, format: str = "json"):
+def find_party(request: Request, q: str = "", knesset_num: int = config.ROSTER_DEFAULT_KNESSET_NUM,
+               format: str = "json"):
     return _find(request, "find_party", q, knesset_num, format)
 
 
@@ -485,7 +488,7 @@ def query_protocols(
     date_to: str | None = None,
     sort: str | None = None,
     offset: int = 0,
-    knesset_num: int = 25,
+    knesset_num: int | None = None,
     format: str = "json",
 ):
     return run_tool(request, "query_protocols", {

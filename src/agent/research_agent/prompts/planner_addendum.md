@@ -84,12 +84,15 @@ Reading a meeting's transcript (`meeting_ids` + `search_in=["speeches"]`,
 paged with `offset`) is expensive in tokens — reserve it for the 1–3
 meetings that earlier results show to be the densest evidence.
 
-## 5. Knesset number defaults to 25
+## 5. Knesset number: omit it by default
 
-All schema defaults already set `knesset_num=25` (the current Knesset).
-Override only when the user's question explicitly asks about an
-earlier Knesset (e.g. "הכנסת ה-23"). When in doubt, omit
-`knesset_num` from `args_hint` and let the default apply.
+`query_protocols`, `find_mk` and `find_committee` cover every Knesset
+whose protocols are in the database when `knesset_num` is omitted; each
+protocol row carries its `knesset_num`, so answers can show how positions
+changed between Knessets. `find_party` defaults to the latest Knesset,
+since party names differ between Knessets. Set `knesset_num` only when
+the user's question explicitly asks about one Knesset (e.g. "הכנסת
+ה-24"). When in doubt, omit `knesset_num` from `args_hint`.
 
 ## 6. `analyze` steps have NO tools
 

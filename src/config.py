@@ -266,8 +266,9 @@ API_MAX_LIST_ITEMS            = 20       # repeated / comma-separated list param
 API_MAX_ID_DIGITS             = 12
 API_MAX_OFFSET                = 5000       # rows: query_bills, query_votes
 BILL_TEXT_MAX_OFFSET          = 2_000_000  # characters into one bill document's text (get_bill)
-API_KNESSET_NUM_RANGE         = (1, 25)  # live OData tools (votes, bills, find_mk, find_party, find_committee); omitted = every Knesset
-PROTOCOL_KNESSET_NUMS         = (25,)    # Knessets preprocessed into knesset.db: query_protocols, committee listing with meeting counts
+API_KNESSET_NUM_RANGE         = (1, 25)  # live OData tools (votes, bills, find_mk, find_party, find_committee); omitted = every Knesset for votes and bills
+PROTOCOL_KNESSET_NUMS         = (24, 25) # Knessets preprocessed into knesset.db, ascending; protocol tools, find_mk and find_committee default to all of them
+ROSTER_DEFAULT_KNESSET_NUM    = max(PROTOCOL_KNESSET_NUMS)  # find_party (party names belong to one Knesset)
 API_RATE_LIMIT_WEB_PER_MINUTE = 300      # per client IP, every other web route (reading tab fires one request per meeting/speaker)
 
 # Research agent tool arguments: validated like the public API (api.tool_arguments) but with room for

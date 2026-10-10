@@ -76,7 +76,10 @@ class TestFindSchemas:
     @pytest.mark.parametrize("tool,top_k", [("find_mk", 5), ("find_committee", 5), ("find_party", 3)])
     def test_unchanged(self, tool, top_k):
         assert _required(tool) == ({"query"} if tool == "find_mk" else set())
-        assert _props(tool)["knesset_num"]["default"] == 25
+        if tool == "find_party":
+            assert _props(tool)["knesset_num"]["default"] == config.ROSTER_DEFAULT_KNESSET_NUM
+        else:
+            assert "default" not in _props(tool)["knesset_num"]
         assert _props(tool)["top_k"]["default"] == top_k
 
 
@@ -110,7 +113,7 @@ class TestQueryProtocolsSchema:
         assert props["top_k"]["maximum"] == config.QUERY_PROTOCOLS_MAX_TOP_K
         assert props["top_k"]["minimum"] == 1
         assert props["offset"]["default"] == 0
-        assert props["knesset_num"]["default"] == 25
+        assert "default" not in props["knesset_num"]
 
     def test_ui_enriches_meeting_id(self):
         assert _spec("query_protocols").ui["enrich_fields"] == ["meeting_id"]

@@ -12,6 +12,7 @@ import asyncio
 import json
 import os
 import re
+import sqlite3
 import sys
 import threading
 import time
@@ -690,33 +691,29 @@ class TestWebProcessSettings:
         assert config.HTTP_TIMEOUT_SECONDS == config.PUBLIC_API_HTTP_TIMEOUT_SECONDS
 
     def test_meta_is_cached_in_memory(self, web, monkeypatch):
-        import utils.knesset_db as kdb
+        from retrieval import knesset_db_store as store
         calls = []
-        monkeypatch.setattr(kdb, "get_all_committees", lambda k: calls.append("c") or [{"Name": "ועדה"}])
-        monkeypatch.setattr(kdb, "get_all_mks", lambda k: calls.append("m") or [
-            {"mk_individual_first_name": "גלעד", "mk_individual_name": "קריב"}])
-        monkeypatch.setattr(kdb, "get_all_parties", lambda k: calls.append("p") or [{"party": "העבודה"}])
+        lists = {"committees": ["ועדה"], "mks": ["גלעד קריב"], "parties": ["העבודה"]}
+        monkeypatch.setattr(store, "browse_filter_lists", lambda conn, knesset_nums: calls.append(knesset_nums) or lists)
         web.app.forget_meta_cache()
         bodies = [web.client.get("/api/meta").json() for _ in range(3)]
-        assert bodies[0] == bodies[2] == {"committees": ["ועדה"], "mks": ["גלעד קריב"], "parties": ["העבודה"]}
-        assert sorted(calls) == ["c", "m", "p"]
+        assert bodies[0] == bodies[2] == {**lists, "knessets": list(config.PROTOCOL_KNESSET_NUMS)}
+        assert calls == [tuple(config.PROTOCOL_KNESSET_NUMS)]
         web.app.forget_meta_cache()
 
     def test_meta_failure_is_not_cached(self, web, monkeypatch):
-        import utils.knesset_db as kdb
+        from retrieval import knesset_db_store as store
         attempts = []
 
-        def failing(k):
-            attempts.append(k)
-            raise RuntimeError("oknesset down")
+        def failing(conn, knesset_nums):
+            attempts.append(knesset_nums)
+            raise sqlite3.OperationalError("database is locked")
 
-        monkeypatch.setattr(kdb, "get_all_committees", failing)
-        monkeypatch.setattr(kdb, "get_all_mks", lambda k: [])
-        monkeypatch.setattr(kdb, "get_all_parties", lambda k: [])
+        monkeypatch.setattr(store, "browse_filter_lists", failing)
         web.app.forget_meta_cache()
         for _ in range(2):
             r = web.client.get("/api/meta")
-            assert r.status_code == 503 and "oknesset down" not in r.text
+            assert r.status_code == 503 and "locked" not in r.text
         assert len(attempts) == 2
         web.app.forget_meta_cache()
 

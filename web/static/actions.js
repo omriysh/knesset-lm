@@ -85,6 +85,7 @@ const PAGE_ACTIONS = {
   profilesCloseSheet:           () => profilesCloseSheet(),
   profilesOpinionDates:         () => profilesOpinionDates(),
   profilesThemesAll:            (el) => profilesThemesAll(el),
+  profilesKnesset:              (el) => profilesKnesset(el),
   profilesCite:                 (el, event) => profilesCite(el, event),
   profilesOpinionSearch:        (el) => profilesOpinionSearch(el),
   profilesOpinionTheme:         (el) => profilesOpinionTheme(el),

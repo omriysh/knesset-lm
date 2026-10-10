@@ -21,7 +21,7 @@ const LANDING_DEPTHS = {
   quick: { candidates: 3 },
 };
 const LANDING_GUIDELINES_ONLY_PROMPT = `I will ask you questions to help me prepare for the 2026 Israel elections. Use the Meorav MCP for Knesset data (protocols, bills and votes of members and parties), and search the web for current news and statements. Candidates: ${LANDING_CANDIDATES_URL}
-When I ask about a party, filter Meorav searches both on the party and on its leading candidates. Some parties that run to the 26th elections didn't exist in the 25th knesset, and some candidates were not members of the 25th knesset.
+When I ask about a party, filter Meorav searches both on the party and on its leading candidates. Meorav protocols cover more than one Knesset (see its coverage); party names differ between Knessets, some parties that run to the 26th elections didn't exist in them, and some candidates were not members of them.
 
 ${LANDING_PROMPT_GUIDELINES}
 
@@ -33,7 +33,7 @@ const _LANDING_PARTIES_STEP_OPENER = 'Present the user with a list of the large 
 const _LANDING_MEORAV_SEARCH_GUIDELINES = `Candidates: ${LANDING_CANDIDATES_URL}
 Guidelines for Meorav searches in this step:
 When using a keyword search, if you don't get relevant results, use your knowledge and terminology you encountered online to try and expand the search.
-Filter both on party and on specific members. Some parties that run to the 26th elections didn't exist in the 25th knesset, and some candidates were not members of the 25th knesset.`;
+Filter both on party and on specific members. Meorav protocols cover more than one Knesset (see its coverage); party names differ between Knessets, some parties that run to the 26th elections didn't exist in them, and some candidates were not members of them.`;
 
 function _landingQuickResearchStep() {
   return `Step 3

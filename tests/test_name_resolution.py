@@ -77,12 +77,20 @@ def test_real_mk_names_still_match_confidently(mk_index, query, expected_mk):
 
 
 def test_find_mk_weak_match_carries_hint(monkeypatch):
+    """יאיר גולן was an MK of the 24th Knesset, not of the 25th."""
     monkeypatch.setattr(tools, "_fetch_mk_record", lambda mk_id: None)
-    envelope = tools.handle_find_mk({"query": "יאיר גולן"})
+    envelope = tools.handle_find_mk({"query": "יאיר גולן", "knesset_num": 25})
     payload = _rows(envelope)
     assert all(not (c["full_name"] == "יאיר לפיד" and c["score"] >= CONFIDENT_SCORE) for c in payload)
     assert "No MK of Knesset 25" in envelope.summary and "יאיר גולן" in envelope.summary
     assert envelope.metadata["hints"]
+
+
+def test_find_mk_default_covers_every_processed_knesset(monkeypatch):
+    monkeypatch.setattr(tools, "_fetch_mk_record", lambda mk_id: None)
+    envelope = tools.handle_find_mk({"query": "יאיר גולן"})
+    assert _rows(envelope)[0]["full_name"] == "יאיר גולן" and _rows(envelope)[0]["score"] >= CONFIDENT_SCORE
+    assert not envelope.summary
 
 
 def test_find_mk_numeric_query_is_flagged_as_mk_id(monkeypatch):
@@ -222,21 +230,35 @@ def test_find_party_and_committee_schemas_do_not_require_query():
 # ── query_protocols party filter ─────────────────────────────────────────────
 
 def test_query_protocols_resolves_party_alias():
-    envelope = tools.handle_query_protocols({"party": "ליכוד", "search_in": ["opinions"], "top_k": 5})
+    envelope = tools.handle_query_protocols({"party": "ליכוד", "search_in": ["opinions"], "top_k": 5,
+                                             "knesset_num": 25})
     rows = _rows(envelope)["opinions"]
     assert rows and all(r["party"] == "הליכוד" for r in rows)
     assert envelope.provenance["party"] == "הליכוד"
     assert 'party "ליכוד" → "הליכוד"' in envelope.metadata["warnings"]
 
 
+def test_party_resolves_to_its_name_in_each_knesset(real_conn):
+    """Party names differ between Knessets; by default a party filter covers its name in each of them."""
+    envelope = tools.handle_query_protocols({"party": "ליכוד", "search_in": ["opinions"], "top_k": 5})
+    names = envelope.provenance["party"]
+    names = [names] if isinstance(names, str) else names
+    likud_names = {r[0] for r in real_conn.execute(
+        f"SELECT DISTINCT party FROM mks WHERE party LIKE '%ליכוד%' AND knesset_num IN "
+        f"({','.join('?' * len(config.PROTOCOL_KNESSET_NUMS))})", config.PROTOCOL_KNESSET_NUMS)}
+    assert set(names) == likud_names
+    assert all(r["party"] in names for r in _rows(envelope)["opinions"])
+
+
 def test_query_protocols_resolves_shas():
     envelope = tools.handle_query_protocols({"party": 'ש"ס', "search_in": ["opinions"], "top_k": 3})
     assert _rows(envelope)["opinions"]
-    assert envelope.provenance["party"] == SHAS
+    assert SHAS in envelope.provenance["party"]
 
 
 def test_query_protocols_unknown_party_returns_nothing_without_suggestions():
-    envelope = tools.handle_query_protocols({"party": "ישר", "search_in": ["opinions"], "top_k": 3})
+    envelope = tools.handle_query_protocols({"party": "ישר", "search_in": ["opinions"], "top_k": 3,
+                                             "knesset_num": 25})
     assert _rows(envelope)["opinions"] == []
     party_diagnostics = [d for d in envelope.metadata["diagnostics"] if d["filter"] == "party"]
     assert party_diagnostics and party_diagnostics[0]["suggestions"] == []
@@ -317,7 +339,8 @@ def test_mk_id_given_as_name_is_resolved():
 
 
 def test_mk_id_unresolvable_name_is_an_error_with_candidates():
-    envelope = tools.handle_query_protocols({"mk_id": "יאיר גולן", "search_in": ["opinions"]})
+    """יאיר גולן was an MK of the 24th Knesset, not of the 25th."""
+    envelope = tools.handle_query_protocols({"mk_id": "יאיר גולן", "search_in": ["opinions"], "knesset_num": 25})
     assert envelope.error == "mk_id_not_resolved"
     assert envelope.metadata["candidates"]
     assert "יאיר גולן" in envelope.summary

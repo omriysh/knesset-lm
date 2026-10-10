@@ -67,10 +67,12 @@ from utils.tool_helpers.filter_diagnostics import (
 )
 from utils.tool_helpers.filter_resolution import (
     filter_vocabulary,
+    knessets_text,
     normalized_name_key,
+    requested_knesset_nums,
     resolve_committee,
     resolve_mk_name,
-    resolve_party,
+    resolve_party_in_each_knesset,
 )
 from utils.tool_helpers.char_paging import char_budget_page
 from utils.source_links import protocol_row_url, protocol_url
@@ -314,13 +316,15 @@ def handle_query_protocols(args: dict) -> ToolEnvelope:
     top_k = int(args.get("top_k") or config.QUERY_PROTOCOLS_DEFAULT_TOP_K)
     top_k = max(1, min(top_k, config.QUERY_PROTOCOLS_MAX_TOP_K))
     offset = max(0, int(args.get("offset") or 0))
-    knesset_num = int(args.get("knesset_num") or 25)
+    knesset_num = int(args.get("knesset_num") or 0) or None
+    knesset_nums = requested_knesset_nums(knesset_num)
     page_chars = int(args.get("page_chars") or 0)
 
     provenance = {
         "query": query, "search_in": search_in, "mk_id": mk_id, "party": party,
         "committees": committees, "meeting_ids": meeting_ids, "date_from": date_from,
         "date_to": date_to, "sort": sort, "top_k": top_k, "offset": offset, "knesset_num": knesset_num,
+        "knesset_nums": list(knesset_nums),
     }
     unknown_scopes = [s for s in search_in if s not in store.PROTOCOL_SCOPES]
     if unknown_scopes:
@@ -338,7 +342,7 @@ def handle_query_protocols(args: dict) -> ToolEnvelope:
     conn = None
     try:
         conn = _connect_for_query()
-        filters = _resolve_protocol_filters(conn, knesset_num, mk_id, party, committees)
+        filters = _resolve_protocol_filters(conn, knesset_nums, mk_id, party, committees)
         if filters.unresolved_mk_name is not None:
             return _unresolved_mk_name_envelope(filters, provenance)
         provenance.update(mk_id=filters.mk_id, party=filters.party, committees=filters.committees)
@@ -353,7 +357,7 @@ def handle_query_protocols(args: dict) -> ToolEnvelope:
                 meeting_ids=meeting_ids or None, date_from=date_from, date_to=date_to, sort=sort,
             )
             if page_chars:
-                ranked_rows = store.iter_protocol_rows(conn, scope, knesset_num, **row_filters, offset=offset)
+                ranked_rows = store.iter_protocol_rows(conn, scope, knesset_nums, **row_filters, offset=offset)
                 try:
                     page_rows, more_rows_follow = char_budget_page(ranked_rows, page_chars)
                 finally:
@@ -362,7 +366,7 @@ def handle_query_protocols(args: dict) -> ToolEnvelope:
                 if more_rows_follow:
                     next_offsets[scope] = offset + len(results[scope])
             else:
-                results[scope] = store.query_protocol_rows(conn, scope, knesset_num, **row_filters,
+                results[scope] = store.query_protocol_rows(conn, scope, knesset_nums, **row_filters,
                                                            top_k=top_k, offset=offset)
         if not any(results.values()):
             diagnostics = diagnose_empty_protocol_query(conn, requested_filters)
@@ -401,7 +405,7 @@ def _public_protocol_row(scope: str, row: dict) -> dict:
 @dataclass
 class _ProtocolFilters:
     mk_id: str | None
-    party: str | None
+    party: str | list[str] | None
     committees: list[str]
     resolved: bool = True
     warnings: list[str] = field(default_factory=list)
@@ -409,29 +413,30 @@ class _ProtocolFilters:
     mk_name_candidates: list[dict] = field(default_factory=list)
 
 
-def _resolve_protocol_filters(conn, knesset_num: int, mk_id: str | None, party: str | None,
+def _resolve_protocol_filters(conn, knesset_nums: tuple[int, ...], mk_id: str | None, party: str | None,
                               committees: list[str]) -> _ProtocolFilters:
     """mk_id given as a name, party aliases and committee names / ids → the exact DB values.
     An unresolvable party or committee list leaves resolved=False (no guess, 0 rows + diagnostics)."""
-    vocabulary = filter_vocabulary(conn, knesset_num)
+    vocabulary = filter_vocabulary(conn, knesset_nums)
     filters = _ProtocolFilters(mk_id=mk_id, party=party, committees=[])
 
     if mk_id and not mk_id.isdigit():
         mk_resolution = resolve_mk_name(mk_id, vocabulary)
         if mk_resolution.mk_id is None:
-            filters.unresolved_mk_name = unresolved_mk_name_diagnostic(mk_id, knesset_num, mk_resolution.candidates)
+            filters.unresolved_mk_name = unresolved_mk_name_diagnostic(mk_id, knesset_nums, mk_resolution.candidates)
             filters.mk_name_candidates = mk_resolution.candidates
             return filters
         filters.mk_id = mk_resolution.mk_id
         filters.warnings.append(f'mk_id "{mk_id}" → {mk_resolution.mk_id} ({mk_resolution.full_name})')
 
     if party:
-        party_resolution = resolve_party(party, list(vocabulary.party_member_counts))
-        if party_resolution.party is None:
+        party_names = resolve_party_in_each_knesset(conn, party, knesset_nums)
+        if not party_names:
             filters.resolved = False
-        elif party_resolution.party != party:
-            filters.party = party_resolution.party
-            filters.warnings.append(f'party "{party}" → "{party_resolution.party}"')
+        elif party_names != [party]:
+            filters.party = party_names[0] if len(party_names) == 1 else party_names
+            quoted_names = " / ".join(f'"{name}"' for name in party_names)
+            filters.warnings.append(f'party "{party}" → {quoted_names}')
 
     for committee in committees:
         committee_resolution = resolve_committee(committee, vocabulary)
@@ -461,7 +466,7 @@ def search_speeches(
     conn,
     query: str,
     *,
-    knesset_num: int = 25,
+    knesset_num: int | None = None,
     committees: list | None = None,
     meeting_ids: list | None = None,
     speaker: str | None = None,
@@ -475,13 +480,13 @@ def search_speeches(
     requested name (a different MK called "אורית") is dropped. Rows carry
     id, meeting_id, speech_idx, speaker, mk_id, text, committee, date, score
     (sqlite bm25: lower = more relevant). sort="date" reorders the top_k
-    best matches newest first.
+    best matches newest first. knesset_num None searches every processed Knesset.
     """
     match = _fts_match(query, "speeches_fts")
     if not match:
         return []
     rows = store.search_speeches(
-        conn, match, knesset_num,
+        conn, match, requested_knesset_nums(knesset_num),
         top_k=top_k,
         meeting_ids=[str(m) for m in meeting_ids] if meeting_ids else None,
         committees=[str(c).replace("_", " ") for c in committees] if committees else None,
@@ -541,26 +546,37 @@ def handle_get_meeting_attendance(args: dict) -> ToolEnvelope:
 # ---------------------------------------------------------------------------
 
 
-def _name_index(target: str, knesset_num: int) -> FuzzyNameIndex | None:
+def _name_index(target: str, knesset_num: int | None) -> FuzzyNameIndex | None:
     """In-memory fuzzy index over one of the knesset.db name tables, or None when the db is missing.
-    MKs and committees of a Knesset whose protocols are not processed come from the live Knesset lists."""
-    if target == "committees" and knesset_num not in config.PROTOCOL_KNESSET_NUMS:
-        return FuzzyNameIndex([{"id": str(committee["CommitteeID"]), "label": committee["Name"], "body": committee["Name"],
-                                "extra": {"committee_id": str(committee["CommitteeID"]), "knesset_num": knesset_num,
-                                          "is_current": committee["IsCurrent"]}}
-                               for committee in get_all_committees(knesset_num)])
-    if target == "mks" and knesset_num not in config.PROTOCOL_KNESSET_NUMS:
-        return FuzzyNameIndex([{"id": row["mk_id"], "label": row["full_name"], "body": row["aliases"],
-                                "extra": {"mk_id": row["mk_id"], "full_name": row["full_name"], "party": row["party"]}}
-                               for row in mk_roster_rows(knesset_num)], require_query_token_coverage=True)
+    knesset_num None indexes every processed Knesset; a committee name of several of them is then the
+    committee of the latest (its current members). MKs and committees of a Knesset whose protocols
+    are not processed come from the live Knesset lists."""
+    if knesset_num is not None and knesset_num not in config.PROTOCOL_KNESSET_NUMS:
+        return _live_name_index(target, knesset_num)
     conn = _open_db()
     if conn is None:
         return None
     try:
-        return FuzzyNameIndex(store.name_entries(conn, target, knesset_num),
-                              require_query_token_coverage=target == "mks")
+        entries = store.name_entries(conn, target, requested_knesset_nums(knesset_num))
     finally:
         conn.close()
+    if target == "committees":
+        latest_entry_by_name = {normalized_name_key(entry["label"]): entry
+                                for entry in sorted(entries, key=lambda entry: entry["extra"]["knesset_num"])}
+        entries = list(latest_entry_by_name.values())
+    return FuzzyNameIndex(entries, require_query_token_coverage=target == "mks")
+
+
+def _live_name_index(target: str, knesset_num: int) -> FuzzyNameIndex:
+    if target == "committees":
+        return FuzzyNameIndex([{"id": str(committee["CommitteeID"]), "label": committee["Name"], "body": committee["Name"],
+                                "extra": {"committee_id": str(committee["CommitteeID"]), "knesset_num": knesset_num,
+                                          "is_current": committee["IsCurrent"]}}
+                               for committee in get_all_committees(knesset_num)])
+    return FuzzyNameIndex([{"id": row["mk_id"], "label": row["full_name"], "body": row["aliases"],
+                            "extra": {"mk_id": row["mk_id"], "full_name": row["full_name"], "party": row["party"],
+                                      "knesset_num": knesset_num}}
+                           for row in mk_roster_rows(knesset_num)], require_query_token_coverage=True)
 
 
 def _build_mk_full_profile(record: dict, knesset_num: int) -> dict:
@@ -576,8 +592,10 @@ def _build_mk_full_profile(record: dict, knesset_num: int) -> dict:
 
 
 def handle_find_mk(args: dict) -> ToolEnvelope:
+    """knesset_num None searches the MKs of every processed Knesset; each profile then holds the positions
+    in the latest of them that the MK served in."""
     query       = (args.get("query") or "").strip()
-    knesset_num = int(args.get("knesset_num") or 25)
+    knesset_num = int(args.get("knesset_num") or 0) or None
     top_k       = max(1, int(args.get("top_k") or 5))
 
     if not query:
@@ -599,7 +617,7 @@ def handle_find_mk(args: dict) -> ToolEnvelope:
             "score":     c["score"],
         }
         if raw is not None:
-            item["profile"] = _build_mk_full_profile(raw, knesset_num)
+            item["profile"] = _build_mk_full_profile(raw, knesset_num or c["extra"]["knesset_num"])
         payload.append(item)
 
     warnings: list[str] = []
@@ -621,7 +639,7 @@ def handle_find_mk(args: dict) -> ToolEnvelope:
     )
 
 
-def _find_mk_hints(query: str, knesset_num: int, payload: list[dict]) -> list[str]:
+def _find_mk_hints(query: str, knesset_num: int | None, payload: list[dict]) -> list[str]:
     if query.isdigit():
         return [f"'{query}' looks like an mk_id; find_mk searches MK names. Pass the number as the mk_id "
                 f"filter of query_protocols, or search by name here."]
@@ -631,16 +649,19 @@ def _find_mk_hints(query: str, knesset_num: int, payload: list[dict]) -> list[st
     if not payload or payload[0]["score"] < config.FIND_MK_CONFIDENT_SCORE:
         closest = ", ".join(f"{c['full_name']} ({c['score']:.2f})" for c in payload[:3])
         weak_note = f"; the candidates below share only part of the name ({closest})" if closest else ""
-        hints.append(f"No MK of Knesset {knesset_num} named '{query}'{weak_note}. The DB covers the MKs who "
-                     f"served in Knesset {knesset_num} only; the person may not be an MK of that Knesset.")
+        knessets = knessets_text(requested_knesset_nums(knesset_num))
+        hints.append(f"No MK of {knessets} named '{query}'{weak_note}. The DB covers the MKs who "
+                     f"served in {knessets} only; the person may not be an MK of those Knessets.")
     return hints
 
 
 def handle_find_committee(args: dict) -> ToolEnvelope:
-    """Fuzzy committee lookup; an empty query lists the committees that have meetings, with meeting counts."""
+    """Fuzzy committee lookup; an empty query lists the committees that have meetings, with meeting counts.
+    knesset_num None covers every processed Knesset (a committee name of several Knessets is one row each)."""
+    knesset_num = int(args.get("knesset_num") or 0) or None
     if not (args.get("query") or "").strip():
-        return _list_committees_with_meetings(int(args.get("knesset_num") or 25))
-    knesset_num = int(args.get("knesset_num") or 25)
+        return _list_committees_with_meetings(knesset_num)
+    knesset_of_committee_id = _committee_knessets(knesset_num)
     return _generic_find(
         args,
         target="committees",
@@ -648,7 +669,8 @@ def handle_find_committee(args: dict) -> ToolEnvelope:
         source="committees",
         id_key="committee_id",
         label_key="name",
-        fetch_record=lambda committee_id: fetch_committee_record(committee_id, knesset_num=knesset_num),
+        fetch_record=lambda committee_id: fetch_committee_record(
+            committee_id, knesset_num=knesset_num or knesset_of_committee_id.get(str(committee_id))),
         default_top_k=5,
     )
 
@@ -657,7 +679,7 @@ def handle_find_party(args: dict) -> ToolEnvelope:
     """Match a party name (aliases such as ש"ס / Likud included) and return its members for a given
     Knesset; an empty query lists every party with its member count."""
     query       = (args.get("query") or "").strip()
-    knesset_num = int(args.get("knesset_num") or 25)
+    knesset_num = int(args.get("knesset_num") or config.ROSTER_DEFAULT_KNESSET_NUM)
     top_k       = int(args.get("top_k") or 3)
 
     if not query:
@@ -689,27 +711,42 @@ def handle_find_party(args: dict) -> ToolEnvelope:
     )
 
 
-def _list_committees_with_meetings(knesset_num: int) -> ToolEnvelope:
+def _committee_knessets(knesset_num: int | None) -> dict[str, int]:
+    """committee_id → its Knesset, for the processed Knessets the lookup covers ({} when the db is missing)."""
+    conn = _open_db()
+    if conn is None:
+        return {}
+    try:
+        return {entry["id"]: entry["extra"]["knesset_num"]
+                for entry in store.name_entries(conn, "committees", requested_knesset_nums(knesset_num))}
+    finally:
+        conn.close()
+
+
+def _list_committees_with_meetings(knesset_num: int | None) -> ToolEnvelope:
+    """One row per committee and Knesset, with knesset_num; knesset_num None lists every processed Knesset."""
     conn = _open_db()
     if conn is None:
         return _db_missing_envelope("committees", knesset_num)
+    knesset_nums = requested_knesset_nums(knesset_num)
     try:
-        vocabulary = filter_vocabulary(conn, knesset_num)
+        vocabularies = [filter_vocabulary(conn, (one_knesset,)) for one_knesset in knesset_nums]
     except Exception as exc:
         return _db_error_envelope(exc, "committees", conn, query="", knesset_num=knesset_num)
     finally:
         conn.close()
-    committee_id_by_key = {normalized_name_key(name): committee_id
-                           for committee_id, name in vocabulary.committee_name_by_id.items()}
     committees = []
-    for key, db_names in vocabulary.committee_names_by_key.items():
-        meeting_count = sum(vocabulary.committee_meeting_counts.get(name, 0) for name in db_names)
-        if meeting_count:
-            committees.append({"committee_id": committee_id_by_key.get(key), "name": key,
-                               "meeting_count": meeting_count})
-    committees.sort(key=lambda c: c["meeting_count"], reverse=True)
+    for vocabulary in vocabularies:
+        committee_id_by_key = {normalized_name_key(name): committee_id
+                               for committee_id, name in vocabulary.committee_name_by_id.items()}
+        for key, db_names in vocabulary.committee_names_by_key.items():
+            meeting_count = sum(vocabulary.committee_meeting_counts.get(name, 0) for name in db_names)
+            if meeting_count:
+                committees.append({"committee_id": committee_id_by_key.get(key), "name": key,
+                                   "knesset_num": vocabulary.knesset_nums[0], "meeting_count": meeting_count})
+    committees.sort(key=lambda c: (-c["knesset_num"], -c["meeting_count"]))
     return ToolEnvelope(
-        summary=f"{len(committees)} committees of Knesset {knesset_num} have meetings in the DB.",
+        summary=f"{len(committees)} committees of {knessets_text(knesset_nums)} have meetings in the DB.",
         full=json.dumps(committees, ensure_ascii=False),
         metadata={"kind": "search", "source": "committees", "count": len(committees)},
         provenance={"query": "", "knesset_num": knesset_num},
@@ -728,7 +765,7 @@ def _generic_find(
     default_top_k: int,
 ) -> ToolEnvelope:
     query = (args.get("query") or "").strip()
-    knesset_num = int(args.get("knesset_num") or 25)
+    knesset_num = int(args.get("knesset_num") or 0) or None
     top_k = int(args.get("top_k") or default_top_k)
     top_k = max(1, top_k)
 

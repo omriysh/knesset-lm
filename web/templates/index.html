@@ -320,6 +320,18 @@
             <div class="rfb-filter-row">
               <span class="rfb-filter-label">סנן:</span>
 
+              <!-- Knesset: none chosen = every Knesset; the other lists follow it -->
+              <div class="rfb-filter-item" id="fitem-knesset">
+                <button class="rfb-filter-btn" data-click="rfToggle" data-arg="knesset">
+                  <span class="material-symbols-outlined rfb-filter-icon">history</span>
+                  כנסת
+                  <span class="material-symbols-outlined rfb-chevron" id="rfchev-knesset">expand_more</span>
+                </button>
+                <div class="rfb-dropdown hidden" id="rfdrop-knesset">
+                  <div class="rfb-option-list" id="rf-knesset-list"></div>
+                </div>
+              </div>
+
               <!-- Committee -->
               <div class="rfb-filter-item" id="fitem-committee">
                 <button class="rfb-filter-btn" data-click="rfToggle" data-arg="committee">
@@ -438,7 +450,7 @@
         <button class="btn btn-primary gm-start" type="button" data-click="gameStart"><span id="gm-start-label">בואו נתחיל</span><span class="material-symbols-outlined">arrow_back</span></button>
         <h2 class="gm-intro-title">איך זה עובד?</h2>
         <ol class="gm-steps">
-          <li><span class="gm-step-icon"><span class="material-symbols-outlined">forum</span></span><span>בכל פעם תראו נושא שדיבר עליו אחד מחברי הכנסת בדיונים רשמיים</span></li>
+          <li><span class="gm-step-icon"><span class="material-symbols-outlined">forum</span></span><span>בכל פעם תראו נושא שדיבר עליו אחד מחברי הכנסת בדיונים רשמיים, בלי לראות מי זה</span></li>
           <li><span class="gm-step-icon"><span class="material-symbols-outlined">format_quote</span></span><span>תראו סיכום AI קצר לצד ציטוטים מדיוני הכנסת</span></li>
           <li><span class="gm-step-icon"><span class="material-symbols-outlined">swipe</span></span><span>תחליקו ימינה כדי להסכים ושמאלה כדי לא להסכים</span></li>
           <li><span class="gm-step-icon"><span class="material-symbols-outlined">pie_chart</span></span><span>אחרי שעברתם על מספיק עמדות, תראו מי חברי הכנסת שהסכמתם איתם ותוכלו לקרוא עליהם עוד</span></li>

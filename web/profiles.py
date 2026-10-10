@@ -6,9 +6,10 @@ the party grid, a party's candidates, and a candidate's profile. Party ids are t
 gov.il candidate-lists page and candidate ids their list position (Data/candidates/26/lists.json,
 scripts/build_candidate_lists.py), so candidates who were never MKs and new parties have stable URLs.
 
-A candidate who served in the 25th Knesset gets a full profile (themes, opinions, votes, bills, roles,
-attendance); a former MK of an earlier Knesset gets roles, votes and bills; anyone else has no profile.
-Committee activity comes from knesset.db; votes, bills and roles from the Knesset OData (cached).
+A candidate who served in a Knesset with processed protocols (config.PROTOCOL_KNESSET_NUMS) gets a full
+profile (themes, opinions, votes, bills, roles, attendance); a former MK of an earlier Knesset gets roles,
+votes and bills; anyone else has no profile. Committee activity comes from knesset.db, one Knesset at a
+time (the latest with data unless asked); votes, bills and roles from the Knesset OData (cached).
 """
 
 import json
@@ -28,7 +29,7 @@ from utils.tools import _expand_match
 router = APIRouter()
 
 PROFILE_PAGE_PATHS = ("/profiles", "/profiles/party/{party_id}", "/profiles/party/{party_id}/candidate/{candidate_id}")
-ACTIVITY_KNESSET = 25
+ACTIVITY_KNESSET = config.ROSTER_DEFAULT_KNESSET_NUM
 OPINIONS_PAGE_SIZE = 30
 VOTES_PAGE_SIZE = 50
 BILLS_PAGE_SIZE = 20
@@ -146,6 +147,7 @@ def profile_parties():
     """Lists with a current or former MK first, each group in alphabetical order."""
     lists = candidate_lists()
     return {"source": lists.get("source"), "built_at": lists.get("built_at"),
+            "activity_knessets": list(config.PROTOCOL_KNESSET_NUMS),
             "parties": sorted(({**party_card(party), "candidates": [[c["position"], c["name"] or c["name_raw"]] for c in party["candidates"]]}
                                for party in lists["parties"]),
                               key=lambda card: (not (card["full_profiles"] or card["former_mks"]), card["name"]))}
@@ -220,15 +222,56 @@ def profile_candidate(party_id: int, candidate_id: int):
     if candidate["profile"] == "full":
         conn = store.connect(interrupt_after_seconds=config.DB_QUERY_TIMEOUT_SECONDS)
         try:
-            body["activity"] = {
-                **mk_activity.opinion_counts(conn, candidate["mk_id"], ACTIVITY_KNESSET),
-                "attendance": mk_activity.committee_attendance(
-                    conn, candidate["mk_id"], ACTIVITY_KNESSET,
-                    roles["positions"]["committee_positions"] if roles else []),
-            }
+            body["activity"] = _candidate_activity(conn, candidate, latest_knesset, roles)
         finally:
             conn.close()
     return body
+
+
+def _committee_positions(person_id: int, knesset_num: int, latest_knesset: int, roles: dict | None) -> list[dict]:
+    if knesset_num == latest_knesset:
+        return roles["positions"]["committee_positions"] if roles else []
+    try:
+        return kdb.get_mk_positions(person_id, knesset_num)["committee_positions"]
+    except Exception as exc:
+        print(f"[profiles] committee positions of {person_id} in Knesset {knesset_num} failed: {exc}")
+        return []
+
+
+def _candidate_activity(conn, candidate: dict, latest_knesset: int, roles: dict | None) -> dict:
+    """Opinion counts of the latest Knesset with activity (the header stats) and committee attendance per
+    Knesset, latest first."""
+    knessets = activity_knessets(conn, candidate)
+    attendance_by_knesset = [
+        {"knesset_num": knesset_num, **mk_activity.committee_attendance(
+            conn, candidate["mk_id"], knesset_num,
+            _committee_positions(candidate["person_id"], knesset_num, latest_knesset, roles))}
+        for knesset_num in knessets]
+    latest_attendance = {key: value for key, value in attendance_by_knesset[0].items() if key != "knesset_num"}
+    return {**mk_activity.opinion_counts(conn, candidate["mk_id"], knessets[0]),
+            "knesset_num": knessets[0], "knessets": knessets,
+            "attendance": latest_attendance, "attendance_by_knesset": attendance_by_knesset}
+
+
+def activity_knessets(conn, candidate: dict) -> list[int]:
+    """The processed Knessets with the candidate's committee activity, latest first; when there is none,
+    the latest processed Knesset they served in, so the page still has one Knesset to show."""
+    knessets = mk_activity.activity_knessets(conn, candidate["mk_id"], config.PROTOCOL_KNESSET_NUMS)
+    served = [k for k in config.PROTOCOL_KNESSET_NUMS if k in candidate["knessets"]]
+    return knessets or [max(served or config.PROTOCOL_KNESSET_NUMS)]
+
+
+def _chosen_activity_knesset(conn, candidate: dict, knesset: int | None, theme: str = "") -> tuple[int, list[int]]:
+    """(the Knesset on display, the candidate's activity Knessets): the requested one, else the Knesset of
+    the requested theme, else the latest. 400 for a Knesset without the candidate's activity."""
+    knessets = activity_knessets(conn, candidate)
+    if knesset is None and theme.isdigit():
+        knesset = mk_activity.theme_knesset(conn, int(theme))
+    if knesset is None:
+        return knessets[0], knessets
+    if knesset not in knessets:
+        raise valid.ApiInputError("invalid_knesset", "no committee activity of this candidate in that Knesset")
+    return knesset, knessets
 
 
 @router.get("/api/profiles/party/{party_id}/candidate/{candidate_id}/vote-summary")
@@ -242,13 +285,17 @@ def profile_vote_summary(party_id: int, candidate_id: int):
 
 
 @router.get("/api/profiles/party/{party_id}/candidate/{candidate_id}/themes")
-def profile_themes(party_id: int, candidate_id: int):
+def profile_themes(party_id: int, candidate_id: int, knesset: int | None = None):
+    """The themes of one Knesset (the latest with activity unless knesset is given), with the Knessets to
+    choose from."""
     _, candidate, error = _profile_candidate(party_id, candidate_id, needs="full")
     if error:
         return error
     conn = store.connect(interrupt_after_seconds=config.DB_QUERY_TIMEOUT_SECONDS)
     try:
-        return mk_activity.mk_themes(conn, candidate["mk_id"], ACTIVITY_KNESSET)
+        knesset_num, knessets = _chosen_activity_knesset(conn, candidate, knesset)
+        return {**mk_activity.mk_themes(conn, candidate["mk_id"], knesset_num),
+                "knesset_num": knesset_num, "knessets": knessets}
     finally:
         conn.close()
 
@@ -273,7 +320,9 @@ def profile_theme(theme_id: int):
 
 @router.get("/api/profiles/party/{party_id}/candidate/{candidate_id}/opinions")
 def profile_opinions(party_id: int, candidate_id: int, q: str = "", theme: str = "", committee: str = "",
-                     date_from: str = "", date_to: str = "", offset: int = 0):
+                     date_from: str = "", date_to: str = "", offset: int = 0, knesset: int | None = None):
+    """A page of the candidate's opinions in one Knesset: the requested one, else the Knesset of the
+    requested theme, else the latest with activity."""
     _, candidate, error = _profile_candidate(party_id, candidate_id, needs="full")
     if error:
         return error
@@ -283,10 +332,12 @@ def profile_opinions(party_id: int, candidate_id: int, q: str = "", theme: str =
     committee_name = valid.name_filter(committee, "committee", config.MAX_COMMITTEE_NAME_CHARS)
     conn = store.connect(interrupt_after_seconds=config.DB_QUERY_TIMEOUT_SECONDS)
     try:
-        return mk_activity.mk_opinions(
-            conn, candidate["mk_id"], ACTIVITY_KNESSET, fts_match=_expand_match(query, "opinions_fts") if query else None,
+        knesset_num, _ = _chosen_activity_knesset(conn, candidate, knesset, theme)
+        page = mk_activity.mk_opinions(
+            conn, candidate["mk_id"], knesset_num, fts_match=_expand_match(query, "opinions_fts") if query else None,
             theme=theme or None, committee=committee_name, date_from=valid.iso_date(date_from, "date_from"),
             date_to=valid.iso_date(date_to, "date_to"), offset=_offset(offset), limit=OPINIONS_PAGE_SIZE)
+        return {**page, "knesset_num": knesset_num}
     finally:
         conn.close()
 

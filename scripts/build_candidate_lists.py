@@ -40,7 +40,6 @@ import config
 INDEX_URL = "https://www.gov.il/he/pages/candidates-lists-26"
 KNESSET_SITE_API = "https://knesset.gov.il/WebSiteApi/knessetapi"
 WIKIPEDIA_API = "https://he.wikipedia.org/w/api.php"
-CURRENT_KNESSET = 25
 _MK_POSITION_IDS = (43, 61)
 _HEADERS = {"User-Agent": "KnessetLM/1.0 (candidate lists; https://github.com/omriysh)"}
 _WIKIPEDIA_POLITICS_WORDS = ("כנסת", "פוליטיק", "מפלג", "מועמד", "ראש עיר", "ראש מועצ", "שר ", "שרה ")
@@ -522,17 +521,29 @@ def download(url: str, path: Path) -> bool:
     return True
 
 
-def build() -> None:
+def profile_mk_ids() -> set[str]:
+    """mk_ids of the MKs of every Knesset with processed protocols (config.PROTOCOL_KNESSET_NUMS)."""
     from retrieval import knesset_db_store as store
+    conn = store.connect()
+    try:
+        return {row["id"] for row in store.name_entries(conn, "mks", config.PROTOCOL_KNESSET_NUMS)}
+    finally:
+        conn.close()
+
+
+def profile_depth(person: dict, mk_ids_with_protocols: set[str]) -> str:
+    """'full' for an MK of a Knesset with processed protocols, else 'bills' (a former MK of an earlier Knesset)."""
+    return "full" if person.get("mk_id") in mk_ids_with_protocols else "bills"
+
+
+def build() -> None:
     directory = out_dir()
     (directory / "photos").mkdir(parents=True, exist_ok=True)
     raw_pages = json.loads((directory / "raw_pages.json").read_text(encoding="utf-8"))
     people = {person_id: person for person_id, person in every_mk().items() if person["knessets"]}
     first_names = {token for person in people.values() for token in person["first_name"].split()}
 
-    conn = store.connect()
-    db_mk_ids = {row[0] for row in conn.execute("SELECT mk_id FROM mks WHERE knesset_num = ?", (CURRENT_KNESSET,))}
-    conn.close()
+    db_mk_ids = profile_mk_ids()
 
     parties, unmatched_names = [], []
     for page in raw_pages:
@@ -549,8 +560,8 @@ def build() -> None:
             if person:
                 entry.update(name=f"{person['first_name']} {person['last_name']}", person_id=person["person_id"],
                              mk_id=person.get("mk_id"), knessets=person["knessets"], site_id=person.get("site_id"))
-                entry["profile"] = "full" if person.get("mk_id") in db_mk_ids else "bills"
-                if entry["profile"] == "bills" or CURRENT_KNESSET not in person["knessets"]:
+                entry["profile"] = profile_depth(person, db_mk_ids)
+                if entry["profile"] == "bills" or max(config.PROTOCOL_KNESSET_NUMS) not in person["knessets"]:
                     print(f"  former MK [{page['position']}.{candidate['position']}] {candidate['name_raw']} → "
                           f"{entry['name']} ({person['person_id']}, Knessets {person['knessets']})")
             else:

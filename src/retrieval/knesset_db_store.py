@@ -358,34 +358,58 @@ def set_meta(conn, key: str, value: str) -> None:
     conn.commit()
 
 
+# ── Knesset selection ─────────────────────────────────────────────────────────
+
+def knesset_num_list(knesset_nums: int | Iterable[int]) -> list[int]:
+    """One Knesset number or several → a sorted list of distinct ints."""
+    if isinstance(knesset_nums, int):
+        return [knesset_nums]
+    return sorted({int(k) for k in knesset_nums})
+
+
+def knesset_condition(column: str, knesset_nums: int | Iterable[int]) -> tuple[str, list[int]]:
+    """(SQL condition, params) restricting column to the given Knesset numbers."""
+    nums = knesset_num_list(knesset_nums)
+    if len(nums) == 1:
+        return f"{column} = ?", nums
+    return f"{column} IN ({','.join('?' * len(nums))})", nums
+
+
 # ── name lookups (fuzzy index input) ──────────────────────────────────────────
 
-def name_entries(conn, target: str, knesset_num: int) -> list[dict]:
+def name_entries(conn, target: str, knesset_nums: int | Iterable[int]) -> list[dict]:
     """
     Rows shaped for FuzzyNameIndex: {id, label, body, extra}. target is one of
-    mks | committees.
+    mks | committees. An MK of several of the Knessets is one entry (mk_id is the person) with the
+    name and party of the latest of them, extra.knesset_num; a committee is one entry per Knesset.
     """
+    condition, params = knesset_condition("knesset_num", knesset_nums)
     if target == "mks":
-        sql = ("SELECT mk_id AS id, full_name AS label, aliases AS body, party FROM mks "
-               "WHERE knesset_num = ?")
+        sql = (f"SELECT mk_id AS id, full_name AS label, aliases AS body, party, knesset_num FROM mks "
+               f"WHERE {condition} ORDER BY knesset_num")
+        latest_row_by_mk_id = {r["id"]: r for r in conn.execute(sql, params)}
         return [{"id": r["id"], "label": r["label"], "body": r["body"] or "",
-                 "extra": {"mk_id": r["id"], "full_name": r["label"], "party": r["party"]}}
-                for r in conn.execute(sql, (knesset_num,))]
+                 "extra": {"mk_id": r["id"], "full_name": r["label"], "party": r["party"],
+                           "knesset_num": r["knesset_num"]}}
+                for r in latest_row_by_mk_id.values()]
     if target == "committees":
-        sql = "SELECT committee_id AS id, name AS label, is_current FROM committees WHERE knesset_num = ?"
+        sql = f"SELECT committee_id AS id, name AS label, is_current, knesset_num FROM committees WHERE {condition}"
         return [{"id": r["id"], "label": r["label"], "body": r["label"],
-                 "extra": {"committee_id": r["id"], "knesset_num": knesset_num, "is_current": r["is_current"]}}
-                for r in conn.execute(sql, (knesset_num,))]
+                 "extra": {"committee_id": r["id"], "knesset_num": r["knesset_num"], "is_current": r["is_current"]}}
+                for r in conn.execute(sql, params)]
     raise ValueError(f"unknown name target {target!r}")
 
 
-def mk_names(conn, knesset_num: int) -> list[str]:
-    return [r[0] for r in conn.execute("SELECT full_name FROM mks WHERE knesset_num = ?", (knesset_num,))]
+def mk_names(conn, knesset_nums: int | Iterable[int]) -> list[str]:
+    condition, params = knesset_condition("knesset_num", knesset_nums)
+    return [r[0] for r in conn.execute(f"SELECT DISTINCT full_name FROM mks WHERE {condition}", params)]
 
 
-def mk_party_map(conn, knesset_num: int) -> dict[str, str]:
+def mk_party_map(conn, knesset_nums: int | Iterable[int]) -> dict[str, str]:
+    """mk_id → roster party; for an MK of several of the Knessets, the party in the latest."""
+    condition, params = knesset_condition("knesset_num", knesset_nums)
     return {r[0]: r[1] or "" for r in conn.execute(
-        "SELECT mk_id, party FROM mks WHERE knesset_num = ?", (knesset_num,))}
+        f"SELECT mk_id, party FROM mks WHERE {condition} ORDER BY knesset_num", params)}
 
 
 # ── meeting reads ─────────────────────────────────────────────────────────────
@@ -436,14 +460,14 @@ def _exact_tier_order(fts: str) -> str:
     return f"(CASE WHEN {fts}.rowid IN (SELECT rowid FROM {fts} WHERE {fts} MATCH ?) THEN 0 ELSE 1 END)"
 
 
-def _protocol_rows_sql(scope: str, knesset_num: int, *, match: str | None, exact_match: str | None,
-                       mk_id: str | None, party: str | None, committees: list[str] | None,
+def _protocol_rows_sql(scope: str, knesset_nums: int | Iterable[int], *, match: str | None, exact_match: str | None,
+                       mk_id: str | None, party: str | list[str] | None, committees: list[str] | None,
                        meeting_ids: list[str] | None, date_from: str | None, date_to: str | None,
                        sort: str) -> tuple[str, list]:
-    where, params = _protocol_filter_where(scope, knesset_num, mk_id=mk_id, party=party, committees=committees,
+    where, params = _protocol_filter_where(scope, knesset_nums, mk_id=mk_id, party=party, committees=committees,
                                            meeting_ids=meeting_ids, date_from=date_from, date_to=date_to)
     fts = f"{scope}_fts"
-    select = f"SELECT x.meeting_id, m.committee, m.date, {_SCOPE_COLUMNS[scope]}"
+    select = f"SELECT x.meeting_id, m.knesset_num, m.committee, m.date, {_SCOPE_COLUMNS[scope]}"
     if match:
         where.insert(0, f"{fts} MATCH ?")
         params.insert(0, match)
@@ -466,36 +490,37 @@ def _protocol_rows_sql(scope: str, knesset_num: int, *, match: str | None, exact
     return f"{select} {source} WHERE {' AND '.join(where)} ORDER BY {order}", params
 
 
-def query_protocol_rows(conn, scope: str, knesset_num: int, *, match: str | None = None,
+def query_protocol_rows(conn, scope: str, knesset_nums: int | Iterable[int], *, match: str | None = None,
                         exact_match: str | None = None,
-                        mk_id: str | None = None, party: str | None = None,
+                        mk_id: str | None = None, party: str | list[str] | None = None,
                         committees: list[str] | None = None, meeting_ids: list[str] | None = None,
                         date_from: str | None = None, date_to: str | None = None,
                         sort: str = "relevance", top_k: int, offset: int = 0) -> list[dict]:
     """
     Rows of one protocol scope (topics | opinions | speeches) with meeting_id,
-    committee and date. match=None lists instead of ranking. Filters AND
+    knesset_num, committee and date. match=None lists instead of ranking. Filters AND
     together; mk_id / party mean attendance for topics, the opinion author for
-    opinions and the speaker (roster party) for speeches. Opinions are always
+    opinions and the speaker (roster party) for speeches; party may be a list of names
+    (the same party under its name in each Knesset). Opinions are always
     verified-only and is_protocol = 0 meetings are always excluded.
     Order: sort="relevance" with a match ranks rows matching exact_match (the query
     words as typed) first, then rows matched only through spelling / prefix variants,
     bm25 within each tier; otherwise date DESC, meeting_id, in-meeting idx.
     """
-    sql, params = _protocol_rows_sql(scope, knesset_num, match=match, exact_match=exact_match, mk_id=mk_id,
+    sql, params = _protocol_rows_sql(scope, knesset_nums, match=match, exact_match=exact_match, mk_id=mk_id,
                                      party=party, committees=committees, meeting_ids=meeting_ids,
                                      date_from=date_from, date_to=date_to, sort=sort)
     return [dict(r) for r in conn.execute(f"{sql} LIMIT ? OFFSET ?", params + [top_k, offset])]
 
 
-def iter_protocol_rows(conn, scope: str, knesset_num: int, *, match: str | None = None,
-                       exact_match: str | None = None, mk_id: str | None = None, party: str | None = None,
+def iter_protocol_rows(conn, scope: str, knesset_nums: int | Iterable[int], *, match: str | None = None,
+                       exact_match: str | None = None, mk_id: str | None = None, party: str | list[str] | None = None,
                        committees: list[str] | None = None, meeting_ids: list[str] | None = None,
                        date_from: str | None = None, date_to: str | None = None, sort: str = "relevance",
                        offset: int = 0, batch_size: int = 50):
     """query_protocol_rows in the same order from row offset on, without a page limit, fetched lazily
     in batches: the caller stops iterating once it has what it needs."""
-    sql, params = _protocol_rows_sql(scope, knesset_num, match=match, exact_match=exact_match, mk_id=mk_id,
+    sql, params = _protocol_rows_sql(scope, knesset_nums, match=match, exact_match=exact_match, mk_id=mk_id,
                                      party=party, committees=committees, meeting_ids=meeting_ids,
                                      date_from=date_from, date_to=date_to, sort=sort)
     cursor = conn.execute(f"{sql} LIMIT -1 OFFSET ?", params + [offset])
@@ -504,55 +529,58 @@ def iter_protocol_rows(conn, scope: str, knesset_num: int, *, match: str | None 
             yield dict(row)
 
 
-def count_protocol_rows(conn, scope: str, knesset_num: int, *, cap: int, mk_id: str | None = None,
-                        party: str | None = None, committees: list[str] | None = None,
+def count_protocol_rows(conn, scope: str, knesset_nums: int | Iterable[int], *, cap: int, mk_id: str | None = None,
+                        party: str | list[str] | None = None, committees: list[str] | None = None,
                         meeting_ids: list[str] | None = None, date_from: str | None = None,
                         date_to: str | None = None) -> int:
     """Rows of one protocol scope passing the query_protocol_rows filters (no match), counted up to cap."""
-    where, params = _protocol_filter_where(scope, knesset_num, mk_id=mk_id, party=party, committees=committees,
+    where, params = _protocol_filter_where(scope, knesset_nums, mk_id=mk_id, party=party, committees=committees,
                                            meeting_ids=meeting_ids, date_from=date_from, date_to=date_to)
     sql = (f"SELECT COUNT(*) FROM (SELECT 1 FROM {scope} x JOIN meetings m ON m.meeting_id = x.meeting_id "
            f"WHERE {' AND '.join(where)} LIMIT ?)")
     return conn.execute(sql, params + [cap]).fetchone()[0]
 
 
-def _protocol_filter_where(scope: str, knesset_num: int, *, mk_id: str | None, party: str | None,
+def _protocol_filter_where(scope: str, knesset_nums: int | Iterable[int], *, mk_id: str | None,
+                           party: str | list[str] | None,
                            committees: list[str] | None, meeting_ids: list[str] | None,
                            date_from: str | None, date_to: str | None) -> tuple[list[str], list]:
     if scope not in PROTOCOL_SCOPES:
         raise ValueError(f"unknown protocol scope {scope!r}")
-    where = ["x.knesset_num = ?", "(m.is_protocol IS NULL OR m.is_protocol != 0)"]
-    params: list = [knesset_num]
+    knesset_sql, params = knesset_condition("x.knesset_num", knesset_nums)
+    where = [knesset_sql, "(m.is_protocol IS NULL OR m.is_protocol != 0)"]
     _meeting_filters(where, params, "m", committees, date_from, date_to)
     if meeting_ids:
         where.append(f"m.meeting_id IN ({','.join('?' * len(meeting_ids))})")
         params.extend(str(m) for m in meeting_ids)
+    parties = [party] if isinstance(party, str) else list(party or [])
+    party_in = f"party IN ({','.join('?' * len(parties))})"
     if scope == "topics":
         if mk_id:
             where.append("x.meeting_id IN (SELECT meeting_id FROM attendance WHERE mk_id = ?)")
             params.append(str(mk_id))
-        if party:
-            where.append("x.meeting_id IN (SELECT meeting_id FROM attendance WHERE party = ?)")
-            params.append(party)
+        if parties:
+            where.append(f"x.meeting_id IN (SELECT meeting_id FROM attendance WHERE {party_in})")
+            params.extend(parties)
     elif scope == "opinions":
         where.append("x.quote_verified = 1")
         if mk_id:
             where.append("x.mk_id = ?")
             params.append(str(mk_id))
-        if party:
-            where.append("x.party = ?")
-            params.append(party)
+        if parties:
+            where.append(f"x.{party_in}")
+            params.extend(parties)
     else:
         if mk_id:
             where.append("x.mk_id = ?")
             params.append(str(mk_id))
-        if party:
-            where.append("x.mk_id IN (SELECT mk_id FROM mks WHERE party = ? AND knesset_num = ?)")
-            params.extend([party, knesset_num])
+        if parties:
+            where.append(f"(x.mk_id, x.knesset_num) IN (SELECT mk_id, knesset_num FROM mks WHERE {party_in})")
+            params.extend(parties)
     return where, params
 
 
-def search_speeches(conn, match: str, knesset_num: int, *, top_k: int,
+def search_speeches(conn, match: str, knesset_nums: int | Iterable[int], *, top_k: int,
                     meeting_ids: list[str] | None = None,
                     committees: list[str] | None = None,
                     speaker_tokens: list[str] | None = None) -> list[dict]:
@@ -560,8 +588,9 @@ def search_speeches(conn, match: str, knesset_num: int, *, top_k: int,
     FTS over speech text. speaker_tokens is a coarse OR pre-filter (any token
     inside speeches.speaker); callers refine with name_query_matches.
     """
-    where = ["speeches_fts MATCH ?", "s.knesset_num = ?"]
-    params: list = [match, knesset_num]
+    knesset_sql, knesset_params = knesset_condition("s.knesset_num", knesset_nums)
+    where = ["speeches_fts MATCH ?", knesset_sql]
+    params: list = [match, *knesset_params]
     if meeting_ids:
         where.append(f"s.meeting_id IN ({','.join('?' * len(meeting_ids))})")
         params.extend(str(m) for m in meeting_ids)
@@ -593,7 +622,7 @@ def _meeting_filters(where: list[str], params: list, alias: str,
 
 def query_candidate_meeting_ids(
     conn,
-    knesset_num: int,
+    knesset_nums: int | Iterable[int],
     *,
     committees: list[str] | None = None,
     date_from: str | None = None,
@@ -610,8 +639,8 @@ def query_candidate_meeting_ids(
     """
     if not (committees or date_from or date_to or mk_ids or parties or guest_name):
         return None
-    where = ["m.knesset_num = ?"]
-    params: list = [knesset_num]
+    knesset_sql, params = knesset_condition("m.knesset_num", knesset_nums)
+    where = [knesset_sql]
     _meeting_filters(where, params, "m", committees, date_from, date_to)
 
     attendance_parts: list[str] = []
@@ -636,10 +665,11 @@ def query_candidate_meeting_ids(
 
 # ── web browser queries ───────────────────────────────────────────────────────
 
-def _browsable_meetings_where(knesset_num: int, candidate_meeting_ids: list[str] | None) -> tuple[list[str], list]:
-    """Meetings of the Knesset that are protocols (or not summarized yet), optionally limited to candidates."""
-    where = ["m.knesset_num = ?", "(m.is_protocol IS NULL OR m.is_protocol != 0)"]
-    params: list = [knesset_num]
+def _browsable_meetings_where(knesset_nums: int | Iterable[int],
+                              candidate_meeting_ids: list[str] | None) -> tuple[list[str], list]:
+    """Meetings of the Knessets that are protocols (or not summarized yet), optionally limited to candidates."""
+    knesset_sql, params = knesset_condition("m.knesset_num", knesset_nums)
+    where = [knesset_sql, "(m.is_protocol IS NULL OR m.is_protocol != 0)"]
     if candidate_meeting_ids is not None:
         if not candidate_meeting_ids:
             where.append("0")
@@ -649,16 +679,33 @@ def _browsable_meetings_where(knesset_num: int, candidate_meeting_ids: list[str]
     return where, params
 
 
-def recent_meetings(conn, knesset_num: int, *, limit: int,
+def browse_filter_lists(conn, knesset_nums: int | Iterable[int]) -> dict[str, list[str]]:
+    """The reading tab's filter choices for the Knessets: committees with browsable meetings, MK names
+    and roster parties, each distinct and sorted."""
+    meetings_where, meetings_params = _browsable_meetings_where(knesset_nums, None)
+    mks_condition, mks_params = knesset_condition("knesset_num", knesset_nums)
+    return {
+        "committees": [r[0] for r in conn.execute(
+            f"SELECT DISTINCT m.committee FROM meetings m WHERE {' AND '.join(meetings_where)} "
+            f"AND m.committee IS NOT NULL ORDER BY m.committee", meetings_params)],
+        "mks": [r[0] for r in conn.execute(
+            f"SELECT DISTINCT full_name FROM mks WHERE {mks_condition} ORDER BY full_name", mks_params)],
+        "parties": [r[0] for r in conn.execute(
+            f"SELECT DISTINCT party FROM mks WHERE {mks_condition} AND party IS NOT NULL AND party != '' "
+            f"ORDER BY party", mks_params)],
+    }
+
+
+def recent_meetings(conn,knesset_nums: int | Iterable[int], *, limit: int,
                     candidate_meeting_ids: list[str] | None = None) -> list[dict]:
     """Newest browsable meetings: rows meeting_id/committee/date."""
-    where, params = _browsable_meetings_where(knesset_num, candidate_meeting_ids)
+    where, params = _browsable_meetings_where(knesset_nums, candidate_meeting_ids)
     sql = (f"SELECT m.meeting_id, m.committee, m.date FROM meetings m WHERE {' AND '.join(where)} "
            f"ORDER BY m.date DESC, m.meeting_id DESC LIMIT ?")
     return [dict(r) for r in conn.execute(sql, params + [limit])]
 
 
-def meetings_by_best_speech(conn, match: str, knesset_num: int, *, limit: int, sort: str = "relevance",
+def meetings_by_best_speech(conn, match: str, knesset_nums: int | Iterable[int], *, limit: int, sort: str = "relevance",
                             candidate_meeting_ids: list[str] | None = None,
                             exact_match: str | None = None) -> list[dict]:
     """
@@ -668,7 +715,7 @@ def meetings_by_best_speech(conn, match: str, knesset_num: int, *, limit: int, s
     only through spelling / prefix variants). The best speech is the lowest (tier, score).
     sort="relevance" orders by tier, then score; anything else by date DESC.
     """
-    where, params = _browsable_meetings_where(knesset_num, candidate_meeting_ids)
+    where, params = _browsable_meetings_where(knesset_nums, candidate_meeting_ids)
     order_by = "tier, score, meeting_id" if sort == "relevance" else "date DESC, meeting_id DESC"
     use_tiers = bool(exact_match) and exact_match != match
     tier_sql = _exact_tier_order("speeches_fts") if use_tiers else "0"

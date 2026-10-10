@@ -46,7 +46,7 @@ TAG_DESCRIPTIONS = {
 API_PARAM_TO_TOOL_ARG = {"q": "query", "committee": "committees", "meeting_id": "meeting_ids"}
 API_PARAM_DESCRIPTIONS = {
     "format": "`json` (default) or `md`: markdown, more compact for an LLM context.",
-    "knesset_num": "Knesset number (default 25).",
+    "knesset_num": "Knesset number; see the tool's `knesset_num` argument in /v1/tools for its default.",
     "offset": "Paging position: characters for protocols and bill text, rows for bills and votes; "
               "copy it from the response's `next`.",
     "search_in": "Scopes to search: `topics`, `opinions`, `speeches` (repeat or comma-separate; "

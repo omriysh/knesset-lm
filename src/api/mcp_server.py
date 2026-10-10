@@ -68,6 +68,8 @@ def mcp_instructions() -> str:
     return (with_coverage_dates(MCP_INSTRUCTIONS_PATH.read_text(encoding="utf-8"))
             .replace("{roster_knesset_from}", str(config.API_KNESSET_NUM_RANGE[0]))
             .replace("{roster_knesset_to}", str(config.API_KNESSET_NUM_RANGE[1]))
+            .replace("{roster_default_knesset}", str(config.ROSTER_DEFAULT_KNESSET_NUM))
+            .replace("{protocol_knessets}", ", ".join(map(str, config.PROTOCOL_KNESSET_NUMS)))
             .replace("{protocols_page_chars}", str(config.API_PROTOCOLS_PAGE_CHARS)))
 
 

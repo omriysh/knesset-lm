@@ -12,9 +12,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+import config
 from retrieval import knesset_db_store as store
 from utils import tools
-from utils.tool_helpers.filter_diagnostics import diagnose_empty_protocol_query
+from utils.tool_helpers.filter_diagnostics import diagnose_empty_protocol_query, ordinal, unknown_party_message
 
 pytestmark = pytest.mark.skipif(not store.exists(), reason="Data/knesset.db not built")
 
@@ -38,14 +39,17 @@ def _problems(conn, **args) -> dict[str, dict]:
 
 
 def test_knesset_without_protocols(conn):
-    problems = _problems(conn, knesset_num=24, query="תקציב")
-    assert "Knesset 24" in problems["knesset_no_data"]["message"]
-    assert "25" in problems["knesset_no_data"]["message"]
+    unprocessed_knesset = min(config.PROTOCOL_KNESSET_NUMS) - 1
+    problems = _problems(conn, knesset_num=unprocessed_knesset, query="תקציב")
+    assert f"Knesset {unprocessed_knesset}" in problems["knesset_no_data"]["message"]
+    assert all(str(k) in problems["knesset_no_data"]["message"] for k in config.PROTOCOL_KNESSET_NUMS)
 
 
 def test_date_range_outside_coverage(conn):
     problem = _problems(conn, date_from="2020-01-01", date_to="2020-12-31")["date_out_of_coverage"]
-    first_meeting_date = conn.execute("SELECT MIN(date) FROM meetings WHERE knesset_num = 25").fetchone()[0]
+    first_meeting_date = conn.execute(
+        f"SELECT MIN(date) FROM meetings WHERE knesset_num IN ({','.join('?' * len(config.PROTOCOL_KNESSET_NUMS))})",
+        config.PROTOCOL_KNESSET_NUMS).fetchone()[0]
     assert first_meeting_date in problem["message"]
 
 
@@ -71,7 +75,8 @@ def test_mk_not_in_knesset(conn):
 def test_unknown_party_states_the_fact_without_suggestions(conn):
     problem = _problems(conn, party="מפלגת הפיראטים")["unknown_party"]
     assert problem["suggestions"] == []
-    assert problem["message"] == "Party 'מפלגת הפיראטים' is not a faction of the 25th Knesset."
+    assert problem["message"] == unknown_party_message("מפלגת הפיראטים", config.PROTOCOL_KNESSET_NUMS)
+    assert all(ordinal(k) in problem["message"] for k in config.PROTOCOL_KNESSET_NUMS)
 
 
 def test_unknown_committee_with_three_suggestions(conn):

@@ -37,6 +37,10 @@ from utils.tools import (
 )
 
 
+_EVERY_PROCESSED_KNESSET_DESCRIPTION = (
+    f"One Knesset; omit it to cover every processed Knesset "
+    f"({', '.join(map(str, config.PROTOCOL_KNESSET_NUMS))})")
+
 # Each entry's ``schema`` is the JSON Schema fragment that goes under the
 # ``parameters`` key in an OpenAI-style tool definition.
 
@@ -56,7 +60,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
             ),
             "properties": {
                 "query":       {"type": "string"},
-                "knesset_num": {"type": "integer", "default": 25},
+                "knesset_num": {"type": "integer", "description": _EVERY_PROCESSED_KNESSET_DESCRIPTION},
                 "top_k":       {"type": "integer", "default": 5, "minimum": 1},
             },
             "required": ["query"],
@@ -90,7 +94,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
             ),
             "properties": {
                 "query":       {"type": "string", "description": "Committee name; empty to list all committees"},
-                "knesset_num": {"type": "integer", "default": 25},
+                "knesset_num": {"type": "integer", "description": _EVERY_PROCESSED_KNESSET_DESCRIPTION},
                 "top_k":       {"type": "integer", "default": 5, "minimum": 1},
             },
         },
@@ -125,7 +129,8 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
             ),
             "properties": {
                 "query":       {"type": "string", "description": "Party or faction name; empty to list all parties"},
-                "knesset_num": {"type": "integer", "default": 25},
+                "knesset_num": {"type": "integer", "default": config.ROSTER_DEFAULT_KNESSET_NUM,
+                                "description": "Party names belong to one Knesset"},
                 "top_k":       {"type": "integer", "default": 3, "minimum": 1, "maximum": 5},
             },
         },
@@ -201,7 +206,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
                     "maximum": config.QUERY_PROTOCOLS_MAX_TOP_K,
                 },
                 "offset":      {"type": "integer", "default": 0, "minimum": 0},
-                "knesset_num": {"type": "integer", "default": 25},
+                "knesset_num": {"type": "integer", "description": _EVERY_PROCESSED_KNESSET_DESCRIPTION},
             },
         },
         handler=handle_query_protocols,

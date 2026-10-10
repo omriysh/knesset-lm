@@ -12,7 +12,6 @@ import config
 from api import validation as valid
 from retrieval.knesset_db_store import PROTOCOL_SCOPES
 
-DEFAULT_KNESSET_NUM = max(config.PROTOCOL_KNESSET_NUMS)
 _HEBREW_LETTER_RE = re.compile(r"[א-ת]")
 
 
@@ -72,22 +71,18 @@ def _positive_or_none(value: int | None) -> int | None:
 
 def _knesset_num_arg(args: dict) -> int:
     requested = valid.as_int(args.get("knesset_num"), "knesset_num")
-    return valid.knesset_num(DEFAULT_KNESSET_NUM if requested is None else requested)
+    return valid.knesset_num(config.ROSTER_DEFAULT_KNESSET_NUM if requested is None else requested)
 
 
 def _optional_knesset_num_arg(args: dict) -> int | None:
-    """OData searches: None searches every Knesset."""
+    """None: every Knesset for the OData searches, every processed Knesset for find_mk / find_committee."""
     requested = valid.as_int(args.get("knesset_num"), "knesset_num")
     return None if requested is None else valid.knesset_num(requested)
 
 
-def _protocol_knesset_num_arg(args: dict) -> int:
-    knesset_num = _knesset_num_arg(args)
-    if knesset_num not in config.PROTOCOL_KNESSET_NUMS:
-        processed = ", ".join(str(k) for k in config.PROTOCOL_KNESSET_NUMS)
-        raise valid.ApiInputError("invalid_knesset_num",
-                                  f"only Knesset {processed} protocols are processed; knesset_num must be one of them")
-    return knesset_num
+def _protocol_knesset_num_arg(args: dict) -> int | None:
+    """None (omitted) searches every processed Knesset."""
+    return valid.protocol_knesset_num(_optional_knesset_num_arg(args))
 
 
 def _top_k_arg(args: dict, maximum: int, default: int | None = None) -> int | None:
@@ -99,7 +94,14 @@ def _search_text_arg(args: dict, limits: ToolArgumentLimits) -> str:
 
 
 def _find_args(args: dict, limits: ToolArgumentLimits) -> dict:
-    """find_mk / find_party read the OData roster of any Knesset."""
+    """find_mk / find_committee: any Knesset (the OData roster for an unprocessed one); omitted = every
+    processed Knesset."""
+    return {"query": _search_text_arg(args, limits),
+            "knesset_num": _optional_knesset_num_arg(args), "top_k": _top_k_arg(args, limits.find_max_top_k)}
+
+
+def _find_party_args(args: dict, limits: ToolArgumentLimits) -> dict:
+    """Party names belong to one Knesset: omitted = config.ROSTER_DEFAULT_KNESSET_NUM."""
     return {"query": _search_text_arg(args, limits),
             "knesset_num": _knesset_num_arg(args), "top_k": _top_k_arg(args, limits.find_max_top_k)}
 
@@ -186,7 +188,7 @@ def _query_votes_args(args: dict, limits: ToolArgumentLimits) -> dict:
 TOOL_ARGUMENT_VALIDATORS = {
     "find_mk":                _find_args,
     "find_committee":         _find_args,
-    "find_party":             _find_args,
+    "find_party":             _find_party_args,
     "query_protocols":        _query_protocols_args,
     "get_meeting_attendance": _meeting_attendance_args,
     "query_bills":            _query_bills_args,
