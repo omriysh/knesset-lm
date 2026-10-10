@@ -9,9 +9,12 @@ and committee-meeting attendance against the meetings of the committees they bel
 import sqlite3
 from collections import Counter
 
+from config import PLENUM_COMMITTEE_NAME
+
 EVIDENCE_PER_THEME = 5
 EVIDENCE_QUOTE_CHARS = (30, 230)
 OTHER_THEME = "other"
+OTHER_UMBRELLA = "נושאים נוספים"
 _ATTENDANCE_POSITIONS = ('חבר ועדה', 'יו"ר ועדה')
 
 
@@ -100,6 +103,59 @@ def mk_themes(conn: sqlite3.Connection, mk_id: str, knesset_num: int) -> dict:
         _add_theme_details(conn, theme, quarters)
     return {"themes": themes, "quarters": quarters, "total_opinions": total_opinions,
             "opinions_in_a_theme": in_a_theme}
+
+
+def has_subjects(conn: sqlite3.Connection, mk_id: str, knesset_num: int) -> bool:
+    return conn.execute("""
+        SELECT EXISTS(SELECT 1 FROM subject_themes st JOIN mk_themes t ON t.id = st.theme_id
+                      WHERE t.mk_id = ? AND t.knesset_num = ?)""", (mk_id, knesset_num)).fetchone()[0] == 1
+
+
+def add_subjects(conn: sqlite3.Connection, payload: dict) -> dict:
+    """
+    Adds to an mk_themes payload the shared subjects of each theme (umbrella, the MK's approach and whether
+    it is the approach most MKs took) and the umbrellas: distinct opinions in total and per quarter, with
+    their themes, most opinions first. A theme in no subject goes under OTHER_UMBRELLA.
+    """
+    themes = payload["themes"]
+    theme_ids = [theme["id"] for theme in themes]
+    placeholders = ",".join("?" * len(theme_ids))
+    subjects_of: dict[int, list[dict]] = {theme_id: [] for theme_id in theme_ids}
+    for theme_id, subject_id, umbrella, name, mk_count, approach, approach_mks, top_approach_mks in conn.execute(f"""
+            SELECT st.theme_id, s.id, s.umbrella, s.name, s.mk_count, a.name, a.mk_count,
+                   (SELECT MAX(mk_count) FROM subject_approaches WHERE subject_id = s.id)
+            FROM subject_themes st JOIN subjects s ON s.id = st.subject_id
+            LEFT JOIN subject_approaches a ON a.id = st.approach_id
+            WHERE st.theme_id IN ({placeholders}) ORDER BY s.mk_count DESC""", theme_ids):
+        subjects_of[theme_id].append({
+            "id": subject_id, "umbrella": umbrella, "name": name, "mk_count": mk_count,
+            "approach": {"name": approach, "mk_count": approach_mks, "majority": approach_mks == top_approach_mks}
+                        if approach else None})
+    for theme in themes:
+        theme["subjects"] = subjects_of[theme["id"]]
+
+    quarter_index = {quarter: i for i, quarter in enumerate(payload["quarters"])}
+    opinions_of: dict[int, list[tuple[str, int, str]]] = {theme_id: [] for theme_id in theme_ids}
+    for theme_id, meeting_id, idx, date in conn.execute(f"""
+            SELECT l.theme_id, l.meeting_id, l.opinion_idx, m.date FROM mk_theme_opinions l
+            JOIN meetings m ON m.meeting_id = l.meeting_id WHERE l.theme_id IN ({placeholders})""", theme_ids):
+        opinions_of[theme_id].append((meeting_id, idx, date))
+    umbrellas: dict[str, dict] = {}
+    for theme in themes:
+        for umbrella in dict.fromkeys(s["umbrella"] for s in theme["subjects"]) or [OTHER_UMBRELLA]:
+            entry = umbrellas.setdefault(umbrella, {"name": umbrella, "theme_ids": [], "opinions": {}})
+            entry["theme_ids"].append(theme["id"])
+            entry["opinions"].update({(meeting_id, idx): date for meeting_id, idx, date in opinions_of[theme["id"]]})
+    payload["umbrellas"] = []
+    for entry in umbrellas.values():
+        quarter_counts = [0] * len(quarter_index)
+        for date in entry["opinions"].values():
+            if date and _quarter(date) in quarter_index:
+                quarter_counts[quarter_index[_quarter(date)]] += 1
+        payload["umbrellas"].append({"name": entry["name"], "theme_ids": entry["theme_ids"],
+                                     "opinions": len(entry["opinions"]), "quarter_counts": quarter_counts})
+    payload["umbrellas"].sort(key=lambda u: -u["opinions"])
+    return payload
 
 
 def mk_theme(conn: sqlite3.Connection, theme_id: int, evidence_count: int = EVIDENCE_PER_THEME) -> dict | None:
@@ -212,8 +268,12 @@ def committee_attendance(conn: sqlite3.Connection, mk_id: str, knesset_num: int,
     per_committee = [[committee, count] for committee, count in conn.execute("""
         SELECT m.committee, COUNT(DISTINCT a.meeting_id) FROM attendance a JOIN meetings m ON m.meeting_id = a.meeting_id
         WHERE a.mk_id = ? AND a.knesset_num = ? GROUP BY m.committee ORDER BY 2 DESC""", (mk_id, knesset_num))]
+    plenum_meetings = {meeting_id for (meeting_id,) in conn.execute(
+        "SELECT meeting_id FROM meetings WHERE knesset_num = ? AND committee = ?", (knesset_num, PLENUM_COMMITTEE_NAME))}
     return {"meetings_attended": len(attended), "member_meetings": len(member_meetings),
-            "member_meetings_attended": len(attended & member_meetings), "per_committee": per_committee}
+            "member_meetings_attended": len(attended & member_meetings),
+            "other_committee_meetings_attended": len(attended - member_meetings - plenum_meetings),
+            "per_committee": per_committee}
 
 
 def activity_knessets(conn: sqlite3.Connection, mk_id: str, knesset_nums) -> list[int]:

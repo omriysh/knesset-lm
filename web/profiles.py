@@ -250,6 +250,7 @@ def _candidate_activity(conn, candidate: dict, latest_knesset: int, roles: dict 
     latest_attendance = {key: value for key, value in attendance_by_knesset[0].items() if key != "knesset_num"}
     return {**mk_activity.opinion_counts(conn, candidate["mk_id"], knessets[0]),
             "knesset_num": knessets[0], "knessets": knessets,
+            "has_subjects": mk_activity.has_subjects(conn, candidate["mk_id"], knessets[0]),
             "attendance": latest_attendance, "attendance_by_knesset": attendance_by_knesset}
 
 
@@ -294,7 +295,7 @@ def profile_themes(party_id: int, candidate_id: int, knesset: int | None = None)
     conn = store.connect(interrupt_after_seconds=config.DB_QUERY_TIMEOUT_SECONDS)
     try:
         knesset_num, knessets = _chosen_activity_knesset(conn, candidate, knesset)
-        return {**mk_activity.mk_themes(conn, candidate["mk_id"], knesset_num),
+        return {**mk_activity.add_subjects(conn, mk_activity.mk_themes(conn, candidate["mk_id"], knesset_num)),
                 "knesset_num": knesset_num, "knessets": knessets}
     finally:
         conn.close()
@@ -311,6 +312,8 @@ def profile_theme(theme_id: int):
     conn = store.connect(interrupt_after_seconds=config.DB_QUERY_TIMEOUT_SECONDS)
     try:
         data = mk_activity.mk_theme(conn, theme_id)
+        if data is not None:
+            mk_activity.add_subjects(conn, {"themes": [data["theme"]], "quarters": data["quarters"]})
     finally:
         conn.close()
     if data is None:

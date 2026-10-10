@@ -26,10 +26,12 @@ const VOTE_LOOK = {
   'בעד': ['thumb_up', 'v-for'], 'נגד': ['thumb_down', 'v-against'], 'נמנע': ['do_not_disturb_on', 'v-abstain'],
   'נוכח': ['person_check', 'v-present'],
 };
+const FULL_PROFILE_TOKEN = 'full';
+const SIMPLE_PROFILE_TOKEN = 'simple';
 const KNESSET_SITE_MK_URL = 'https://main.knesset.gov.il/mk/apps/mk/mk-personal-details/';
 const KNESSET_SITE_BILL_URL = 'https://main.knesset.gov.il/activity/legislation/laws/pages/LawBill.aspx?t=lawsuggestionssearch&lawitemid=';
 
-let _pfRoute = { party: null, candidate: null, tab: null };
+let _pfRoute = { party: null, candidate: null, tab: null, full: false, simple: false };
 let _pfRenderToken = 0;
 let _pf = null;
 /* Theme cards outside the profile page (the game's results) carry data-pf-source="<name>" and register
@@ -79,17 +81,19 @@ function pfDebounce(fn, ms) {
 /* ── routing ─────────────────────────────────────────────────────── */
 function _pfParseRoute(pathname = location.pathname, hash = location.hash) {
   const match = pathname.match(/^\/profiles(?:\/party\/(\d{1,4})(?:\/candidate\/(\d{1,4}))?)?\/?$/);
-  const tab = hash.replace('#', '');
+  const token = hash.replace('#', '');
+  const tab = Object.hasOwn(PROFILE_TABS, token) ? token : null;
   return { party: match && match[1] ? Number(match[1]) : null,
            candidate: match && match[2] ? Number(match[2]) : null,
-           tab: Object.hasOwn(PROFILE_TABS, tab) ? tab : null };
+           tab, full: tab !== null || token === FULL_PROFILE_TOKEN, simple: token === SIMPLE_PROFILE_TOKEN };
 }
 
 function _pfPath(route) {
   if (route.party == null) return PROFILES_PATH;
   const party = `${PROFILES_PATH}/party/${route.party}`;
   if (route.candidate == null) return party;
-  return `${party}/candidate/${route.candidate}${route.tab ? '#' + route.tab : ''}`;
+  const token = route.tab || (route.full ? FULL_PROFILE_TOKEN : route.simple ? SIMPLE_PROFILE_TOKEN : '');
+  return `${party}/candidate/${route.candidate}${token ? '#' + token : ''}`;
 }
 
 function profilesCurrentPath() { return _pfPath(_pfRoute); }
@@ -356,7 +360,8 @@ function _pfHeroStats(data) {
 async function _pfRenderCandidate(root, partyId, candidateId, current) {
   const base = `${PROFILES_PATH}/party/${partyId}/candidate/${candidateId}`;
   const api = `/api/profiles/party/${partyId}/candidate/${candidateId}`;
-  if (_pf && _pf.api === api && root.querySelector('.pf-hero')) { _pfSelectTab(_pfRoute.tab || _pf.tabs[0], { writeUrl: false }); return; }
+  const simple = _pfRoute.simple || (!_pfRoute.full && profileSimpleFirst());
+  if (!simple && _pf && _pf.api === api && root.querySelector('.pf-hero')) { _pfSelectTab(_pfRoute.tab || _pf.tabs[0], { writeUrl: false }); return; }
   root.innerHTML = `<div class="pf-page">${pfSpinner('טוען את הפרופיל…')}</div>`;
   let data;
   try { data = await pfFetch(api); } catch (err) { if (current()) root.innerHTML = `<div class="pf-page">${_pfCrumbs([['הרשימות', PROFILES_PATH], ['הרשימה', `${PROFILES_PATH}/party/${partyId}`]])}${pfErrorBox(err)}</div>`; return; }
@@ -367,13 +372,19 @@ async function _pfRenderCandidate(root, partyId, candidateId, current) {
     root.innerHTML = `<div class="pf-page">${crumbs}<div class="pf-empty">${pfEsc(candidate.name)}, מקום ${candidate.position} ברשימה, לא כיהן/ה בכנסת, ולכן אין עדיין פרופיל.</div></div>`;
     return;
   }
+  if (simple && pfsAvailable(data)) {
+    _pf = null;
+    pfsRender(root, data, partyId, candidateId, crumbs);
+    return;
+  }
   const tabs = PROFILE_TABS_BY_DEPTH[candidate.profile];
   _pf = { api, base, data, tabs, loaded: {}, themes: null, evidence: {}, knesset: null,
           opinions: { q: '', theme: '', from: '', to: '', group: 'date', rows: [], total: 0, facets: null, loading: false },
           votes: { q: '', filter: 'all', rows: [], total: 0, loading: false },
           bills: { q: '', role: '', stage: '', rows: [], total: 0, loading: false } };
+  const simpleButton = pfsAvailable(data) ? _pfLink(`${base}#${SIMPLE_PROFILE_TOKEN}`, `${pfIcon('arrow_forward')}לפרופיל הפשוט`, 'pfs-full-btn pfs-full-btn--top') : '';
   root.innerHTML = `<div class="pf-page">
-    ${crumbs}
+    <div class="pfs-topline">${crumbs}${simpleButton}</div>
     <section class="pf-hero">
       <div class="pf-portrait">${pfAvatar(candidate.photo_url, candidate.name)}${candidate.photo_url ? '<div class="pf-photo-credit">צילום: אתר הכנסת</div>' : ''}</div>
       <div class="pf-hero-main">

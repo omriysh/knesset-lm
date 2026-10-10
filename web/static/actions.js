@@ -40,6 +40,7 @@ const PAGE_ACTIONS = {
   onStagesAlwaysToggle:         (el) => window.onStagesAlwaysToggle(el),
   onShareSearchToggle:          (el) => setShareIncludesSearch(el.checked),
   onResearchTabToggle:          (el) => setResearchTabShown(el.checked),
+  onProfileSimpleToggle:        (el) => setProfileSimpleFirst(el.checked),
   replaceGeminiKeyFromSettings: () => window.replaceGeminiKeyFromSettings(),
   deleteGeminiKeyFromSettings:  () => window.deleteGeminiKeyFromSettings(),
   setResearchModel:             (el) => window.setResearchModel(el.dataset.role, el.value),
@@ -107,6 +108,11 @@ const PAGE_ACTIONS = {
   profilesNewcomer:             (el) => profilesNewcomer(el),
   profilesCopyNewcomersPrompt:  (el) => profilesCopyNewcomersPrompt(el),
   profilesCloseNewcomer:        () => profilesCloseNewcomer(),
+  profilesSimpleToFull:         (el, event) => profilesSimpleToFull(el, event),
+  profilesSimplePeriod:         (el) => profilesSimplePeriod(el),
+  profilesSimpleUmbrella:       (el) => profilesSimpleUmbrella(el),
+  profilesSimplePlay:           () => profilesSimplePlay(),
+  profilesDefaultTip:           (el) => profilesDefaultTip(el),
 };
 
 function runDeclaredAction(event, actionAttribute) {

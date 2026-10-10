@@ -517,6 +517,19 @@
     </div>
   </div>
 
+  <div id="pfs-default-overlay" role="dialog" aria-modal="true">
+    <div class="dialog">
+      <div class="dialog-body">
+        <h2>רוצים לפתוח ישר את הפרופיל המלא?</h2>
+        <p>שמנו לב שאתם עוברים לפרופיל המלא לעיתים קרובות. אפשר לפתוח אותו מיד במקום הפרופיל הפשוט, ותמיד אפשר לשנות את זה בהגדרות.</p>
+      </div>
+      <div class="dialog-footer">
+        <button class="btn btn-secondary" type="button" data-click="profilesDefaultTip" data-arg="keep">להשאיר כך</button>
+        <button class="btn btn-primary" type="button" data-click="profilesDefaultTip" data-arg="full">לפתוח ישר את הפרופיל המלא</button>
+      </div>
+    </div>
+  </div>
+
   <div id="pf-theme-sheet" role="dialog" aria-modal="true">
     <aside class="pf-sheet">
       <div class="pf-sheet-head"></div>
@@ -621,6 +634,20 @@
       </section>
 
       <section class="settings-group">
+        <h3 class="settings-group-title">פרופילים</h3>
+        <div class="settings-row">
+          <div>
+            <div class="settings-label">תמיד הצג פרופיל פשוט לפני פרופיל מלא</div>
+            <div class="settings-desc">פרופיל קצר עם תחומי העניין וההרגלים, ומשם אפשר לעבור לפרופיל המלא</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="toggle-profile-simple" data-change="onProfileSimpleToggle">
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+      </section>
+
+      <section class="settings-group">
         <h3 class="settings-group-title">בצ'אט שלנו</h3>
         <div class="settings-row">
           <div>
@@ -699,6 +726,7 @@
   <script src="{{ asset('home.js') }}"></script>
   <script src="{{ asset('browser.js') }}"></script>
   <script src="{{ asset('profiles.js') }}"></script>
+  <script src="{{ asset('profile_simple.js') }}"></script>
   <script src="{{ asset('game.js') }}"></script>
   <script src="{{ asset('tabs.js') }}"></script>
   <script src="{{ asset('filters.js') }}"></script>
