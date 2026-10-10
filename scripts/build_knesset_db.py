@@ -13,6 +13,8 @@ Targets, in dependency order:
     speeches    every speech (structured or parsed from full_text), speaker resolved
     mk_themes   per-MK themes from Data/mk_themes/<k>/<mk_id>.json (scripts/summarize_mk_themes_batches.py),
                 linked to opinions by (meeting_id, idx); may be empty before the first themes run
+    subjects    shared subjects + approaches from Data/subjects/<k>/subjects.json (scripts/group_mk_subjects.py),
+                linked to the current mk_themes ids; built whenever mk_themes is (the theme ids change)
 
 Bills and votes are not stored: the agent queries them live from OData.
 
@@ -55,8 +57,8 @@ from utils.protocol_download import json_files_by_meeting, transcripts_by_meetin
 from utils.tool_helpers.filter_resolution import normalized_name_key
 from utils.tool_helpers.fuzzy_name_index import FuzzyNameIndex
 
-TARGETS = ("mks", "committees", "meetings", "summaries", "speeches", "mk_themes")
-TARGETS_ALLOWED_EMPTY = {"mk_themes"}
+TARGETS = ("mks", "committees", "meetings", "summaries", "speeches", "mk_themes", "subjects")
+TARGETS_ALLOWED_EMPTY = {"mk_themes", "subjects"}
 
 
 def _iso_date(stem: str) -> str:
@@ -372,9 +374,24 @@ def build_mk_themes(conn, knesset_num: int, rebuild: bool) -> int:
     return themes_written
 
 
+def build_subjects(conn, knesset_num: int, rebuild: bool) -> int:
+    """Always a full replace of the Knesset's subjects (rebuild makes no difference)."""
+    subjects_path = config.subjects_dir(knesset_num) / "subjects.json"
+    if not subjects_path.exists():
+        print(f"  [subjects] no {subjects_path}")
+        return 0
+    counts = store.replace_subjects(conn, json.loads(subjects_path.read_text(encoding="utf-8")))
+    store.rebuild_fts(conn, "subjects")
+    print(f"  [subjects] {counts['subjects']} subjects, {counts['approaches']} approaches, {counts['links']} theme "
+          f"links; {counts['stale_refs']} theme refs stale (theme text changed: rerun group_mk_subjects.py), "
+          f"{counts['empty_subjects']} subjects with no theme left")
+    return counts["subjects"]
+
+
 _BUILDERS = {
     "mks": build_mks, "committees": build_committees, "meetings": build_meetings,
     "summaries": build_summaries, "speeches": build_speeches, "mk_themes": build_mk_themes,
+    "subjects": build_subjects,
 }
 
 
@@ -392,6 +409,9 @@ def main() -> None:
         config.KNESSET_DB = config.DATA_DIR / "knesset.db"
 
     targets = list(TARGETS) if args.target == "all" else [t.strip() for t in args.target.split(",") if t.strip()]
+    if "mk_themes" in targets and "subjects" not in targets:
+        print("mk_themes changes the theme ids the subjects link to: building subjects too")
+        targets.append("subjects")
     unknown = [t for t in targets if t not in _BUILDERS]
     if unknown:
         print(f"ERROR: unknown target(s) {unknown}")

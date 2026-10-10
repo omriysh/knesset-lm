@@ -67,6 +67,11 @@ def mk_themes_dir(knesset_num: int = 25) -> Path:
     return DATA_DIR / "mk_themes" / str(knesset_num)
 
 
+def subjects_dir(knesset_num: int = 25) -> Path:
+    """subjects.json (the MK subjects pipeline state) and history/, written by scripts/group_mk_subjects.py."""
+    return DATA_DIR / "subjects" / str(knesset_num)
+
+
 def candidate_lists_dir(election_knesset_num: int = 26) -> Path:
     """Candidate lists of an election (lists.json, ballots/, photos/), built by scripts/build_candidate_lists.py."""
     return DATA_DIR / "candidates" / str(election_knesset_num)
@@ -100,6 +105,27 @@ SUMMARY_OPINIONS_CHUNK_TARGET_CHARS    = 120_000
 MK_THEMES_MODEL             = "gemini-3.8-flash"
 MK_THEMES_THINKING_LEVEL    = "low"
 MK_THEMES_MAX_OUTPUT_TOKENS = 100_000
+
+# ── MK subjects (scripts/group_mk_subjects.py) ───────────────────────────────
+# The themes of all MKs grouped into shared subjects, each with the approaches MKs take to it.
+# Interactive calls (each step needs the previous one); a full run is ~$32, an incremental one a few dollars.
+SUBJECTS_MODEL                           = "gemini-3.8-flash"
+SUBJECTS_THINKING_LEVEL                  = "high"
+SUBJECTS_FALLBACK_THINKING_LEVEL         = "medium"   # retry when high thinking runs out of output tokens
+SUBJECTS_MAX_OUTPUT_TOKENS               = 100_000
+SUBJECTS_SHARD_MAX_TOKENS                = 50_000     # theme text per pass 1 shard
+SUBJECTS_CHARS_PER_TOKEN                 = 1.93       # Hebrew theme text, measured with gemini-3.8-flash
+SUBJECTS_ASSIGN_CHUNK_SIZE               = 50
+SUBJECTS_MIN_ASSIGN_CHUNK_SIZE_TO_SPLIT  = 6
+SUBJECTS_MAX_BACKGROUND_THEMES_TO_VERIFY = 20
+SUBJECTS_MIN_MKS_FOR_APPROACHES          = 2
+SUBJECTS_MAX_REPAIRS                     = 1          # per subject; --repair-again allows one more per run
+SUBJECTS_LEFTOVER_MIN_THEMES             = 50         # themes without a subject that trigger a leftover round
+SUBJECTS_PARALLEL_CALLS                  = 8
+GEMINI_INTERACTIVE_PRICE_PER_M_TOKENS    = {          # USD per 1M tokens: input, output incl. thinking
+    "gemini-3.8-flash":      (0.75, 3.75),
+    "gemini-3.1-flash-lite": (0.25, 1.5),
+}
 
 
 # ── Plan-execute agent ───────────────────────────────────────────────────────

@@ -18,12 +18,15 @@ three are NULL when the quote was not located.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Iterable
 
 import config
+from subjects.theme_refs import theme_fingerprint, theme_ref
 
 _FTS_TOKENIZE = "tokenize='unicode61 remove_diacritics 2'"
 
@@ -155,6 +158,49 @@ CREATE TABLE IF NOT EXISTS mk_theme_opinions (
 );
 CREATE INDEX IF NOT EXISTS idx_mk_theme_opinions_opinion ON mk_theme_opinions(meeting_id, opinion_idx);
 
+CREATE TABLE IF NOT EXISTS subjects (
+    id             INTEGER PRIMARY KEY,
+    knesset_num    INTEGER NOT NULL,
+    subject_key    INTEGER NOT NULL,
+    umbrella       TEXT NOT NULL,
+    name           TEXT NOT NULL,
+    description    TEXT NOT NULL,
+    background     TEXT NOT NULL,
+    mk_count       INTEGER NOT NULL,
+    theme_count    INTEGER NOT NULL,
+    approach_count INTEGER NOT NULL,
+    party_counts   TEXT NOT NULL,
+    model          TEXT,
+    generated_at   TEXT,
+    UNIQUE (knesset_num, subject_key)
+);
+CREATE INDEX IF NOT EXISTS idx_subjects_umbrella ON subjects(knesset_num, umbrella);
+CREATE VIRTUAL TABLE IF NOT EXISTS subjects_fts USING fts5(
+    umbrella, name, description, background, content='subjects', content_rowid='id', {_FTS_TOKENIZE}
+);
+
+CREATE TABLE IF NOT EXISTS subject_approaches (
+    id           INTEGER PRIMARY KEY,
+    subject_id   INTEGER NOT NULL,
+    knesset_num  INTEGER NOT NULL,
+    rank         INTEGER NOT NULL,
+    name         TEXT NOT NULL,
+    summary      TEXT NOT NULL,
+    mk_count     INTEGER NOT NULL,
+    party_counts TEXT NOT NULL,
+    UNIQUE (subject_id, rank)
+);
+
+CREATE TABLE IF NOT EXISTS subject_themes (
+    subject_id  INTEGER NOT NULL,
+    theme_id    INTEGER NOT NULL,
+    approach_id INTEGER,
+    knesset_num INTEGER NOT NULL,
+    PRIMARY KEY (subject_id, theme_id)
+);
+CREATE INDEX IF NOT EXISTS idx_subject_themes_theme ON subject_themes(theme_id);
+CREATE INDEX IF NOT EXISTS idx_subject_themes_approach ON subject_themes(approach_id);
+
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT
@@ -170,6 +216,7 @@ TARGET_TABLES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "summaries":  (("topics", "opinions"), ("topics_fts", "opinions_fts")),
     "speeches":   (("speeches",), ("speeches_fts",)),
     "mk_themes":  (("mk_theme_opinions", "mk_themes"), ("mk_themes_fts",)),
+    "subjects":   (("subject_themes", "subject_approaches", "subjects"), ("subjects_fts",)),
 }
 
 _BATCH = 1000
@@ -303,6 +350,81 @@ def replace_mk_themes(conn, theme_file: dict) -> tuple[int, int]:
             WHERE id = ?""", (theme_id, theme_id))
     conn.commit()
     return len(theme_file["themes"]), links_dropped
+
+
+def party_counts_json(mk_ids: Iterable[str], party_by_mk: dict[str, str | None]) -> str:
+    """Distinct MKs per party as a JSON object, most MKs first (subjects.party_counts)."""
+    counts = Counter(party_by_mk.get(mk_id) or "?" for mk_id in set(mk_ids))
+    return json.dumps(dict(sorted(counts.items(), key=lambda item: (-item[1], item[0]))), ensure_ascii=False)
+
+
+def replace_subjects(conn, subjects_file: dict) -> dict:
+    """
+    Replace a Knesset's subjects with the live subjects (verified, not merged) of a Data/subjects/<k>/subjects.json
+    payload (scripts/group_mk_subjects.py). Theme refs ("<mk_id>:<rank>") are resolved to the current mk_themes.id;
+    a ref whose theme text no longer matches its fingerprint is skipped (rerun group_mk_subjects.py after a themes
+    change). MK and party counts are computed here. FTS is rebuilt by the caller.
+    Returns {"subjects", "approaches", "links", "stale_refs", "empty_subjects"}.
+    """
+    knesset_num = subjects_file["knesset_num"]
+    clear_target(conn, "subjects", knesset_num)
+    theme_by_ref = {}
+    for theme_id, mk_id, rank, title, summary, party in conn.execute(
+            "SELECT t.id, t.mk_id, t.rank, t.title, t.summary, m.party FROM mk_themes t "
+            "LEFT JOIN mks m ON m.mk_id = t.mk_id AND m.knesset_num = t.knesset_num WHERE t.knesset_num = ?",
+            (knesset_num,)):
+        theme_by_ref[theme_ref(mk_id, rank)] = {"id": theme_id, "mk_id": mk_id, "party": party,
+                                                "fingerprint": theme_fingerprint(title, summary)}
+    party_by_mk = {theme["mk_id"]: theme["party"] for theme in theme_by_ref.values()}
+    refs_by_subject: dict[int, list[str]] = {}
+    stale_refs = set()
+    for ref, entry in subjects_file["themes"].items():
+        theme = theme_by_ref.get(ref)
+        if theme is None or theme["fingerprint"] != entry["fingerprint"]:
+            stale_refs.add(ref)
+            continue
+        for subject_id in entry["subject_ids"]:
+            refs_by_subject.setdefault(subject_id, []).append(ref)
+
+    counts = {"subjects": 0, "approaches": 0, "links": 0, "stale_refs": len(stale_refs), "empty_subjects": 0}
+    for subject in subjects_file["subjects"]:
+        if not subject.get("verification", {}).get("verified") or "merged_into" in subject:
+            continue
+        subject_refs = refs_by_subject.get(subject["subject_id"], [])
+        if not subject_refs:
+            counts["empty_subjects"] += 1
+            continue
+        subject_ref_set = set(subject_refs)
+        approaches = []
+        for approach in subject.get("approaches", []):
+            approach_refs = [ref for ref in approach["theme_refs"] if ref in subject_ref_set]
+            if approach_refs:
+                approaches.append((approach, approach_refs, {theme_by_ref[ref]["mk_id"] for ref in approach_refs}))
+        approaches.sort(key=lambda item: -len(item[2]))
+        subject_mk_ids = {theme_by_ref[ref]["mk_id"] for ref in subject_refs}
+        subject_row_id = conn.execute(
+            "INSERT INTO subjects(knesset_num, subject_key, umbrella, name, description, background, mk_count, "
+            "theme_count, approach_count, party_counts, model, generated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (knesset_num, subject["subject_id"], subject["umbrella"], subject["name"], subject["description"],
+             subject["background"], len(subject_mk_ids), len(subject_refs), len(approaches),
+             party_counts_json(subject_mk_ids, party_by_mk), subjects_file.get("model"),
+             subjects_file.get("generated_at"))).lastrowid
+        approach_id_by_ref = {}
+        for rank, (approach, approach_refs, approach_mk_ids) in enumerate(approaches, start=1):
+            approach_row_id = conn.execute(
+                "INSERT INTO subject_approaches(subject_id, knesset_num, rank, name, summary, mk_count, party_counts) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (subject_row_id, knesset_num, rank, approach["name"], approach["summary"], len(approach_mk_ids),
+                 party_counts_json(approach_mk_ids, party_by_mk))).lastrowid
+            approach_id_by_ref.update({ref: approach_row_id for ref in approach_refs})
+        conn.executemany("INSERT INTO subject_themes(subject_id, theme_id, approach_id, knesset_num) VALUES (?,?,?,?)",
+                         [(subject_row_id, theme_by_ref[ref]["id"], approach_id_by_ref.get(ref), knesset_num)
+                          for ref in subject_refs])
+        counts["subjects"] += 1
+        counts["approaches"] += len(approaches)
+        counts["links"] += len(subject_refs)
+    conn.commit()
+    return counts
 
 
 def insert_mks(conn, rows):
