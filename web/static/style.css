@@ -3027,6 +3027,7 @@ body.show-welcome .research-slot { display: block; }
 /* The home choice: picking an option draws the line out and slides its cards in; switching folds them back first (home.js). */
 #home-graph .home-next-card { transform: translateX(16px); transition: opacity 0.18s, transform 0.22s ease-in, visibility 0s 0.22s, box-shadow 0.2s, background 0.2s; }
 #home-graph.home-graph--open:not(.home-graph--folding) .home-next-card { opacity: 1; visibility: visible; transform: none; transition: opacity 0.35s 0.35s, transform 0.55s 0.35s cubic-bezier(0.2, 0.7, 0.3, 1), visibility 0s 0.35s, box-shadow 0.2s, background 0.2s; }
+#home-graph.home-graph--open:not(.home-graph--folding) .home-next-card--middle { transition-delay: 0.41s, 0.41s, 0.41s, 0s, 0s; }
 #home-graph.home-graph--open:not(.home-graph--folding) .home-next-card--advanced { transition-delay: 0.47s, 0.47s, 0.47s, 0s, 0s; }
 #home-graph.home-graph--folding .home-next-card { opacity: 0; visibility: hidden; transform: translateX(16px); }
 #home-graph.home-graph--folding .home-edge::before { transform: scaleX(0); transition: transform 0.2s 0.06s ease-in; }
@@ -3035,7 +3036,7 @@ body.show-welcome .research-slot { display: block; }
 .home-fork { display: none; }
 @media (min-width: 861px) {
   .home { justify-content: flex-start; padding-top: clamp(48px, 18vh, 200px); }
-  #home-graph { min-height: 236px; }
+  #home-graph { min-height: 340px; }
   #home-graph:has(.home-next-card--advanced:not([hidden])) .home-edge::before, #home-graph:has(.home-next-card--advanced:not([hidden])) .home-edge::after { display: none; }
   #home-graph:has(.home-next-card--advanced:not([hidden])) .home-next { position: relative; display: grid; grid-auto-rows: 1fr; gap: 0; }
   #home-graph:has(.home-next-card--advanced:not([hidden])) .home-next-card { margin-block: 6px; }

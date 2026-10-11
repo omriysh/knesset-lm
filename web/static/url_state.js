@@ -7,6 +7,7 @@
  *                                    and a character range in that speech (src/utils/source_links.py
  *                                    builds the same links for the API)
  *   /chat                          → in-your-chat tab (connect the MCP)
+ *   /subjects…                     → subjects tab (subjects.js)
  *   /about[/prompts|support|privacy|terms][?lang=en] → the help dialog over home (app.js)
  *   /                              → the home tab, URL left as is until the user moves
  *
@@ -135,6 +136,7 @@ function setActiveTab(name, { writeUrl, push }) {
   else if (name === 'chat') _writeUrl(CHAT_PATH, push);
   else if (name === 'game') _writeUrl(GAME_PATH, push);
   else if (name === 'profiles') _writeUrl(profilesCurrentPath(), push);
+  else if (name === 'subjects') _writeUrl(subjectsCurrentPath(), push);
   else _writeUrl(name === 'research' ? RESEARCH_PATH : protocolPath(_protocolUrlState), push);
 }
 

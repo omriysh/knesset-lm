@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 import config
 from api import validation as valid
-from profiles import game, mk_activity
+from profiles import game, mk_activity, subjects
 from retrieval import knesset_db_store as store
 from utils import knesset_db as kdb
 from utils.tools import _expand_match
@@ -120,9 +120,10 @@ def _theme_pool_cached(lists_path: str, lists_mtime: float, db_mtime: float) -> 
     conn = store.connect(interrupt_after_seconds=config.DB_QUERY_TIMEOUT_SECONDS)
     try:
         themes = mk_activity.themes_of_mks(conn, sorted({mk_id for *_, mk_id in candidates}), ACTIVITY_KNESSET)
+        theme_subjects = subjects.game_subjects(conn, ACTIVITY_KNESSET)
     finally:
         conn.close()
-    return game.build_pool(candidates, themes)
+    return game.build_pool(candidates, themes, theme_subjects)
 
 
 def theme_pool() -> dict[int, game.PoolTheme]:
@@ -249,7 +250,7 @@ def _candidate_activity(conn, candidate: dict, latest_knesset: int, roles: dict 
         for knesset_num in knessets]
     latest_attendance = {key: value for key, value in attendance_by_knesset[0].items() if key != "knesset_num"}
     return {**mk_activity.opinion_counts(conn, candidate["mk_id"], knessets[0]),
-            "knesset_num": knessets[0], "knessets": knessets,
+            "knesset_num": knessets[0], "knessets": knessets, "simple_knesset": ACTIVITY_KNESSET,
             "has_subjects": mk_activity.has_subjects(conn, candidate["mk_id"], knessets[0]),
             "attendance": latest_attendance, "attendance_by_knesset": attendance_by_knesset}
 

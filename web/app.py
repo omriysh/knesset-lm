@@ -70,6 +70,7 @@ from web.gemini_keys import (forget_server_gemini_keys, gemini_text_models, stop
                               unavailable_models_error, visitor_gemini_key_or_error)
 from web.middleware import RequestBodyLimitMiddleware, SecurityHeadersMiddleware
 from web.profiles import PROFILE_PAGE_PATHS, router as profiles_router
+from web.subjects import SUBJECT_PAGE_PATHS, router as subjects_router
 from agent.llm.google import GoogleBackend
 from agent.model_choice import MODEL_ID_PATTERN, ResearchModels
 
@@ -463,6 +464,7 @@ class RevalidatedStaticFiles(StaticFiles):
 app.mount("/static", RevalidatedStaticFiles(directory=str(_STATIC_DIR)), name="static")
 app.include_router(api_router)
 app.include_router(profiles_router)
+app.include_router(subjects_router)
 app.include_router(game_router)
 install_mcp_endpoint(app, rate_limiter)
 install_public_docs(app, WEB_API_TITLE)
@@ -635,6 +637,10 @@ class ResearchRespondRequest(BaseModel):
 @app.get(PROFILE_PAGE_PATHS[0], response_class=HTMLResponse, include_in_schema=False)
 @app.get(PROFILE_PAGE_PATHS[1], response_class=HTMLResponse, include_in_schema=False)
 @app.get(PROFILE_PAGE_PATHS[2], response_class=HTMLResponse, include_in_schema=False)
+@app.get(SUBJECT_PAGE_PATHS[0], response_class=HTMLResponse, include_in_schema=False)
+@app.get(SUBJECT_PAGE_PATHS[1], response_class=HTMLResponse, include_in_schema=False)
+@app.get(SUBJECT_PAGE_PATHS[2], response_class=HTMLResponse, include_in_schema=False)
+@app.get(SUBJECT_PAGE_PATHS[3], response_class=HTMLResponse, include_in_schema=False)
 async def index(request: Request):
     """One page for every tab; the path (and the reading tab's query parameters) pick the starting view."""
     return templates.TemplateResponse(request, "index.html")

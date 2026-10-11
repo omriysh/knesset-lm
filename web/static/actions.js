@@ -8,7 +8,11 @@
  * before app.js; app.js and gemini_key.js expose their functions on window.
  */
 const PAGE_ACTIONS = {
-  switchTab:                    (el) => { if (el.dataset.arg === 'profiles' && _activeTab === 'profiles') profilesGo(PROFILES_PATH); else switchTab(el.dataset.arg); },
+  switchTab:                    (el) => {
+    if (el.dataset.arg === 'profiles' && _activeTab === 'profiles') profilesGo(PROFILES_PATH);
+    else if (el.dataset.arg === 'subjects' && _activeTab === 'subjects') subjectsGo(SUBJECTS_PATH);
+    else switchTab(el.dataset.arg);
+  },
   landingOpenTab:               (el, event) => { event.preventDefault(); switchTab(el.dataset.arg); },
   homePick:                     (el) => homePick(el.dataset.arg),
   gameStart:                    () => gameStart(),
@@ -17,9 +21,21 @@ const PAGE_ACTIONS = {
   gameContinue:                 () => gameContinue(),
   gameHome:                     () => gameHome(),
   gameSlice:                    (el) => gameSlice(el),
+  gameNormalize:                () => gameNormalize(),
+  gameChooseParties:            (el) => gameChooseParties(el),
+  gameHowScored:                (el) => gameHowScored(el),
+  gameCloseParties:             () => gameCloseParties(),
+  gamePartiesBackdrop:          (el, event) => { if (event.target === el) gameCloseParties(); },
+  gameApplyParties:             () => gameApplyParties(),
+  gamePartiesAll:               (el) => gamePartiesAll(el),
+  onGameNormalizeToggle:        (el) => gameSetNormalized(el.checked),
+  gameShare:                    () => gameShare(),
   gameTheme:                    (el) => gameTheme(el),
   gameCloseTheme:               () => gameCloseTheme(),
+  gameInfo:                     () => gameInfo(),
+  gameCloseInfo:                () => gameCloseInfo(),
   gameThemeBackdrop:            (el, event) => { if (event.target === el) gameCloseTheme(); },
+  gameInfoBackdrop:             (el, event) => { if (event.target === el) gameCloseInfo(); },
   gameOpenProfile:              (el, event) => gameOpenProfile(el, event),
   landingScrollToSection:       (el, event) => landingScrollToSection(event, el.getAttribute('href').slice(1)),
   landingStepNext:              (el) => landingStepNext(el),
@@ -77,6 +93,15 @@ const PAGE_ACTIONS = {
   browserShareSpeech:           (el) => browserShareSpeech(el),
   browserShareQuote:            (el) => browserShareQuote(el),
   profilesNav:                  (el, event) => profilesNav(el, event),
+  subjectsNav:                  (el, event) => subjectsNav(el, event),
+  subjectsOpenProfile:          (el, event) => subjectsOpenProfile(el, event),
+  subjectsOpenFromSheet:        (el, event) => subjectsOpenFromSheet(el, event),
+  subjectsApproach:             el => subjectsApproach(el),
+  subjectsProcess:              () => subjectsProcess(),
+  subjectsPrompt:               el => subjectsPrompt(el),
+  subjectsNotCandidate:         el => subjectsNotCandidate(el),
+  subjectsCloseDialogs:         () => subjectsCloseDialogs(),
+  subjectsDialogBackdrop:       (el, event) => { if (event.target === el) subjectsCloseDialogs(); },
   profilesFilterParties:        (el) => profilesFilterParties(el),
   profilesFilterCandidates:     (el) => profilesFilterCandidates(el),
   profilesTab:                  (el) => profilesTab(el),
@@ -110,7 +135,6 @@ const PAGE_ACTIONS = {
   profilesCloseNewcomer:        () => profilesCloseNewcomer(),
   profilesSimpleToFull:         (el, event) => profilesSimpleToFull(el, event),
   profilesSimplePeriod:         (el) => profilesSimplePeriod(el),
-  profilesSimpleUmbrella:       (el) => profilesSimpleUmbrella(el),
   profilesSimplePlay:           () => profilesSimplePlay(),
   profilesDefaultTip:           (el) => profilesDefaultTip(el),
 };

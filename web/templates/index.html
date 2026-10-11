@@ -14,6 +14,7 @@
   <link rel="stylesheet" href="{{ asset('style.css') }}">
   <link rel="stylesheet" href="{{ asset('profiles.css') }}">
   <link rel="stylesheet" href="{{ asset('game.css') }}">
+  <link rel="stylesheet" href="{{ asset('subjects.css') }}">
 </head>
 <body class="bg-surface text-on-surface h-[100dvh] flex flex-col overflow-hidden show-welcome">
 
@@ -36,6 +37,7 @@
       <nav class="seg hidden md:flex">
         <button data-click="switchTab" data-arg="game" id="dt-tab-game" class="seg-btn app-tab-btn" type="button">היכרות</button>
         <button data-click="switchTab" data-arg="profiles" id="dt-tab-profiles" class="seg-btn app-tab-btn" type="button">פרופילים</button>
+        <button data-click="switchTab" data-arg="subjects" id="dt-tab-subjects" class="seg-btn app-tab-btn" type="button">נושאים</button>
         <button data-click="switchTab" data-arg="chat" id="dt-tab-chat" class="seg-btn app-tab-btn" type="button">בצ'אט שלכם</button>
         <button data-click="switchTab" data-arg="research" id="dt-tab-research" class="seg-btn app-tab-btn" type="button">בצ'אט שלנו</button>
         <button data-click="switchTab" data-arg="reading" id="dt-tab-reading" class="seg-btn app-tab-btn" type="button">דיוני הכנסת</button>
@@ -69,8 +71,9 @@
         <div class="home-edge" aria-hidden="true"></div>
         <div class="home-next">
           <svg class="home-fork" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-            <path d="M100 50 L64 50 C32 50 32 25 0 25"/>
-            <path d="M64 50 C32 50 32 75 0 75"/>
+            <path d="M100 50 L64 50 C32 50 32 16.7 0 16.7"/>
+            <path d="M64 50 L0 50"/>
+            <path d="M64 50 C32 50 32 83.3 0 83.3"/>
           </svg>
           <a class="home-card home-next-card" data-option="play" href="/game" data-click="landingOpenTab" data-arg="game" hidden>
             <p>משחק היכרות - עמדות של חברי כנסת, בלי השמות. מסכימים או לא, ובסוף מגלים עם מי הסכמתם.</p>
@@ -82,6 +85,10 @@
           </a>
           <a class="home-card home-next-card" data-option="read" href="/profiles" data-click="landingOpenTab" data-arg="profiles" hidden>
             <p>סיכום ציטוטים של חברי הכנסת מהדיונים בארבע השנים האחרונות.</p>
+            <span class="material-symbols-outlined home-next-arrow">arrow_back</span>
+          </a>
+          <a class="home-card home-next-card home-next-card--middle" data-option="read" href="/subjects" data-click="landingOpenTab" data-arg="subjects" hidden>
+            <p>הנושאים שעלו בדיונים, והגישות השונות של חברי הכנסת לכל אחד מהם.</p>
             <span class="material-symbols-outlined home-next-arrow">arrow_back</span>
           </a>
           <a class="home-card home-next-card home-next-card--advanced" data-option="read" href="/protocols" data-click="landingOpenTab" data-arg="reading" hidden>
@@ -462,15 +469,53 @@
         </ol>
       </section>
       <section class="gm-play" id="gm-play" hidden>
+        <button class="gm-info-btn" id="gm-info-btn" type="button" data-click="gameInfo" disabled><span class="material-symbols-outlined">info</span>למידע נוסף</button>
         <div class="gm-stack" id="gm-stack"><div class="gm-stack-empty" id="gm-stack-empty"></div></div>
         <div class="gm-vote-row">
           <button class="gm-vote-btn gm-vote-btn--yes" type="button" title="התחברתי" data-click="gameVote" data-arg="1"><span class="material-symbols-outlined">favorite</span></button>
-          <button class="gm-vote-btn gm-vote-btn--unsure" type="button" title="לא בטוח/ה" data-click="gameVote" data-arg="2"><span class="material-symbols-outlined">question_mark</span></button>
+          <button class="gm-vote-btn gm-vote-btn--unsure" type="button" title="לא בטוח/ה" data-click="gameVote" data-arg="2"><span class="material-symbols-outlined">close</span></button>
           <button class="gm-vote-btn gm-vote-btn--no" type="button" title="לא התחברתי" data-click="gameVote" data-arg="0"><span class="material-symbols-outlined">heart_broken</span></button>
         </div>
         <div class="gm-bottom" id="gm-bottom"></div>
       </section>
       <section class="gm-results" id="gm-results" hidden></section>
+    </div>
+  </div>
+  <div id="sj-process-overlay" class="sj-overlay" role="dialog" aria-modal="true" data-click="subjectsDialogBackdrop">
+    <div class="dialog">
+      <div class="sj-process-head">
+        <b>איך נוצרו הנושאים?</b>
+        <button class="btn btn-ghost btn-icon" type="button" title="סגירה" data-click="subjectsCloseDialogs"><span class="material-symbols-outlined">close</span></button>
+      </div>
+      <div class="dialog-body"></div>
+    </div>
+  </div>
+  <div id="sj-mk-overlay" class="sj-overlay" role="dialog" aria-modal="true" data-click="subjectsDialogBackdrop">
+    <div class="dialog">
+      <div class="dialog-body"></div>
+      <div class="dialog-footer"><button class="btn btn-primary btn-block" type="button" data-click="subjectsCloseDialogs">הבנתי</button></div>
+    </div>
+  </div>
+  <div id="gm-info-overlay" role="dialog" aria-modal="true" data-click="gameInfoBackdrop">
+    <div class="dialog">
+      <div class="gm-theme-head">
+        <div class="gm-info-title"></div>
+        <button class="btn btn-ghost btn-icon" type="button" title="סגירה" data-click="gameCloseInfo"><span class="material-symbols-outlined">close</span></button>
+      </div>
+      <div class="dialog-body gm-info-body"></div>
+    </div>
+  </div>
+  <div id="gm-parties-overlay" role="dialog" aria-modal="true" data-click="gamePartiesBackdrop">
+    <div class="dialog">
+      <div class="gm-theme-head">
+        <b class="gm-parties-title">אילו מפלגות להציג?</b>
+        <button class="btn btn-ghost btn-icon" type="button" title="סגירה" data-click="gameCloseParties"><span class="material-symbols-outlined">close</span></button>
+      </div>
+      <div class="dialog-body gm-parties-body"></div>
+      <div class="dialog-footer gm-parties-foot">
+        <button class="btn btn-secondary" type="button" data-click="gameCloseParties">ביטול</button>
+        <button class="btn btn-primary" type="button" data-click="gameApplyParties">הצגה</button>
+      </div>
     </div>
   </div>
   <div id="gm-theme-overlay" role="dialog" aria-modal="true" data-pf-source="game" data-click="gameThemeBackdrop">
@@ -489,6 +534,12 @@
   ══════════════════════════════════════════════════════════ -->
   <div id="tab-profiles" class="app-tab-panel hidden">
     <div id="profiles-root"></div>
+  </div>
+  <!-- ══════════════════════════════════════════════════════════
+       Tab: Subjects (נושאים) — shared subjects of the latest Knesset, their approaches and MK themes (subjects.js)
+  ══════════════════════════════════════════════════════════ -->
+  <div id="tab-subjects" class="app-tab-panel hidden">
+    <div id="subjects-root"></div>
   </div>
   <div class="pf-popup" id="pf-popup" hidden></div>
   <div id="pf-newcomer-overlay" role="dialog" aria-modal="true">
@@ -535,6 +586,7 @@
       <div class="pf-sheet-head"></div>
       <div class="pf-sheet-body">
         <p class="pf-sheet-summary"></p>
+        <div class="pf-sheet-subjects"></div>
         <div class="pf-sheet-timeline"></div>
         <div class="pf-sheet-list"></div>
         <div class="pf-center"><button class="btn btn-secondary btn-sm" type="button" data-pf-sheet-more data-click="profilesSheetMore" hidden><span class="material-symbols-outlined">expand_more</span>הצגת עוד</button></div>
@@ -551,6 +603,10 @@
     <button data-click="switchTab" data-arg="profiles" id="mob-tab-profiles" class="mobile-tab-btn flex-1">
       <span class="material-symbols-outlined" style="font-size:22px">groups</span>
       <span>פרופילים</span>
+    </button>
+    <button data-click="switchTab" data-arg="subjects" id="mob-tab-subjects" class="mobile-tab-btn flex-1">
+      <span class="material-symbols-outlined" style="font-size:22px">hub</span>
+      <span>נושאים</span>
     </button>
     <button data-click="switchTab" data-arg="chat" id="mob-tab-chat" class="mobile-tab-btn flex-1">
       <span class="material-symbols-outlined" style="font-size:22px">forum</span>
@@ -648,6 +704,34 @@
       </section>
 
       <section class="settings-group">
+        <h3 class="settings-group-title">משחק ההיכרות</h3>
+        <div class="settings-row">
+          <div>
+            <div class="settings-label">תוצאות לפי אחוז הסכמה</div>
+            <div class="settings-desc">כל מפלגה נמדדת לפי החלק מהנושאים שלה שהסכמת איתם, ולא לפי מספר הנושאים</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="toggle-game-normalize" data-change="onGameNormalizeToggle">
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+        <div class="settings-row">
+          <div>
+            <div class="settings-label">מפלגות במשחק</div>
+            <div class="settings-desc" id="game-play-status">נושאים של כל המפלגות</div>
+          </div>
+          <button class="btn btn-secondary btn-sm" type="button" data-click="gameChooseParties" data-arg="play">בחירה</button>
+        </div>
+        <div class="settings-row">
+          <div>
+            <div class="settings-label">מפלגות בתוצאות</div>
+            <div class="settings-desc" id="game-show-status">כל המפלגות</div>
+          </div>
+          <button class="btn btn-secondary btn-sm" type="button" data-click="gameChooseParties" data-arg="show">בחירה</button>
+        </div>
+      </section>
+
+      <section class="settings-group">
         <h3 class="settings-group-title">בצ'אט שלנו</h3>
         <div class="settings-row">
           <div>
@@ -726,7 +810,9 @@
   <script src="{{ asset('home.js') }}"></script>
   <script src="{{ asset('browser.js') }}"></script>
   <script src="{{ asset('profiles.js') }}"></script>
+  <script src="{{ asset('bubble_play.js') }}"></script>
   <script src="{{ asset('profile_simple.js') }}"></script>
+  <script src="{{ asset('subjects.js') }}"></script>
   <script src="{{ asset('game.js') }}"></script>
   <script src="{{ asset('tabs.js') }}"></script>
   <script src="{{ asset('filters.js') }}"></script>

@@ -70,6 +70,7 @@ function openSettings() {
   document.getElementById('toggle-share-search').checked = window.shareIncludesSearch();
   document.getElementById('toggle-research-tab').checked = researchTabShown();
   document.getElementById('toggle-profile-simple').checked = profileSimpleFirst();
+  gameSettingsRefresh();
   refreshGeminiKeySettingsStatus();
   refreshModelSettings();
 }

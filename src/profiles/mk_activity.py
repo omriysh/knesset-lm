@@ -121,15 +121,15 @@ def add_subjects(conn: sqlite3.Connection, payload: dict) -> dict:
     theme_ids = [theme["id"] for theme in themes]
     placeholders = ",".join("?" * len(theme_ids))
     subjects_of: dict[int, list[dict]] = {theme_id: [] for theme_id in theme_ids}
-    for theme_id, subject_id, umbrella, name, mk_count, approach, approach_mks, top_approach_mks in conn.execute(f"""
-            SELECT st.theme_id, s.id, s.umbrella, s.name, s.mk_count, a.name, a.mk_count,
+    for theme_id, subject_id, umbrella, name, mk_count, approach_id, approach, approach_mks, top_approach_mks in conn.execute(f"""
+            SELECT st.theme_id, s.id, s.umbrella, s.name, s.mk_count, a.id, a.name, a.mk_count,
                    (SELECT MAX(mk_count) FROM subject_approaches WHERE subject_id = s.id)
             FROM subject_themes st JOIN subjects s ON s.id = st.subject_id
             LEFT JOIN subject_approaches a ON a.id = st.approach_id
             WHERE st.theme_id IN ({placeholders}) ORDER BY s.mk_count DESC""", theme_ids):
         subjects_of[theme_id].append({
             "id": subject_id, "umbrella": umbrella, "name": name, "mk_count": mk_count,
-            "approach": {"name": approach, "mk_count": approach_mks, "majority": approach_mks == top_approach_mks}
+            "approach": {"id": approach_id, "name": approach, "mk_count": approach_mks, "majority": approach_mks == top_approach_mks}
                         if approach else None})
     for theme in themes:
         theme["subjects"] = subjects_of[theme["id"]]
