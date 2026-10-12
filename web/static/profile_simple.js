@@ -159,12 +159,13 @@ function _pfsHabitTiles(data) {
   ].join('');
 }
 
-function _pfsSetTile(id, valueHtml, label) {
+function _pfsSetTile(id, valueHtml, label, afterLabelHtml = '') {
   const tile = document.getElementById(id);
   if (!tile) return;
   tile.classList.remove('pfs-tile--wait');
   tile.querySelector('.pfs-tile-value').innerHTML = valueHtml;
   if (label) tile.querySelector('.pfs-tile-label').textContent = label;
+  if (afterLabelHtml) tile.querySelector('.pfs-tile-label').insertAdjacentHTML('afterend', afterLabelHtml);
 }
 
 function pfsLoadHabits(api, isCurrent) {
@@ -177,7 +178,9 @@ function pfsLoadHabits(api, isCurrent) {
   }).catch(err => _pfsSetTile('pfs-tile-votes', '—', `הצבעות: ${err.message}`));
   Promise.all([pfFetch(`${api}/bills`), pfFetch(`${api}/bills?stage=passed`)]).then(([bills, passed]) => {
     if (!isCurrent()) return;
-    _pfsSetTile('pfs-tile-bills', `${pfNum(bills.total)}<small class="pfs-tile-accent"> ${pfNum(passed.total)} התקבלו כחוק</small>`);
+    const passedPct = pfPct(passed.total, bills.total);
+    _pfsSetTile('pfs-tile-bills', pfNum(bills.total), null, bills.total ? `<div class="pfs-tile-bar" style="--pct:${passedPct}%"><i></i></div>
+      <div class="pfs-tile-bar-label"><b>${pfNum(passed.total)}</b> התקבלו כחוק · ${passedPct}%</div>` : '');
   }).catch(err => _pfsSetTile('pfs-tile-bills', '—', `הצעות חוק: ${err.message}`));
 }
 

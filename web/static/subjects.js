@@ -268,21 +268,32 @@ const _sjProcessStep = (key, icon, title, counts, text) => `
   </div>`;
 const _sjArrow = `<span class="sj-flow-arrow">${pfIcon('arrow_downward')}</span>`;
 
-async function subjectsProcess() {
+async function subjectsProcess(scope) {
   const overlay = document.getElementById('sj-process-overlay');
   const body = overlay.querySelector('.dialog-body');
+  const forProfiles = scope === 'profiles';
+  overlay.querySelector('.sj-process-head b').textContent = forProfiles ? 'איך נוצרו הפרופילים?' : 'איך נוצרו הנושאים?';
   body.innerHTML = pfSpinner('טוען…');
   overlay.classList.add('open');
   let counts;
   try { counts = await pfFetch(`${SUBJECTS_API}/process`); } catch (err) { body.innerHTML = pfErrorBox(err); return; }
   _sjPrompts = counts.prompts;
-  body.innerHTML = `<p class="sj-flow-intro">כל שלב הוא משימה שמודל השפה gemini-3.8-flash ביצע על התוצרים של השלב הקודם, החל מהדיונים בוועדות ${pfInLabel(pfKnessetLabel(counts.knesset_num))}.</p>
-  <div class="sj-flow">
-    ${_sjProcessStep('opinions', 'record_voice_over', 'חילוץ עמדות מכל דיון', `${pfNum(counts.opinions)} עמדות`,
+  const opinionsAndThemes = `    ${_sjProcessStep('opinions', 'record_voice_over', 'חילוץ עמדות מכל דיון', `${pfNum(counts.opinions)} עמדות`,
       `המודל קרא כל דיון (${pfNum(counts.protocols)} דיונים) ורשם כל עמדה שדובר/ת הביע/ה, עם ציטוט מהדיון.`)}
     ${_sjArrow}
     ${_sjProcessStep('themes', 'person', 'קיבוץ העמדות של כל ח״כ לנושאים', `${pfNum(counts.themes)} נושאים`,
-      `המודל קיבל את כל העמדות של חבר/ת כנסת אחד/ת וקיבץ אותן לנושאים שחוזרים בדבריו/ה. אלה הנושאים שבעמוד הפרופילים.`)}
+      `המודל קיבל את כל העמדות של חבר/ת כנסת אחד/ת וקיבץ אותן לנושאים שחוזרים בדבריו/ה. אלה הנושאים שבעמוד הפרופילים.`)}`;
+  if (forProfiles) {
+    body.innerHTML = `<p class="sj-flow-intro">רשימות המועמדים נלקחו מאתר ועדת הבחירות המרכזית. ההצבעות, הצעות החוק והכהונות מגיעים ישירות מאתר הכנסת, והנוכחות בוועדות מפרוטוקולי הדיונים.</p>
+    <p class="sj-flow-intro">את הנושאים והעמדות יצר מודל השפה gemini-3.8-flash מתוך הדיונים בוועדות ${pfInLabel(pfKnessetLabel(counts.knesset_num))}.</p>
+    <div class="sj-flow">${opinionsAndThemes}</div>
+    <p class="sj-flow-intro sj-flow-outro">הפרופילים המקוצרים מציגים גם נתונים שנוצרו עבור לשונית הנושאים (תחומים, נושאים משותפים וגישות), בתהליך שמוסבר שם.</p>
+    <button class="btn btn-ghost sj-how" type="button" data-click="subjectsProcess">${pfIcon('account_tree')}איך נוצרו הנושאים?</button>`;
+    return;
+  }
+  body.innerHTML = `<p class="sj-flow-intro">כל שלב הוא משימה שמודל השפה gemini-3.8-flash ביצע על התוצרים של השלב הקודם, החל מהדיונים בוועדות ${pfInLabel(pfKnessetLabel(counts.knesset_num))}.</p>
+  <div class="sj-flow">
+    ${opinionsAndThemes}
     ${_sjArrow}
     ${_sjProcessStep('subjects', 'hub', 'הצעת נושאים משותפים ותחומים', `${pfNum(counts.subjects)} נושאים · ${pfNum(counts.areas)} תחומים`,
       'המודל קיבל את הנושאים של חברי הכנסת בקבוצות והציע נושאים משותפים, כל אחד עם תחום-על, תיאור ורקע. אחר כך ההצעות של כל הקבוצות אוחדו לרשימה אחת.')}

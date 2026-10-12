@@ -162,7 +162,8 @@ async function _pfRenderParties(root, current) {
   if (!current()) return;
   root.innerHTML = `<div class="pf-page">
     <div class="pf-head">
-      <div><h1>הרשימות לכנסת ה-26</h1>
+      <div class="pf-head-main"><div class="pf-head-title"><h1>הרשימות לכנסת ה-26</h1>
+      <button class="btn btn-ghost sj-how" type="button" data-click="subjectsProcess" data-arg="profiles">${pfIcon('account_tree')}איך זה נוצר?</button></div>
       <p>${data.parties.length} רשימות, כפי שהוגשו <a href="${pfEsc(data.source)}" target="_blank" rel="noopener">לוועדת הבחירות המרכזית</a> (טרם אושרו סופית), בסדר אלפאביתי.</p></div>
       <input type="text" class="field field--sm pf-search" placeholder="חיפוש רשימה או מועמד" data-input="profilesFilterParties">
     </div>
@@ -608,7 +609,7 @@ function profilesCite(sup, event) {
   sup.classList.add('on');
   popup.innerHTML = `<div class="pf-popup-meeting">${pfEsc(e.committee)}</div><div class="pf-popup-date">${pfDmy(e.date)}</div>
     <div class="pf-popup-opinion"><span class="pf-kind-tag pf-kind-ai">AI</span> ${pfEsc(e.opinion)}</div>${e.quote ? `<q>${pfEsc(e.quote)}</q>` : ''}
-    <div class="pf-popup-foot">${e.quote_verified ? `<span class="pf-verified">${pfIcon('verified')}הציטוט אומת מול הפרוטוקול</span>` : `<span class="pf-verified pf-approx">${pfIcon('error')}ציטוט משוער</span>`}
+    <div class="pf-popup-foot">${e.quote_verified ? `<span class="pf-verified">${pfIcon('verified')}הציטוט אומת מול הפרוטוקול</span>` : `<span class="pf-verified pf-approx">${pfIcon('error')}ציטוט לא מאומת</span>`}
     <a class="btn btn-secondary btn-sm" href="${pfEsc(_pfProtocolUrl(e))}" target="_blank" rel="noopener">${pfIcon('description')}לפרוטוקול</a></div>`;
   _pfPlacePopup(popup, sup);
 }
@@ -688,7 +689,7 @@ function _pfOpinionRow(o, { query = '', showCommittee = true, showTheme = true, 
       ${meta ? `<div class="pf-op-meta"><span class="tdot"></span>${meta}</div>` : ''}
       ${o.meeting_topic ? `<div class="pf-op-topic" title="${pfEsc(o.meeting_topic)}">${pfEsc(o.meeting_topic)}</div>` : ''}
       <div class="pf-op-text"><span class="pf-bullet"></span><span><span class="pf-kind-tag pf-kind-ai">AI</span> ${pfHighlight(o.opinion, query)}</span></div>
-      ${o.quote ? `<div class="pf-op-quote${o.quote_verified ? '' : ' approx'}">${o.quote_verified ? '<span class="pf-kind-tag pf-kind-quote">ציטוט מהדיון</span> ' : `<span class="pf-verified pf-approx">${pfIcon('error')}ציטוט משוער</span> `}"${pfHighlight(o.quote, query)}"</div>` : ''}
+      ${o.quote ? `<div class="pf-op-quote${o.quote_verified ? '' : ' approx'}">${o.quote_verified ? '<span class="pf-kind-tag pf-kind-quote">ציטוט מהדיון</span> ' : '<span class="pf-kind-tag pf-kind-approx">ציטוט לא מאומת</span> '}"${pfHighlight(o.quote, query)}"</div>` : ''}
       <div class="pf-op-actions"><a class="pf-link-btn" href="${pfEsc(_pfProtocolUrl(o))}" target="_blank" rel="noopener">${pfIcon('description')}לפרוטוקול</a></div>
     </div>
   </article>`;

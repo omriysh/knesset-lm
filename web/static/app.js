@@ -120,7 +120,6 @@ async function _loadHelpAbout() {
     const md = await fetch('/api/help').then(r => r.text());
     const content = document.getElementById('help-content');
     content.innerHTML = renderMarkdown(md);
-    content.querySelector('h2').after(document.getElementById('help-steps-template').content.cloneNode(true));
     _helpLoaded = true;
   } catch (exc) {
     console.error('[app] help load failed:', exc);

@@ -9,7 +9,8 @@
 
 const GAME_STORAGE_KEY = 'knessetGame';
 const GAME_PREFS_KEY = 'knessetGamePrefs';
-const GAME_PRIOR_MATCHES = 3;
+const GAME_CONFIDENCE_Z = 1.96;
+const GAME_TOP_PARTIES = 5;
 const GAME_FIRST_RESULTS = 15;
 const GAME_STRONG_RESULTS = 30;
 const GAME_SWIPE_PX = 100;
@@ -46,7 +47,7 @@ function _gmGetPrefs() {
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem(GAME_PREFS_KEY) || 'null'); } catch (exc) { console.warn('[game] stored preferences unreadable:', exc); }
   const ids = list => Array.isArray(list) && list.length && list.every(Number.isInteger) ? list : null;
-  _gmPrefs = { normalized: Boolean(saved && saved.normalized), play: ids(saved?.play), show: ids(saved?.show) };
+  _gmPrefs = { normalized: Boolean(saved?.normalized ?? true), play: ids(saved?.play), show: ids(saved?.show), resultsNoteSeen: Boolean(saved?.resultsNoteSeen) };
   return _gmPrefs;
 }
 
@@ -267,6 +268,17 @@ const _gmPartyColor = partyId => THEME_COLORS[partyId % THEME_COLORS.length];
 async function gameResults() {
   _gmView('results');
   const root = document.getElementById('gm-results');
+  if (!_gmGetPrefs().resultsNoteSeen) {
+    root.innerHTML = `<div class="gm-results-inner gm-before">
+      <h2 class="gm-intro-title">שנייה לפני</h2>
+      <ol class="gm-steps">
+        <li><span class="gm-step-icon">${pfIcon('how_to_vote')}</span><span>זו לא המלצה למי להצביע! ככל שתשחקו יותר התוצאה תהיה מדויקת יותר, ותמיד מומלץ לקרוא עוד על המועמדים והמפלגה.</span></li>
+        <li><span class="gm-step-icon">${pfIcon('person_search')}</span><span>המשחק מורכב רק מעמדות שנאמרו בכנסת. ברוב המפלגות יש מועמדות ומועמדים רבים שעוד לא כיהנו בכנסת, ומומלץ לקרוא גם עליהם.</span></li>
+      </ol>
+      <button class="btn btn-primary gm-start" type="button" data-click="gameResultsNoteSeen">הבנתי, לתוצאות${pfIcon('arrow_back')}</button>
+    </div>`;
+    return;
+  }
   root.innerHTML = `<div class="gm-results-inner">${pfSpinner('מחשב תוצאות…')}</div>`;
   const agreed = _gm.votes.filter(([, vote]) => vote === GAME_VOTE_YES).map(([id]) => id);
   const disagreed = _gm.votes.filter(([, vote]) => vote === GAME_VOTE_NO).map(([id]) => id);
@@ -276,6 +288,12 @@ async function gameResults() {
   }
   _gmForget(_gmResults.dropped);
   _gmRenderResults();
+}
+
+function gameResultsNoteSeen() {
+  _gmGetPrefs().resultsNoteSeen = true;
+  _gmSavePrefs();
+  gameResults();
 }
 
 function _gmArc(start, end, radius) {
@@ -288,23 +306,58 @@ const _gmShownParties = () => {
   return chosen ? _gmResults.parties.filter(p => chosen.includes(p.party.id)) : _gmResults.parties;
 };
 
-/* Normalized: the share of a party's matches that went that way, pulled toward the visitor's overall rate by
-   GAME_PRIOR_MATCHES imaginary matches, so a party met once can't top the chart with 100%. */
-function _gmScorer(parties) {
+/* The party's agreement rate and its Wilson score interval: the fewer cards behind it, the wider the range. */
+function _gmRateRange(party) {
+  const total = party.agreed.length + party.disagreed.length;
+  if (!total) return { rate: 0, low: 0, high: 1, total };
+  const z2 = GAME_CONFIDENCE_Z ** 2, rate = party.agreed.length / total;
+  const center = (rate + z2 / (2 * total)) / (1 + z2 / total);
+  const spread = GAME_CONFIDENCE_Z * Math.sqrt(rate * (1 - rate) / total + z2 / (4 * total ** 2)) / (1 + z2 / total);
+  return { rate, low: Math.max(0, center - spread), high: Math.min(1, center + spread), total };
+}
+
+/* Normalized: ranked by the low end of the range, so a party met on few cards can't lead on a lucky 100%. */
+function _gmScorer() {
   if (!_gmGetPrefs().normalized) return (party, side) => party[side].length;
-  const agreed = parties.reduce((sum, p) => sum + p.agreed.length, 0);
-  const matches = parties.reduce((sum, p) => sum + p.agreed.length + p.disagreed.length, 0);
-  const agreedRate = matches ? agreed / matches : 0.5;
-  return (party, side) => (party[side].length + GAME_PRIOR_MATCHES * (side === 'agreed' ? agreedRate : 1 - agreedRate))
-    / (party.agreed.length + party.disagreed.length + GAME_PRIOR_MATCHES);
+  return (party, side) => {
+    const { low, high, total } = _gmRateRange(party);
+    return (side === 'agreed' ? low : 1 - high) + total * 1e-6;
+  };
 }
 
 const _gmRanked = (parties, side, score) => parties.filter(p => p[side].length).sort((a, b) => score(b, side) - score(a, side));
-const _gmScoreLabel = (party, side, score) => _gmGetPrefs().normalized ? `${Math.round(100 * score(party, side))}%` : pfNum(party[side].length);
+const _gmScoreLabel = (party, side) => pfNum(party[side].length);
+const _gmPercent = fraction => `${Math.round(100 * fraction)}%`;
+
+/* Normalized view: a row per party, a dot at its agreement rate on a line spanning the range; the top few first. */
+function _gmRateBars(parties, score) {
+  const rows = parties.filter(p => p.agreed.length + p.disagreed.length).sort((a, b) => score(b, 'agreed') - score(a, 'agreed'));
+  if (!rows.length) return '<span class="gm-legend-none">אין</span>';
+  const row = (p, i) => {
+    const { rate, low, high, total } = _gmRateRange(p);
+    const side = p.agreed.length ? 'agreed' : 'disagreed';
+    const mostlyAgreed = p.agreed.length >= p.disagreed.length;
+    return `<button type="button" class="gm-bar${i >= GAME_TOP_PARTIES ? ' gm-bar--more' : ''}" style="--pc:${_gmPartyColor(p.party.id)};--rate:${(100 * rate).toFixed(1)}%;--low:${(100 * low).toFixed(1)}%;--high:${(100 * high).toFixed(1)}%;animation-delay:${(i % GAME_TOP_PARTIES) * 0.05}s" data-click="gameSlice" data-arg="${_esc(`${side}:${p.party.id}`)}" title="טווח סביר: ${_gmPercent(low)}–${_gmPercent(high)}">
+      <span class="gm-bar-logo">${p.party.logo_url ? `<img src="${pfEsc(p.party.logo_url)}" alt="" data-hide-on-error>` : ''}</span>
+      <b>${pfEsc(p.party.name)}</b>
+      <span class="gm-bar-track"><i class="gm-bar-band"></i><i class="gm-bar-dot"></i></span>
+      <span class="gm-bar-count gm-bar-count--${mostlyAgreed ? 'yes' : 'no'}">${pfIcon(mostlyAgreed ? 'favorite' : 'heart_broken')}${pfNum(p[mostlyAgreed ? 'agreed' : 'disagreed'].length)}/${pfNum(total)}</span>
+      <strong>${_gmPercent(rate)}</strong>
+    </button>`;
+  };
+  const more = rows.length - GAME_TOP_PARTIES;
+  return `<div class="gm-bars">${rows.map(row).join('')}
+    ${more > 0 ? `<button type="button" class="gm-tool gm-bars-all" data-click="gameBarsAll">${pfIcon('expand_more')}<span class="gm-bars-more">עוד ${pfNum(more)} ${more === 1 ? 'מפלגה' : 'מפלגות'}</span><span class="gm-bars-less">הצגת פחות</span></button>` : ''}</div>
+  <p class="gm-bars-note"><i class="gm-bars-key gm-bars-key--dot"></i>אחוז ההסכמה <i class="gm-bars-key gm-bars-key--band"></i>טווח סביר לפי מספר הכרטיסים · הדירוג לפי הקצה הנמוך של הטווח</p>`;
+}
+
+function gameBarsAll(el) {
+  el.closest('.gm-bars').classList.toggle('gm-bars--all');
+}
 
 function _gmBest() {
   const parties = _gmShownParties();
-  return _gmRanked(parties, 'agreed', _gmScorer(parties))[0];
+  return _gmRanked(parties, 'agreed', _gmScorer())[0];
 }
 
 /* One half-pie: the right half (0°→180°, clockwise from the top) for agreed, the left for disagreed. */
@@ -318,7 +371,7 @@ function _gmHalfPie(side, parties, score) {
   let angle = from;
   return `<g transform="${shift}">${rows.map(p => {
     const sweep = score(p, key) / total * 180;
-    const path = `<path class="gm-slice" d="${_gmArc(angle, angle + sweep, 100)}" style="--pc:${_gmPartyColor(p.party.id)}" data-click="gameSlice" data-arg="${_esc(`${side}:${p.party.id}`)}"><title>${pfEsc(p.party.name)} · ${_gmScoreLabel(p, key, score)}</title></path>`;
+    const path = `<path class="gm-slice" d="${_gmArc(angle, angle + sweep, 100)}" style="--pc:${_gmPartyColor(p.party.id)}" data-click="gameSlice" data-arg="${_esc(`${side}:${p.party.id}`)}"><title>${pfEsc(p.party.name)} · ${_gmScoreLabel(p, key)}</title></path>`;
     angle += sweep;
     return path;
   }).join('')}</g>`;
@@ -338,15 +391,15 @@ function _gmResultsActions() {
 
 function _gmRenderResults() {
   const parties = _gmShownParties();
-  const score = _gmScorer(parties);
-  const { normalized, show: chosen } = _gmGetPrefs();
+  const score = _gmScorer();
+  const { normalized } = _gmGetPrefs();
   const votes = _gmDecidedCount();
   const best = _gmBest();
   const headline = best
     ? `<h2>הסכמת הכי הרבה עם <a href="${_esc(`${PROFILES_PATH}/party/${best.party.id}`)}" data-click="gameOpenProfile">${pfEsc(best.party.name)}</a></h2>`
     : '<h2>עוד לא הסכמת עם אף נושא</h2>';
   const legend = side => _gmRanked(parties, side, score).map(p =>
-    `<button type="button" class="gm-legend-item" style="--pc:${_gmPartyColor(p.party.id)}" data-click="gameSlice" data-arg="${_esc(`${side}:${p.party.id}`)}"><i></i>${pfEsc(p.party.name)}<b>${_gmScoreLabel(p, side, score)}</b></button>`).join('')
+    `<button type="button" class="gm-legend-item" style="--pc:${_gmPartyColor(p.party.id)}" data-click="gameSlice" data-arg="${_esc(`${side}:${p.party.id}`)}"><i></i>${pfEsc(p.party.name)}<b>${_gmScoreLabel(p, side)}</b></button>`).join('')
     || '<span class="gm-legend-none">אין</span>';
   document.getElementById('gm-results').innerHTML = `<div class="gm-results-inner">
     <div class="gm-results-head">
@@ -355,17 +408,16 @@ function _gmRenderResults() {
       ${headline}
       <p class="gm-disclaimer">${pfIcon('info')}<span>זו לא המלצה להצבעה. התוצאות מבוססות רק על מי שכיהנו כחברי וחברות הכנסת ה-25, לחצו על מפלגה כדי לקרוא עוד.</span></p>
       <div class="gm-results-tools">
-        <button type="button" class="gm-tool${normalized ? ' on' : ''}" data-click="gameNormalize" aria-pressed="${normalized}">${pfIcon('balance')}לפי אחוז הסכמה</button>
-        <button type="button" class="gm-tool${chosen ? ' on' : ''}" data-click="gameChooseParties" data-arg="show">${pfIcon('filter_list')}${_gmPartiesLabel('show')}</button>
+        <button type="button" class="gm-tool" data-click="gameNormalize">${pfIcon('tune')}הגדרות תצוגה</button>
         ${best ? `<button type="button" class="gm-tool" data-click="gameShare">${pfIcon('share')}שיתוף התוצאה</button>` : ''}
       </div>
     </div>
-    <div class="gm-pie-wrap">
+    ${normalized ? _gmRateBars(parties, score) : `<div class="gm-pie-wrap">
       <span class="gm-pie-label gm-pie-label--yes">${pfIcon('favorite')}הסכמת</span>
       <svg class="gm-pie" viewBox="-110 -105 220 210" aria-hidden="true">${_gmHalfPie('agreed', parties, score)}${_gmHalfPie('disagreed', parties, score)}</svg>
       <span class="gm-pie-label gm-pie-label--no">${pfIcon('heart_broken')}לא הסכמת</span>
     </div>
-    <div class="gm-legends"><div class="gm-legend">${legend('agreed')}</div><div class="gm-legend">${legend('disagreed')}</div></div>
+    <div class="gm-legends"><div class="gm-legend">${legend('agreed')}</div><div class="gm-legend">${legend('disagreed')}</div></div>`}
     <div class="gm-slice-panel" id="gm-slice-panel"></div>
     ${_gmResultsActions()}
   </div>`;
@@ -387,7 +439,7 @@ async function gameShare() {
   const best = _gmBest();
   if (!best) return;
   const url = `${location.origin}${GAME_PATH}`;
-  const text = `במשחק ההיכרות של מעורב ירושלמי הסכמתי הכי הרבה עם ${best.party.name}. ועם מי ההתאמה שלך? בואו לשחק:`;
+  const text = `כבר ראית את משחק ההיכרות מעורב ירושלמי? בנתיים הסכמתי הכי הרבה עם ${best.party.name}, והאתר נותן לי גם לקרוא עליהם עוד. שווה לנסות!`;
   if (navigator.share) {
     try { await navigator.share({ title: document.title, text, url }); } catch (exc) {
       if (exc.name !== 'AbortError') console.error('[game] native share failed:', exc);
@@ -409,8 +461,10 @@ function _gmShowSlice(arg) {
   if (!party) return;
   document.querySelectorAll('#gm-results [data-click="gameSlice"]').forEach(el => el.classList.toggle('on', el.dataset.arg === arg));
   const refs = party[side];
+  const range = _gmRateRange(party);
   document.getElementById('gm-slice-panel').innerHTML = `
-    <div class="gm-slice-head" style="--pc:${_gmPartyColor(party.party.id)}"><i></i>${side === 'agreed' ? 'הסכמת עם' : 'לא הסכמת עם'} ${pfNum(refs.length)} ${refs.length === 1 ? 'נושא' : 'נושאים'} של
+    ${_gmGetPrefs().normalized ? `<div class="gm-slice-rate"><strong>${_gmPercent(range.rate)}</strong> הסכמה · ${pfNum(party.agreed.length)} מתוך ${pfNum(range.total)} · טווח סביר ${_gmPercent(range.low)}–${_gmPercent(range.high)}</div>` : ''}
+    <div class="gm-slice-head" style="--pc:${_gmPartyColor(party.party.id)}"><i></i>${side === 'agreed' ? 'הסכמת עם' : 'לא הסכמת עם'} ${pfNum(refs.length)} ${refs.length === 1 ? 'גישה' : 'גישות'} של
       <a href="${_esc(`${PROFILES_PATH}/party/${party.party.id}`)}" data-click="gameOpenProfile">${pfEsc(party.party.name)}</a></div>
     <ul class="gm-slice-list">${refs.map(ref => `<li>
       <div><button class="gm-theme-link" type="button" data-click="gameTheme" data-arg="${_esc(ref.theme_id)}">${pfEsc(ref.title)}${pfIcon('chevron_left')}</button>
@@ -450,6 +504,7 @@ const GAME_HOW_SCORED = `<ol class="gm-how-steps">
     <li>${pfIcon('alt_route')}<span>AI נוסף קיבץ את העמדות לגישות שונות בכל נושא.</span></li>
     <li>${pfIcon('favorite')}<span>החלקה ימינה היא הסכמה עם הגישה כולה: כל מפלגה שחבר או חברת כנסת שלה דיברו בעד הגישה מקבלת נקודה. החלקה שמאלה נותנת לאותן מפלגות נקודת אי־הסכמה.</span></li>
     <li>${pfIcon('balance')}<span>בלי אחוז הסכמה, המפלגה עם הכי הרבה נקודות הסכמה מובילה. עם אחוז הסכמה, כל מפלגה נמדדת לפי החלק מהנקודות שלה שהיו הסכמה, כך שמפלגות גדולות לא מובילות רק כי דיברו על יותר נושאים.</span></li>
+    <li>${pfIcon('straighten')}<span>ליד כל אחוז מוצג טווח סביר שנקבע לפי מספר הפעמים שנתקלתם במפלגה במשחק. הדירוג מושפע מהטווח, כדי שמפלגות שהופיעו מעט עד כה לא ישפיעו יותר מדי על הדירוג.</span></li>
   </ol>`;
 
 /* results: the normalization toggle (with how scores are counted) over the shown parties; show / play: parties only. */
@@ -458,7 +513,7 @@ async function _gmOpenParties(mode) {
   const body = overlay.querySelector('.gm-parties-body');
   const apply = overlay.querySelector('[data-click="gameApplyParties"]');
   overlay.dataset.mode = mode;
-  overlay.querySelector('.gm-parties-title').textContent = { results: 'איך להציג את התוצאות?', show: 'אילו מפלגות להציג בתוצאות?', play: 'נושאים של אילו מפלגות לשחק?' }[mode];
+  overlay.querySelector('.gm-parties-title').textContent = { results: 'הגדרות תצוגה', show: 'אילו מפלגות להציג בתוצאות?', play: 'נושאים של אילו מפלגות לשחק?' }[mode];
   apply.disabled = true;
   body.innerHTML = pfSpinner('טוען מפלגות…');
   overlay.classList.add('open');
@@ -473,7 +528,7 @@ async function _gmOpenParties(mode) {
         <button type="button" class="gm-tool gm-how-btn" data-click="gameHowScored">${pfIcon('help')}איך זה מחושב?</button>
       </div>
       <div class="gm-how" hidden>${GAME_HOW_SCORED}</div>
-      <p class="gm-parties-intro gm-parties-warn">${pfIcon('warning')}<span>באחוז הסכמה מפלגות קטנות עלולות לבלוט אחרי מעט נושאים. הציון של מפלגה שפגשת מעט מתקרב לממוצע שלך עד שמצטברים נושאים, ואפשר לבחור כאן אילו מפלגות להציג.</span></p>
+      <p class="gm-parties-intro gm-parties-warn">${pfIcon('warning')}<span>מפלגות שפגשת במעט כרטיסים מקבלות טווח רחב ומדורגות נמוך יותר עד שמצטברים כרטיסים. אפשר גם לבחור כאן אילו מפלגות להציג.</span></p>
       <h3 class="gm-parties-sub">מפלגות בתוצאות</h3>`,
     show: '<p class="gm-parties-intro">רק המפלגות שנבחרו יופיעו בתוצאות. המשחק עצמו לא משתנה.</p>',
     play: '<p class="gm-parties-intro">במשחק יופיעו רק נושאים של המפלגות שנבחרו. הנושא נבחר קודם, מבין הנושאים שלפחות לאחת מהן יש בהם עמדה.</p>',

@@ -1715,13 +1715,6 @@ body { font-size: 16px; }
 .help-legal .legal-mcp h2 { margin-top: 0; }
 #help-content, #help-prompts { padding-top: 18px; }
 #help-prompts { font-size: 0.85rem; line-height: 1.6; color: var(--ink); }
-.help-steps { margin: 4px 0 20px; padding: 20px 16px; border-radius: var(--radius-lg); background: var(--surface-lowest); box-shadow: var(--shadow-raised); }
-.help-step { position: relative; display: grid; grid-template-columns: 44px minmax(0, 1fr); column-gap: 14px; padding-bottom: 22px; }
-.help-step:last-child { padding-bottom: 0; }
-.help-step:not(:last-child)::before { content: ''; position: absolute; inset-inline-start: 21px; top: 50px; bottom: 6px; width: 2px; border-radius: 1px; background: color-mix(in srgb, var(--primary) 35%, transparent); }
-.help-step-icon { display: flex; grid-row: 1 / span 2; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 9999px; background: color-mix(in srgb, var(--primary) 10%, transparent); color: var(--primary); }
-#help-content .help-step h3 { align-self: center; margin: 10px 0 2px; font-size: 1rem; font-weight: 700; }
-#help-content .help-step p { margin: 0; font-size: 0.88rem; color: var(--ink-muted); }
 .help-prompts-lead { color: var(--ink-muted); margin: 0 0 14px; }
 .help-prompt + .help-prompt { margin-top: 18px; }
 .help-prompt h3 { font-size: 1rem; font-weight: 700; color: var(--primary-dim); margin: 0 0 2px; }

@@ -20,6 +20,10 @@
 .pf-head h1 { font-size: 1.6rem; font-weight: 800; color: var(--ink); line-height: 1.2; letter-spacing: -0.01em; }
 .pf-head p { font-size: 0.82rem; color: var(--ink-muted); margin-top: 4px; max-width: 70ch; line-height: 1.6; }
 .pf-head p a { color: var(--primary); }
+.pf-head-main { flex: 1 1 320px; min-width: 0; }
+.pf-head-title { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0 8px; }
+.pf-head-title h1 { white-space: nowrap; }
+.pf-head-title .sj-how { flex: none; padding-inline: 4px; }
 .pf-search { flex: 0 1 280px; width: auto; min-width: 0; }
 
 /* Party grid */
@@ -148,6 +152,7 @@ sup.pf-cite:hover, sup.pf-cite.on { color: var(--surface-lowest); background: va
 .pf-kind-tag { display: inline-block; padding: 0 7px; border-radius: 999px; font-size: 0.66rem; font-weight: 700; font-style: normal; line-height: 1.6; vertical-align: 1px; }
 .pf-kind-ai { color: var(--cite-strong); background: var(--cite-soft); }
 .pf-kind-quote { color: var(--primary); background: var(--primary-soft); }
+.pf-kind-approx { color: #8a5a00; background: color-mix(in srgb, #c98a00 18%, transparent); }
 .pf-details-source { font-size: 0.68rem; color: var(--ink-faint); }
 .pf-verified { display: inline-flex; align-items: center; gap: 3px; font-size: 0.68rem; font-weight: 700; color: var(--primary); }
 .pf-verified .material-symbols-outlined { font-size: 14px; }
@@ -409,7 +414,11 @@ a.pf-ally:hover .pf-ally-name { color: var(--primary); }
 .pfs-tile .material-symbols-outlined { font-size: 26px; }
 .pfs-tile-value { font-size: 1.9rem; font-weight: 900; line-height: 1.1; }
 .pfs-tile-value small { font-size: 0.9rem; font-weight: 700; color: var(--ink-muted); }
-.pfs-tile-value .pfs-tile-accent { color: var(--primary); }
+.pfs-tile-bar { height: 6px; margin-top: 6px; border-radius: 3px; background: var(--surface-high); overflow: hidden; }
+.pfs-tile-bar i { display: block; height: 100%; width: var(--pct); border-radius: 3px; background: var(--primary); transform-origin: right; animation: pfs-bar-grow 0.8s cubic-bezier(0.2, 0.7, 0.3, 1) 0.1s backwards; }
+.pfs-tile-bar-label { font-size: 0.78rem; color: var(--ink-muted); }
+.pfs-tile-bar-label b { color: var(--primary); font-weight: 800; }
+@keyframes pfs-bar-grow { from { transform: scaleX(0); } }
 .pfs-tile-label { font-size: 0.84rem; color: var(--ink-muted); line-height: 1.4; }
 .pfs-tile-source { margin-top: auto; padding-top: 4px; font-size: 0.66rem; color: var(--ink-faint); }
 .pfs-tile--wait .pfs-tile-value { color: var(--ink-faint); animation: pfs-pulse 1.2s ease-in-out infinite; }
