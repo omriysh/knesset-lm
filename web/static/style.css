@@ -2599,6 +2599,7 @@ input.field--sm { padding: 8px 12px; }
 
 /* Mobile: pad tabs so content isn't behind the fixed mobile nav */
 @media (max-width: 767px) {
+  #tab-home,
   #tab-reading,
   #tab-history,
   #tab-research,
