@@ -71,6 +71,7 @@ from web.gemini_keys import (forget_server_gemini_keys, gemini_text_models, stop
                               unavailable_models_error, visitor_gemini_key_or_error)
 from web.middleware import RequestBodyLimitMiddleware, SecurityHeadersMiddleware
 from web.profiles import PROFILE_PAGE_PATHS, router as profiles_router
+from web.seo import router as seo_router
 from web.subjects import SUBJECT_PAGE_PATHS, router as subjects_router
 from agent.llm.google import GoogleBackend
 from agent.model_choice import MODEL_ID_PATTERN, ResearchModels
@@ -467,6 +468,7 @@ app.include_router(api_router)
 app.include_router(profiles_router)
 app.include_router(subjects_router)
 app.include_router(game_router)
+app.include_router(seo_router)
 install_mcp_endpoint(app, rate_limiter)
 install_public_docs(app, WEB_API_TITLE)
 install_error_handlers(app)
@@ -479,6 +481,8 @@ def _static_asset_url(path: str) -> str:
 
 
 templates.env.globals["asset"] = _static_asset_url
+templates.env.globals["site_url"] = config.PUBLIC_SITE_URL
+templates.env.globals["site_description"] = config.SITE_DESCRIPTION
 
 _MK_PHOTO_EXTS = (".jpeg", ".jpg", ".png")
 
