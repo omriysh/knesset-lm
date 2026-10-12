@@ -491,9 +491,12 @@ let _pfSheet = null;
 function profilesThemeSheet(button) {
   const source = _pfThemeSourceOf(button);
   const theme = (source?.themes || []).find(t => String(t.id) === String(button.dataset.arg));
-  if (!theme) return;
+  if (theme) pfOpenThemeSheet(theme, source, button.dataset.quarter || '');
+}
+
+function pfOpenThemeSheet(theme, source, quarter = '') {
   _pfHidePopup();
-  _pfSheet = { theme, source, quarter: button.dataset.quarter || '', rows: [], total: 0 };
+  _pfSheet = { theme, source, quarter, rows: [], total: 0 };
   const sheet = document.getElementById('pf-theme-sheet');
   sheet.style.setProperty('--tc', theme.color);
   sheet.querySelector('.pf-sheet-head').innerHTML = `<div class="pf-sheet-title"><h2>${pfEsc(theme.title)}</h2>

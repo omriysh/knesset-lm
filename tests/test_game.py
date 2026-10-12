@@ -142,8 +142,11 @@ class TestCandidateMatches:
 
     def test_a_swiped_theme_is_only_a_direct_match(self):
         matches = game.candidate_matches(self.POOL, agreed=[1], disagreed=[2], party_id=2, position=1)
-        assert matches == [{"theme_id": 3, "swiped_id": 1, "agreed": True}, {"theme_id": 2, "swiped_id": 2, "agreed": False},
-                           {"theme_id": 3, "swiped_id": 2, "agreed": False}]
+        assert matches == [{"theme_id": 3, "swiped_id": 1, "agreed": True}, {"theme_id": 2, "swiped_id": 2, "agreed": False}]
+
+    def test_a_theme_reached_by_two_swipes_appears_once(self):
+        matches = game.candidate_matches(self.POOL, agreed=[1, 5], disagreed=[], party_id=2, position=1)
+        assert matches == [{"theme_id": 2, "swiped_id": 1, "agreed": True}, {"theme_id": 3, "swiped_id": 1, "agreed": True}]
 
 
 # ── routes ───────────────────────────────────────────────────────────────────

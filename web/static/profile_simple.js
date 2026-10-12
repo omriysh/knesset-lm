@@ -16,6 +16,8 @@ const SIMPLE_FACT_ROWS = ['residence', 'education', 'military_service', 'profess
 
 let _pfs = null;
 let _pfsViaMatches = [];
+let _pfsSwipeRows = { direct: [], via: [], name: '' };
+const PFS_SWIPES_SHOWN = 3;
 
 function _pfsGameVotes() {
   try {
@@ -121,13 +123,34 @@ function _pfsRenderSwipes(themes, votes, via, name) {
   const verdict = !decided ? 'עוד לא החלטתם' : pct >= 60 ? 'יש ביניכם כימיה' : pct >= 40 ? 'יש על מה לדבר' : 'כנראה שלא תתחברו';
   const look = { [GAME_VOTE_YES]: ['favorite', 'pfs-swipe--yes', 'הסכמתם'], [GAME_VOTE_NO]: ['heart_broken', 'pfs-swipe--no', 'לא הסכמתם'], [GAME_VOTE_UNSURE]: ['close', 'pfs-swipe--unsure', 'לא בטוחים'] };
   const viaRow = (match, i) => `<button class="pfs-swipe pfs-swipe--via pfs-swipe--via-${match.agreed ? 'yes' : 'no'}" type="button" data-click="profilesViaMatch" data-arg="${i}">${pfIcon(match.agreed ? 'favorite' : 'heart_broken')}<span><b>${pfEsc(match.title)}</b><small>${match.agreed ? 'הסכמתם' : 'לא הסכמתם'} עם הגישה${match.via_approach ? `: ${pfEsc(match.via_approach)}` : ''}</small></span></button>`;
+  _pfsSwipeRows = {
+    direct: swiped.map(({ theme, vote }) => `<button class="pfs-swipe ${look[vote][1]}" type="button" data-click="profilesThemeSheet" data-arg="${_esc(theme.id)}">${pfIcon(look[vote][0])}<span><b>${pfEsc(theme.title)}</b><small>${look[vote][2]}</small></span></button>`),
+    via: via.map(viaRow),
+    name,
+  };
+  const total = swiped.length + via.length;
   box.innerHTML = `${head}
     <div class="pfs-chemistry">
       <div class="pfs-ring" style="--pct:${decided ? pct : 0}"><b>${decided ? `${pct}%` : '—'}</b></div>
       <div><div class="pfs-chemistry-title">${verdict}</div><div class="pfs-muted">הסכמתם עם ${pfNum(agreed)} מתוך ${pfNum(decided)} העמדות שנספרו במשחק</div></div>
     </div>
-    ${swiped.map(({ theme, vote }) => `<button class="pfs-swipe ${look[vote][1]}" type="button" data-click="profilesThemeSheet" data-arg="${_esc(theme.id)}">${pfIcon(look[vote][0])}<span><b>${pfEsc(theme.title)}</b><small>${look[vote][2]}</small></span></button>`).join('')}
-    ${via.length ? `<div class="pfs-swipes-sub">באותה גישה כמו עמדה שהחלקתם</div>${via.map(viaRow).join('')}` : ''}`;
+    ${_pfsSwipeList(PFS_SWIPES_SHOWN)}
+    ${total > PFS_SWIPES_SHOWN ? `<button class="btn btn-secondary btn-sm pfs-swipes-all" type="button" data-click="profilesAllSwipes">${pfIcon('list')}לכל ${pfNum(total)} העמדות</button>` : ''}`;
+}
+
+/* Direct swipes first, then the approach matches, up to limit rows. */
+function _pfsSwipeList(limit = Infinity) {
+  const direct = _pfsSwipeRows.direct.slice(0, limit);
+  const via = _pfsSwipeRows.via.slice(0, Math.max(0, limit - direct.length));
+  return `${direct.join('')}${via.length ? `<div class="pfs-swipes-sub">באותה גישה כמו עמדה שהחלקתם</div>${via.join('')}` : ''}`;
+}
+
+function profilesAllSwipes() {
+  const overlay = document.getElementById('gm-info-overlay');
+  delete overlay.dataset.size;
+  overlay.querySelector('.gm-info-title').innerHTML = `<small>${pfEsc(_pfsSwipeRows.name)}</small><b>מה ההחלקות שלכם אומרות</b>`;
+  overlay.querySelector('.gm-info-body').innerHTML = `<div class="pfs-swipes pfs-swipes--all" data-pf-source="swipes">${_pfsSwipeList()}</div>`;
+  overlay.classList.add('open');
 }
 
 function profilesViaMatch(button) {
@@ -280,9 +303,10 @@ function _pfsRenderApproaches(umbrellaOpinions) {
       const text = approach ? approach.name : subject ? subject.name : themes[0].title;
       const tag = approach ? `<span class="pfs-tag ${approach.majority ? 'pfs-tag--majority' : 'pfs-tag--minority'}">${approach.majority ? 'דעת רוב' : 'דעת מיעוט'}</span>` : '';
       const context = approach ? ` · ${pfNum(approach.mk_count)} מתוך ${pfNum(subject.mk_count)} ח״כים שדיברו על הנושא` : '';
+      const share = approach && subject.mk_count ? approach.mk_count / subject.mk_count : count / peak;
       return `<button class="pfs-approach${count ? '' : ' pfs-approach--empty'}" type="button" data-click="profilesThemeSheet" data-arg="${_esc(themes[0].id)}">
         <span class="pfs-approach-main"><span class="pfs-approach-top"><b>${pfEsc(text)}</b>${tag}</span>
-          <span class="pfs-approach-bar"><i style="width:${(count / peak) * 100}%"></i></span>
+          <span class="pfs-approach-bar"><i style="width:${share * 100}%"></i></span>
           <small>${pfNum(count)} עמדות${context}</small></span>${pfIcon('chevron_left')}</button>`;
     }).join('')}`;
 }

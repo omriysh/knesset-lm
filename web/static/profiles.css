@@ -390,6 +390,7 @@ a.pf-ally:hover .pf-ally-name { color: var(--primary); }
 .pf-details-source a { color: inherit; }
 .pfs-swipes { display: flex; flex-direction: column; gap: 10px; }
 .pfs-swipes > .btn { align-self: flex-start; }
+.pfs-swipes > .pfs-swipes-all { align-self: center; }
 .pfs-chemistry { display: flex; align-items: center; gap: 14px; padding-bottom: 4px; }
 .pfs-ring { width: 70px; height: 70px; flex: none; border-radius: 50%; display: grid; place-items: center; background: conic-gradient(var(--primary) calc(var(--pct) * 1%), var(--primary-soft) 0); }
 .pfs-ring b { width: 56px; height: 56px; border-radius: 50%; background: var(--surface-lowest); display: grid; place-items: center; font-size: 1.05rem; font-weight: 900; color: var(--primary); }
@@ -405,6 +406,7 @@ a.pf-ally:hover .pf-ally-name { color: var(--primary); }
 .pfs-swipe.pfs-swipe--via { background: color-mix(in srgb, var(--warn-line) 45%, var(--warn-soft)); }
 .pfs-swipe--via-yes .material-symbols-outlined { color: var(--primary); }
 .pfs-swipe--via-no .material-symbols-outlined { color: var(--error); }
+.pfs-swipes--all .pfs-swipe { animation: gm-rise 0.35s cubic-bezier(0.2, 0.7, 0.3, 1) backwards; }
 .pfs-swipes-sub { margin-top: 4px; font-size: 0.78rem; font-weight: 700; color: var(--ink-muted); }
 .pfs-swipe--no .material-symbols-outlined { color: var(--error); }
 .pfs-swipe--unsure { background: var(--surface-low); }

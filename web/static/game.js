@@ -345,8 +345,7 @@ function _gmRateBars(parties, score) {
     </button>`;
   const more = rows.length - GAME_TOP_PARTIES;
   return `<div class="gm-bars">
-    <button type="button" class="gm-tool gm-bars-order" data-click="gameHowOrdered">${pfIcon('swap_vert')}איך זה מסודר?</button>
-    <div class="gm-bars-legend"><span></span><span class="gm-bars-score-head">ניקוד</span><span class="gm-bars-legend-track"><span class="gm-bars-legend--no">${pfIcon('heart_broken')}לא הסכמת</span><span class="gm-bars-legend--yes">הסכמת${pfIcon('favorite')}</span></span></div>
+    <div class="gm-bars-legend"><span></span><button type="button" class="gm-bars-score-head" data-click="gameHowOrdered" title="איך זה מסודר?"><span>ניקוד</span>${pfIcon('help')}</button><span class="gm-bars-legend-track"><span class="gm-bars-legend--no">${pfIcon('heart_broken')}לא הסכמת</span><span class="gm-bars-legend--yes">הסכמת${pfIcon('favorite')}</span></span></div>
     ${rows.map(row).join('')}
     ${more > 0 ? `<button type="button" class="gm-tool gm-bars-all" data-click="gameBarsAll">${pfIcon('expand_more')}<span class="gm-bars-more">עוד ${pfNum(more)} ${more === 1 ? 'מפלגה' : 'מפלגות'}</span><span class="gm-bars-less">הצגת פחות</span></button>` : ''}</div>
   <p class="gm-bars-note">לחצו על מפלגה כדי לראות את הפירוט</p>`;
@@ -401,7 +400,7 @@ function _gmResultsActions() {
       ${pfIcon('arrow_back')}
     </a>
     <div class="gm-results-actions">
-      <button class="btn btn-primary" type="button" data-click="gameContinue">${pfIcon('style')}להמשיך לשחק</button>
+      <button class="btn btn-primary gm-continue" type="button" data-click="gameContinue">${pfIcon('style')}להמשיך לשחק</button>
       <button class="btn btn-secondary" type="button" data-click="gameHome">${pfIcon('home')}חזרה לדף הבית</button>
     </div>`;
 }
@@ -612,43 +611,38 @@ function gameCloseParties() {
   document.getElementById('gm-parties-overlay').classList.remove('open');
 }
 
-function _gmRef(themeId) {
-  for (const party of _gmResults?.parties || []) {
-    const ref = [...party.agreed, ...party.disagreed].find(r => String(r.theme_id) === String(themeId));
-    if (ref) return { ref, party: party.party };
-  }
-  return null;
-}
 
 let _gmRelated = null;
-const _gmWhoLink = (candidate, line) => `<a class="gm-who" href="${pfEsc(candidate.profile_url)}" data-click="gameOpenProfile">${pfAvatar(candidate.photo_url, candidate.name)}<span><b>${pfEsc(candidate.name)}</b>${line ? pfEsc(line) : ''}</span></a>`;
 
-function _gmThemeHead(whoHtml, withBack) {
-  const back = withBack ? `<button class="btn btn-ghost btn-icon" type="button" title="חזרה" data-click="gameRelatedBack">${pfIcon('arrow_forward')}</button>` : '';
-  document.querySelector('#gm-theme-overlay .gm-theme-who').innerHTML = back + whoHtml;
+function _gmThemeHead(whoHtml) {
+  document.querySelector('#gm-theme-overlay .gm-theme-who').innerHTML = whoHtml;
 }
 
-/* The full theme card, as on the profile page, in a dialog (its cites and "all opinions" sheet included). */
-async function _gmShowTheme(themeId, whoHtml) {
-  const overlay = document.getElementById('gm-theme-overlay');
-  const body = overlay.querySelector('.gm-theme-body');
-  _gmThemeHead(whoHtml, Boolean(_gmRelated));
-  body.innerHTML = pfSpinner('טוען נושא…');
-  overlay.classList.add('open');
-  let data;
-  try { data = await pfFetch(`/api/profiles/theme/${encodeURIComponent(themeId)}`); } catch (err) { body.innerHTML = pfErrorBox(err); return; }
+/* Loads a theme as the 'game' theme source and returns it. */
+async function _gmLoadTheme(themeId) {
+  const data = await pfFetch(`/api/profiles/theme/${encodeURIComponent(themeId)}`);
   const theme = { ...data.theme, color: THEME_COLORS[data.color_index % THEME_COLORS.length] };
   const evidence = {};
   theme.evidence.forEach((e, n) => { evidence[`${theme.id}-${n}`] = e; });
   pfSetThemeSource('game', { themes: [theme], quarters: data.quarters, evidence, api: `/api/profiles/party/${data.party_id}/candidate/${data.candidate_id}` });
-  body.innerHTML = pfThemeCard(theme).replace('class="pf-theme"', 'class="pf-theme open"').replace('aria-expanded="false"', 'aria-expanded="true"');
+  return theme;
 }
 
-function gameTheme(button) {
-  _gmRelated = null;
-  const found = _gmRef(button.dataset.arg);
-  _gmShowTheme(button.dataset.arg, found ? _gmWhoLink(found.ref.candidate, found.party.name) : '');
+/* The theme's full sheet, as on the profile page; over a dialog, closing the sheet comes back to it. */
+async function _gmOpenThemeSheet(themeId, button) {
+  button.classList.add('gm-theme-loading');
+  try {
+    const theme = await _gmLoadTheme(themeId);
+    pfOpenThemeSheet(theme, _pfThemeSources.game);
+  } catch (err) {
+    console.error('[game] theme sheet failed:', err);
+    showToast(String(err.message || err));
+  } finally {
+    button.classList.remove('gm-theme-loading');
+  }
 }
+
+function gameTheme(button) { _gmOpenThemeSheet(button.dataset.arg, button); }
 
 /* A theme reached through the approach of a swiped one: both of them, to open either. */
 function gmOpenRelated(ref, agreed) {
@@ -662,7 +656,7 @@ function gmOpenRelated(ref, agreed) {
   const subjectLink = (href, text) => `<a class="gm-rel-subject" href="${_esc(href)}" target="_blank" rel="noopener">${pfEsc(text)}</a>`;
   const approach = ref.via_approach ? ` (${ref.subject ? subjectLink(`${SUBJECTS_PATH}/${ref.subject.id}/approach/${ref.approach_id}`, ref.via_approach) : `<b>${pfEsc(ref.via_approach)}</b>`})` : '';
   const subject = ref.subject ? ` בנושא ${subjectLink(`${SUBJECTS_PATH}/${ref.subject.id}`, ref.subject.name)}` : '';
-  _gmThemeHead('<b class="gm-rel-title">עמדה באותה גישה</b>', false);
+  _gmThemeHead('<b class="gm-rel-title">עמדה באותה גישה</b>');
   overlay.querySelector('.gm-theme-body').innerHTML = `<div class="gm-rel">
       <p class="gm-rel-intro">${agreed ? 'הסכמת' : 'לא הסכמת'} עם העמדה הראשונה במשחק. השנייה לא הופיעה לך, אבל היא באותה גישה${approach}${subject}, ולכן נספרה גם היא.</p>
       ${card('swiped', agreed ? 'favorite' : 'heart_broken', 'העמדה שהחלקת', ref.swiped)}
@@ -684,11 +678,8 @@ function gameRelated(button) {
 
 function gameRelatedTheme(button) {
   const { ref } = _gmRelated;
-  const theme = button.dataset.arg === 'swiped' ? ref.swiped : ref;
-  _gmShowTheme(theme.theme_id, _gmWhoLink(theme.candidate));
+  _gmOpenThemeSheet((button.dataset.arg === 'swiped' ? ref.swiped : ref).theme_id, button);
 }
-
-function gameRelatedBack() { gmOpenRelated(_gmRelated.ref, _gmRelated.agreed); }
 
 function gameCloseTheme() {
   const overlay = document.getElementById('gm-theme-overlay');
