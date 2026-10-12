@@ -59,12 +59,12 @@ def sitemap_paths() -> list[str]:
     return paths
 
 
-@router.get("/robots.txt", response_class=PlainTextResponse, include_in_schema=False)
+@router.api_route("/robots.txt", methods=["GET", "HEAD"], response_class=PlainTextResponse, include_in_schema=False)
 def robots_txt():
     return f"User-agent: *\nAllow: /\n\nSitemap: {config.PUBLIC_SITE_URL}/sitemap.xml\n"
 
 
-@router.get("/sitemap.xml", include_in_schema=False)
+@router.api_route("/sitemap.xml", methods=["GET", "HEAD"], include_in_schema=False)
 def sitemap_xml():
     urls = "".join(f"<url><loc>{escape(config.PUBLIC_SITE_URL + path)}</loc></url>\n" for path in sitemap_paths())
     body = ('<?xml version="1.0" encoding="UTF-8"?>\n'
