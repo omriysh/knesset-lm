@@ -402,6 +402,10 @@ a.pf-ally:hover .pf-ally-name { color: var(--primary); }
 .pfs-swipe--yes { background: var(--primary-soft); }
 .pfs-swipe--yes .material-symbols-outlined { color: var(--primary); }
 .pfs-swipe--no { background: var(--error-soft); }
+.pfs-swipe.pfs-swipe--via { background: color-mix(in srgb, var(--warn-line) 45%, var(--warn-soft)); }
+.pfs-swipe--via-yes .material-symbols-outlined { color: var(--primary); }
+.pfs-swipe--via-no .material-symbols-outlined { color: var(--error); }
+.pfs-swipes-sub { margin-top: 4px; font-size: 0.78rem; font-weight: 700; color: var(--ink-muted); }
 .pfs-swipe--no .material-symbols-outlined { color: var(--error); }
 .pfs-swipe--unsure { background: var(--surface-low); }
 .pfs-swipe--unsure .material-symbols-outlined { color: var(--ink-muted); }

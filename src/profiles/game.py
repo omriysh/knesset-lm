@@ -129,3 +129,24 @@ def game_results(pool: dict[int, PoolTheme], agreed: list[int], disagreed: list[
     ordered = sorted(parties.items(), key=lambda item: (-len(item[1]["agreed"]), len(item[1]["disagreed"]), item[0]))
     best = ordered[0][0] if ordered and ordered[0][1]["agreed"] else None
     return {"parties": [{"party_id": party_id, **matches} for party_id, matches in ordered], "best_party_id": best}
+
+
+def candidate_matches(pool: dict[int, PoolTheme], agreed: list[int], disagreed: list[int], party_id: int,
+                      position: int) -> list[dict]:
+    """
+    The candidate's themes the visitor's swipes reached, as {"theme_id", "swiped_id", "agreed"}: a theme swiped
+    directly, or one in the same approach as a swiped theme (unless the theme itself was swiped).
+    """
+    own = [theme for theme in pool.values() if (theme.party_id, theme.position) == (party_id, position)]
+    swiped_ids = set(agreed) | set(disagreed)
+    matches = []
+    for is_agreed, ids in ((True, agreed), (False, disagreed)):
+        for swiped_id in ids:
+            swiped = pool[swiped_id]
+            for theme in own:
+                direct = theme.theme_id == swiped_id
+                same_approach = (swiped.approach_id is not None and theme.theme_id not in swiped_ids
+                                 and (theme.subject_id, theme.approach_id) == (swiped.subject_id, swiped.approach_id))
+                if direct or same_approach:
+                    matches.append({"theme_id": theme.theme_id, "swiped_id": swiped_id, "agreed": is_agreed})
+    return matches

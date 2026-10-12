@@ -34,6 +34,11 @@ class ResultsRequest(BaseModel):
     disagreed: list[StrictInt] = Field(default_factory=list, max_length=config.GAME_MAX_IDS)
 
 
+class CandidateMatchesRequest(ResultsRequest):
+    party_id: StrictInt
+    position: StrictInt
+
+
 def _split_known(theme_ids: list[int], pool: dict) -> tuple[list[int], list[int]]:
     return [i for i in theme_ids if i in pool], [i for i in theme_ids if i not in pool]
 
@@ -78,14 +83,34 @@ def game_next(request: NextCardsRequest):
     return {"cards": cards, "dropped": dropped}
 
 
-def _theme_ref(pool: dict, match: dict, approach_name: dict[int, str]) -> dict:
-    """A party's matched theme and whose it is; via_approach names the approach when another party's theme was swiped."""
-    theme = pool[match["theme_id"]]
+def _theme_owner(theme: game.PoolTheme) -> dict:
     _, candidate = find_candidate(theme.party_id, theme.position)
-    return {"theme_id": theme.theme_id, "title": theme.title,
-            "via_approach": approach_name.get(theme.approach_id) if match["swiped_id"] != theme.theme_id else None,
-            "candidate": {**candidate_card(theme.party_id, candidate),
-                          "profile_url": f"{PROFILE_PAGE_PATHS[0]}/party/{theme.party_id}/candidate/{theme.position}"}}
+    return {**candidate_card(theme.party_id, candidate),
+            "profile_url": f"{PROFILE_PAGE_PATHS[0]}/party/{theme.party_id}/candidate/{theme.position}"}
+
+
+def _theme_ref(pool: dict, match: dict, names: tuple[dict[int, str], dict[int, dict]]) -> dict:
+    """A matched theme and whose it is; when it was reached through the approach of another swiped theme,
+    via_approach names the approach (approach_id, subject: its subject) and swiped is that theme."""
+    approach_name, subject_of = names
+    theme = pool[match["theme_id"]]
+    direct = match["swiped_id"] == theme.theme_id
+    swiped = pool[match["swiped_id"]]
+    return {"theme_id": theme.theme_id, "title": theme.title, "candidate": _theme_owner(theme),
+            "via_approach": None if direct else approach_name.get(theme.approach_id),
+            "approach_id": None if direct else theme.approach_id,
+            "subject": None if direct else subject_of.get(theme.subject_id),
+            "swiped": None if direct else {"theme_id": swiped.theme_id, "title": swiped.title, "candidate": _theme_owner(swiped)}}
+
+
+def _approach_and_subject_names(pool: dict, theme_ids: list[int]) -> tuple[dict[int, str], dict[int, dict]]:
+    """The approach names and subjects of the themes."""
+    conn = store.connect(interrupt_after_seconds=config.DB_QUERY_TIMEOUT_SECONDS)
+    try:
+        return (subjects.approach_names(conn, sorted({pool[i].approach_id for i in theme_ids if pool[i].approach_id is not None})),
+                subjects.subject_names(conn, sorted({pool[i].subject_id for i in theme_ids if pool[i].subject_id is not None})))
+    finally:
+        conn.close()
 
 
 @router.post("/api/game/results")
@@ -97,16 +122,24 @@ def game_results(request: ResultsRequest):
     agreed, dropped_agreed = _split_known(request.agreed, pool)
     disagreed, dropped_disagreed = _split_known(request.disagreed, pool)
     results = game.game_results(pool, agreed, disagreed)
-    conn = store.connect(interrupt_after_seconds=config.DB_QUERY_TIMEOUT_SECONDS)
-    try:
-        approach_name = subjects.approach_names(conn, sorted({pool[i].approach_id for i in agreed + disagreed
-                                                              if pool[i].approach_id is not None}))
-    finally:
-        conn.close()
+    names = _approach_and_subject_names(pool, agreed + disagreed)
     parties = []
     for party in results["parties"]:
         parties.append({"party": party_card(find_party(party["party_id"])),
-                        "agreed": [_theme_ref(pool, match, approach_name) for match in party["agreed"]],
-                        "disagreed": [_theme_ref(pool, match, approach_name) for match in party["disagreed"]]})
+                        "agreed": [_theme_ref(pool, match, names) for match in party["agreed"]],
+                        "disagreed": [_theme_ref(pool, match, names) for match in party["disagreed"]]})
     return {"parties": parties, "best_party_id": results["best_party_id"],
+            "dropped": dropped_agreed + dropped_disagreed}
+
+
+@router.post("/api/game/candidate-matches")
+def game_candidate_matches(request: CandidateMatchesRequest):
+    """The candidate's themes the visitor's swipes reached, directly or through their approach, with agreed."""
+    pool = theme_pool()
+    check_theme_ids(request.agreed + request.disagreed, pool, "theme")
+    agreed, dropped_agreed = _split_known(request.agreed, pool)
+    disagreed, dropped_disagreed = _split_known(request.disagreed, pool)
+    matches = game.candidate_matches(pool, agreed, disagreed, request.party_id, request.position)
+    names = _approach_and_subject_names(pool, [m["swiped_id"] for m in matches])
+    return {"matches": [{**_theme_ref(pool, match, names), "agreed": match["agreed"]} for match in matches],
             "dropped": dropped_agreed + dropped_disagreed}

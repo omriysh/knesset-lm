@@ -130,6 +130,22 @@ class TestResults:
         assert game.game_results(_pool({1: 2}), agreed=[], disagreed=[1])["best_party_id"] is None
 
 
+class TestCandidateMatches:
+    POOL = {1: PoolTheme(1, 1, 1, "a", "t", 5, 10, 100), 2: PoolTheme(2, 2, 1, "b", "t", 5, 10, 100),
+            3: PoolTheme(3, 2, 1, "b", "t", 5, 10, 100), 4: PoolTheme(4, 2, 1, "b", "t", 5, 11, 100),
+            5: PoolTheme(5, 2, 2, "c", "t", 5, 10, 100), 6: PoolTheme(6, 2, 1, "b", "t", 5, 12)}
+
+    def test_direct_and_through_the_approach(self):
+        matches = game.candidate_matches(self.POOL, agreed=[1, 6], disagreed=[], party_id=2, position=1)
+        assert matches == [{"theme_id": 2, "swiped_id": 1, "agreed": True}, {"theme_id": 3, "swiped_id": 1, "agreed": True},
+                           {"theme_id": 6, "swiped_id": 6, "agreed": True}]
+
+    def test_a_swiped_theme_is_only_a_direct_match(self):
+        matches = game.candidate_matches(self.POOL, agreed=[1], disagreed=[2], party_id=2, position=1)
+        assert matches == [{"theme_id": 3, "swiped_id": 1, "agreed": True}, {"theme_id": 2, "swiped_id": 2, "agreed": False},
+                           {"theme_id": 3, "swiped_id": 2, "agreed": False}]
+
+
 # ── routes ───────────────────────────────────────────────────────────────────
 
 def _mks_with_themes(db_path: Path, count: int) -> list[str]:
@@ -248,6 +264,31 @@ class TestResultsRoute:
     @pytest.mark.parametrize("body", [{"agreed": [1], "disagreed": [1]}, {"agreed": ["1"]}, {"disagreed": [0]}])
     def test_bad_input_is_400(self, client, body):
         assert client.post("/api/game/results", json=body).status_code == 400
+
+    def test_approach_refs_carry_the_swiped_theme(self, client):
+        ids = _pool_ids(client)
+        body = ok(client.post("/api/game/results", json={"agreed": ids, "disagreed": []}))
+        for party in body["parties"]:
+            for ref in party["agreed"]:
+                if ref["swiped"]:
+                    assert ref["swiped"]["theme_id"] != ref["theme_id"] and ref["subject"]["name"] and ref["approach_id"]
+                else:
+                    assert ref["subject"] is None and ref["approach_id"] is None
+
+
+class TestCandidateMatchesRoute:
+    def test_the_candidates_swiped_themes(self, client):
+        from web.profiles import theme_pool
+        pool = theme_pool()
+        own = sorted(i for i, t in pool.items() if (t.party_id, t.position) == (1, 1))
+        body = ok(client.post("/api/game/candidate-matches", json={"agreed": own[:1], "disagreed": own[1:2], "party_id": 1, "position": 1}))
+        direct = [(m["theme_id"], m["agreed"]) for m in body["matches"] if m["swiped"] is None]
+        assert direct == [(own[0], True)] + [(i, False) for i in own[1:2]]
+        assert body["matches"][0]["candidate"]["profile_url"] == "/profiles/party/1/candidate/1"
+
+    @pytest.mark.parametrize("body", [{"agreed": [1], "disagreed": [1], "party_id": 1, "position": 1}, {"agreed": [1]}])
+    def test_bad_input(self, client, body):
+        assert client.post("/api/game/candidate-matches", json=body).status_code in (400, 422)
 
 
 class TestThemeRoute:

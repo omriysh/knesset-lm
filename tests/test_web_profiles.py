@@ -239,6 +239,7 @@ class TestRateLimitBuckets:
         ("/api/profiles/theme/12", "db"),
         ("/api/game/next", "db"),
         ("/api/game/results", "db"),
+        ("/api/game/candidate-matches", "db"),
         ("/game", None),
     ])
     def test_bucket(self, path, bucket):

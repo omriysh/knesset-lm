@@ -15,6 +15,7 @@ const HALF_LAST_MONTH = ['יוני', 'דצמבר'];
 const SIMPLE_FACT_ROWS = ['residence', 'education', 'military_service', 'profession'];
 
 let _pfs = null;
+let _pfsViaMatches = [];
 
 function _pfsGameVotes() {
   try {
@@ -82,32 +83,56 @@ function _pfsEvidence(themes) {
 function pfsShowSwipes(payload, api, name) {
   const themes = payload.themes.map((theme, i) => ({ ...theme, color: THEME_COLORS[i % THEME_COLORS.length] }));
   pfSetThemeSource('swipes', { themes, quarters: payload.quarters, evidence: _pfsEvidence(themes), api });
-  _pfsRenderSwipes(themes, name);
+  _pfsLoadSwipes(themes, api, name);
   return themes;
 }
 
-function _pfsRenderSwipes(themes, name) {
+/* The candidate's themes in the same approach as a swiped theme count too: they come from the server. */
+async function _pfsLoadSwipes(themes, api, name) {
+  const votes = _pfsGameVotes();
+  const [, partyId, position] = api.match(/party\/(\d+)\/candidate\/(\d+)/).map(Number);
+  const ids = vote => [...votes].filter(([, v]) => v === vote).map(([id]) => id);
+  let via = [];
+  if (votes.size) {
+    try {
+      const response = await fetch('/api/game/candidate-matches', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agreed: ids(GAME_VOTE_YES), disagreed: ids(GAME_VOTE_NO), party_id: partyId, position }) });
+      if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
+      via = (await response.json()).matches.filter(match => match.swiped);
+    } catch (exc) { console.error('[profile_simple] approach matches failed:', exc); }
+  }
+  _pfsRenderSwipes(themes, votes, via, name);
+}
+
+function _pfsRenderSwipes(themes, votes, via, name) {
   const box = document.getElementById('pfs-swipes');
   if (!box) return;
-  const votes = _pfsGameVotes();
+  _pfsViaMatches = via;
   const swiped = themes.filter(theme => votes.has(theme.id)).map(theme => ({ theme, vote: votes.get(theme.id) }));
-  const decided = swiped.filter(s => s.vote !== GAME_VOTE_UNSURE);
-  const agreed = decided.filter(s => s.vote === GAME_VOTE_YES).length;
+  const decided = swiped.filter(s => s.vote !== GAME_VOTE_UNSURE).length + via.length;
+  const agreed = swiped.filter(s => s.vote === GAME_VOTE_YES).length + via.filter(match => match.agreed).length;
   const head = '<h2 class="pfs-card-title">מה ההחלקות שלכם אומרות</h2>';
-  if (!swiped.length) {
+  if (!swiped.length && !via.length) {
     box.innerHTML = `${head}<p class="pfs-muted">עוד לא החלקתם על אף אחד מהנושאים של ${pfEsc(name)} במשחק ההיכרות.</p>
       <button class="btn btn-secondary btn-sm" type="button" data-click="switchTab" data-arg="game">${pfIcon('favorite')}למשחק ההיכרות</button>`;
     return;
   }
-  const pct = pfPct(agreed, decided.length);
-  const verdict = !decided.length ? 'עוד לא החלטתם' : pct >= 60 ? 'יש ביניכם כימיה' : pct >= 40 ? 'יש על מה לדבר' : 'כנראה שלא תתחברו';
+  const pct = pfPct(agreed, decided);
+  const verdict = !decided ? 'עוד לא החלטתם' : pct >= 60 ? 'יש ביניכם כימיה' : pct >= 40 ? 'יש על מה לדבר' : 'כנראה שלא תתחברו';
   const look = { [GAME_VOTE_YES]: ['favorite', 'pfs-swipe--yes', 'הסכמתם'], [GAME_VOTE_NO]: ['heart_broken', 'pfs-swipe--no', 'לא הסכמתם'], [GAME_VOTE_UNSURE]: ['close', 'pfs-swipe--unsure', 'לא בטוחים'] };
+  const viaRow = (match, i) => `<button class="pfs-swipe pfs-swipe--via pfs-swipe--via-${match.agreed ? 'yes' : 'no'}" type="button" data-click="profilesViaMatch" data-arg="${i}">${pfIcon(match.agreed ? 'favorite' : 'heart_broken')}<span><b>${pfEsc(match.title)}</b><small>${match.agreed ? 'הסכמתם' : 'לא הסכמתם'} עם הגישה${match.via_approach ? `: ${pfEsc(match.via_approach)}` : ''}</small></span></button>`;
   box.innerHTML = `${head}
     <div class="pfs-chemistry">
-      <div class="pfs-ring" style="--pct:${decided.length ? pct : 0}"><b>${decided.length ? `${pct}%` : '—'}</b></div>
-      <div><div class="pfs-chemistry-title">${verdict}</div><div class="pfs-muted">הסכמתם עם ${pfNum(agreed)} מתוך ${pfNum(decided.length)} העמדות שהחלקתם במשחק</div></div>
+      <div class="pfs-ring" style="--pct:${decided ? pct : 0}"><b>${decided ? `${pct}%` : '—'}</b></div>
+      <div><div class="pfs-chemistry-title">${verdict}</div><div class="pfs-muted">הסכמתם עם ${pfNum(agreed)} מתוך ${pfNum(decided)} העמדות שנספרו במשחק</div></div>
     </div>
-    ${swiped.map(({ theme, vote }) => `<button class="pfs-swipe ${look[vote][1]}" type="button" data-click="profilesThemeSheet" data-arg="${_esc(theme.id)}">${pfIcon(look[vote][0])}<span><b>${pfEsc(theme.title)}</b><small>${look[vote][2]}</small></span></button>`).join('')}`;
+    ${swiped.map(({ theme, vote }) => `<button class="pfs-swipe ${look[vote][1]}" type="button" data-click="profilesThemeSheet" data-arg="${_esc(theme.id)}">${pfIcon(look[vote][0])}<span><b>${pfEsc(theme.title)}</b><small>${look[vote][2]}</small></span></button>`).join('')}
+    ${via.length ? `<div class="pfs-swipes-sub">באותה גישה כמו עמדה שהחלקתם</div>${via.map(viaRow).join('')}` : ''}`;
+}
+
+function profilesViaMatch(button) {
+  const match = _pfsViaMatches[Number(button.dataset.arg)];
+  if (match) gmOpenRelated(match, match.agreed);
 }
 
 /* ── habits ──────────────────────────────────────────────────────── */
