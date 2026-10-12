@@ -21,6 +21,9 @@ pywin32          # Windows only — legacy .doc extraction via Word COM
 # Name matching
 rapidfuzz
 
+# Transcript text cleanup (utils.meeting.format_meeting_chunks)
+ftfy
+
 # Optional: DictaBERT lemmatizer (config.USE_DICTABERT_LEMMA)
 transformers>=4.57.0
 torch
