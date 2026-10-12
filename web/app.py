@@ -55,6 +55,7 @@ from pydantic import BaseModel, Field
 
 import config
 from summarization import prompts as summary_prompts
+from subjects import prompts as subject_prompts
 from api import validation as valid
 from api.app import use_public_api_http_settings
 from api.rate_limit import RateLimitMiddleware, SlidingWindowRateLimiter
@@ -700,6 +701,22 @@ SITE_DATA_PROMPTS = [
      "text": summary_prompts.SYSTEM_PROMPT_OPINIONS},
     {"title": "נושאים מרכזיים של ח\"כ", "used_for": "הנושאים המרכזיים בפרופיל של כל ח\"כ. מקבל את כל העמדות שחולצו לאותו ח\"כ.",
      "text": summary_prompts.SYSTEM_PROMPT_MK_THEMES},
+    {"title": "הצעת סוגיות", "used_for": "השלב הראשון בחלוקת הנושאים המרכזיים של כל חברי הכנסת לסוגיות משותפות. "
+                                       "הנושאים מחולקים לקבוצות, וכל קבוצה נשלחת בנפרד.",
+     "text": subject_prompts.SHARD_SYSTEM_PROMPT},
+    {"title": "איחוד הצעות הסוגיות", "used_for": "מאחד את הסוגיות שהוצעו לכל הקבוצות לרשימה אחת, בלי כפילויות.",
+     "text": subject_prompts.MERGE_SYSTEM_PROMPT},
+    {"title": "בדיקת רקע הסוגיה", "used_for": "בודק שכל טענה ברקע של הסוגיה נתמכת בנושאים של חברי הכנסת שעליהם הוא נשען.",
+     "text": subject_prompts.VERIFY_SYSTEM_PROMPT},
+    {"title": "תיקון רקע הסוגיה", "used_for": "מתקן רקע שלא עבר את הבדיקה, ואז הוא נבדק שוב.",
+     "text": subject_prompts.REPAIR_SYSTEM_PROMPT},
+    {"title": "איחוד סוגיות", "used_for": "עובר על כל הסוגיות יחד, מאחד סוגיות חופפות ומיישר את השמות ואת המטריות.",
+     "text": subject_prompts.CONSOLIDATE_SYSTEM_PROMPT},
+    {"title": "שיוך נושאים לסוגיות", "used_for": "משייך כל נושא מרכזי של ח\"כ לסוגיות שהוא עוסק בהן.",
+     "text": subject_prompts.ASSIGN_SYSTEM_PROMPT},
+    {"title": "גישות בסוגיה", "used_for": "משווה בין העמדות של חברי הכנסת באותה סוגיה ומקבץ אותן לגישות. "
+                                       "נושאים שאינם שייכים לסוגיה מוצאים ממנה.",
+     "text": subject_prompts.APPROACHES_SYSTEM_PROMPT},
 ]
 
 
