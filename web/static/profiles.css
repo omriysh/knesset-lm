@@ -106,6 +106,7 @@ a.pf-cand:hover { transform: translateY(-2px); box-shadow: 0 6px 18px color-mix(
 .pf-card-sub { font-size: 0.76rem; color: var(--ink-muted); }
 .pf-card-head-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 .pf-card-body { padding: 14px 18px 18px; }
+@media (max-width: 640px) { #pf-themes-card .pf-card-head-text { flex-basis: calc(100% - 42px); } #pf-knesset-seg { margin-inline-start: 42px; } }
 .pf-count { font-size: 0.7rem; font-weight: 600; color: var(--ink-faint); background: var(--primary-soft); border-radius: 8px; padding: 0 7px; }
 
 /* Themes */

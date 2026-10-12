@@ -7,6 +7,7 @@
 /* ── Tab switching ───────────────────────────────────────────────── */
 /* writeUrl: false when the URL already names this tab (opening a link, back/forward) */
 function switchTab(name, { writeUrl = true, push = true } = {}) {
+  if (name !== 'reading') browserUnloadMeeting();
   // Hide all panels
   document.querySelectorAll('.app-tab-panel').forEach(p => {
     p.classList.add('hidden');
@@ -34,6 +35,7 @@ function switchTab(name, { writeUrl = true, push = true } = {}) {
   const mobBtn = document.getElementById(`mob-tab-${name}`);
   if (mobBtn) mobBtn.classList.add('active');
 
+  if (name === 'reading') browserReloadMeeting();
   if (name === 'reading' && writeUrl && !_readingTabHasResults()) browseSearch({ push: false });
   if (name === 'profiles') profilesShow();
   if (name === 'subjects') subjectsShow();
@@ -225,7 +227,7 @@ async function browseSearch({ push = true } = {}) {
 /* ── Filter bar collapse ─────────────────────────────────────────── */
 /* The collapsed bar shows the search as chips; removing one searches again without it. */
 function rfbExpand() {
-  document.querySelector('.rfb')?.classList.remove('rfb-collapsed');
+  _setRfbCollapsed(false);
   _scrolledSinceExpand = 0;
 }
 
@@ -234,7 +236,8 @@ function rfbCollapse() {
 }
 
 function _collapseRfb() {
-  document.querySelector('.rfb')?.classList.add('rfb-collapsed', 'rfb-has-results');
+  document.querySelector('.rfb')?.classList.add('rfb-has-results');
+  _setRfbCollapsed(true);
   const chips = document.getElementById('rfb-collapsed-chips');
   if (!chips) return;
   const query = document.getElementById('reading-search-input')?.value.trim() || '';
@@ -242,6 +245,29 @@ function _collapseRfb() {
     ? rfChipHtml(`"${query}"`, 'rfClearQueryAndSearch', { extraClass: 'chip--query' })
     : '';
   chips.innerHTML = queryChip + rfActiveChipsHtml('rfRemoveFilterAndSearch');
+}
+
+/* The rows cross-fade by the CSS grid transition, but its 0fr/1fr rows keep the bar at its full height until the
+   end; the bar's own height animates between the two states' measured heights instead. */
+const _RFB_FOLD_MS = 300;
+let _rfbFold = null;
+function _setRfbCollapsed(collapsed) {
+  const rfb = document.querySelector('.rfb');
+  if (!rfb || rfb.classList.contains('rfb-collapsed') === collapsed) return;
+  const fromHeight = rfb.getBoundingClientRect().height;
+  _rfbFold?.cancel();
+  rfb.style.transition = 'none';
+  rfb.classList.toggle('rfb-collapsed', collapsed);
+  const toHeight = rfb.getBoundingClientRect().height;
+  rfb.classList.toggle('rfb-collapsed', !collapsed);
+  void rfb.offsetHeight;
+  rfb.style.transition = '';
+  rfb.classList.toggle('rfb-collapsed', collapsed);
+  rfb.style.overflow = 'hidden';
+  const fold = rfb.animate([{ height: `${fromHeight}px` }, { height: `${toHeight}px` }],
+    { duration: _RFB_FOLD_MS, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' });
+  fold.onfinish = () => { if (_rfbFold === fold) rfb.style.overflow = ''; };
+  _rfbFold = fold;
 }
 
 function rfClearQueryAndSearch() {

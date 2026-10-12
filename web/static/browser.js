@@ -45,6 +45,8 @@ let _standalone = false; // true when embedded in reading tab (no chat bar)
 let _container  = null;  // DOM element the panel is appended into
 let _pendingFocus = null;       // {speech, offset, length} or {speech, quote} to show once the meeting loads
 let _searchRequest = null;      // /api/browse/search body behind _meetings (null = no "load more")
+let _meetingAbort = null;       // aborts the shown meeting's fetches, listeners and observer
+let _unloadedScrollTop = null;  // the transcript's scroll position when leaving the tab unloaded it
 
 /* ── Heatmap state ──────────────────────────────────────────────── */
 let _hmHits           = [];     // /hits rows for the active query: {speech_idx, matched_words, query_words, ranges}
@@ -90,7 +92,8 @@ function openProtocolBrowser(sessionId, meetingId, meetings, opts = {}) {
   _searchRequest     = opts.searchRequest || null;
   _pendingFocus = opts.focus?.speech != null ? opts.focus : null;
 
-  // Replace any existing panel
+  _unloadedScrollTop = null;
+  _meetingAbort?.abort();
   if (_panel) _panel.remove();
 
   _panel = document.createElement('div');
@@ -238,7 +241,27 @@ function _shellHtml(postCompletion) {
 }
 
 function closeProtocolBrowser() {
+  _meetingAbort?.abort();
   if (_panel) { _panel.remove(); _panel = null; }
+}
+
+/* Leaving the reading tab drops the shown transcript (it can be huge); coming back loads it again where it was. */
+function browserUnloadMeeting() {
+  if (!_panel || !_standalone || !_activeId || _unloadedScrollTop != null) return;
+  const col = _panel.querySelector('#browser-transcript-col');
+  _unloadedScrollTop = col.scrollTop;
+  _meetingAbort?.abort();
+  _meetingAbort = null;
+  _hmHits = [];
+  _summary = null;
+  col.replaceChildren();
+  _panel.querySelector('#browser-summary-bar')?.replaceChildren();
+  _renderHeatmap();
+}
+
+function browserReloadMeeting() {
+  if (!_panel || _unloadedScrollTop == null) return;
+  _loadMeeting(_activeId, { pushUrl: false });
 }
 
 /* ── Sidebar ─────────────────────────────────────────────────────── */
@@ -381,6 +404,11 @@ function browserToggleSummary() {
 
 /* ── Load meeting (summary + transcript) ─────────────────────────── */
 async function _loadMeeting(meetingId, { pushUrl = true } = {}) {
+  _meetingAbort?.abort();
+  _meetingAbort = new AbortController();
+  const { signal } = _meetingAbort;
+  const restoreScrollTop = _unloadedScrollTop;
+  _unloadedScrollTop = null;
   _activeId          = meetingId;
   if (_standalone) updateProtocolUrl({ meeting: meetingId }, { push: pushUrl });
   _activeHitsQuery   = null;
@@ -397,9 +425,10 @@ async function _loadMeeting(meetingId, { pushUrl = true } = {}) {
 
   try {
     const [summaryData, transcriptData] = await Promise.all([
-      fetch(`/api/research/${_sid}/meeting/${encodeURIComponent(meetingId)}/summary`).then(r => r.json()),
-      fetch(`/api/research/${_sid}/meeting/${encodeURIComponent(meetingId)}/transcript`).then(r => r.json()),
+      fetch(`/api/research/${_sid}/meeting/${encodeURIComponent(meetingId)}/summary`, { signal }).then(r => r.json()),
+      fetch(`/api/research/${_sid}/meeting/${encodeURIComponent(meetingId)}/transcript`, { signal }).then(r => r.json()),
     ]);
+    if (signal.aborted) return;
 
     if (transcriptData.error) throw new Error(transcriptData.error);
     if (summaryData.error) console.warn(`[browser] ${meetingId}: ${summaryData.error}; showing the transcript only`);
@@ -424,17 +453,19 @@ async function _loadMeeting(meetingId, { pushUrl = true } = {}) {
     _wireSummaryJumps(col);
     _wireSummaryJumps(_panel?.querySelector('#browser-summary-bar'));
 
-    _initHeatmap();
+    _initHeatmap(signal);
 
-    _wireHeatmapStrip(col);
-    col.addEventListener('scroll', () => { _updateHeatmapViewport(); _updateNavCount(); }, { passive: true });
+    _wireHeatmapStrip(col, signal);
+    col.addEventListener('scroll', () => { _updateHeatmapViewport(); _updateNavCount(); }, { passive: true, signal });
 
     const focus = _pendingFocus;
     _pendingFocus = null;
-    _loadHitsHeatmap(meetingId, _searchQuery(), focus ? null : 'first');
+    if (restoreScrollTop != null) col.scrollTop = restoreScrollTop;
+    _loadHitsHeatmap(meetingId, _searchQuery(), focus || restoreScrollTop != null ? null : 'first');
     if (focus) requestAnimationFrame(() => browserFocusSpeech(focus.speech, focus));
 
   } catch (err) {
+    if (signal.aborted) { console.debug(`[browser] ${meetingId}: load cancelled (${err})`); return; }
     col.innerHTML = `<div class="browser-loading"><div class="browser-error">שגיאה בטעינה: ${_esc(err.message)}</div></div>`;
   }
 }
@@ -612,12 +643,15 @@ function _transcriptHtml(data) {
 /* The strip marks where the query's words sit in the transcript column (by their rendered position),
    stronger for speeches matching more of the words. */
 
-function _initHeatmap() {
+function _initHeatmap(signal) {
   _hmHits = [];
   _renderHeatmap();
   requestAnimationFrame(_updateHeatmapViewport);
   const inner = _panel?.querySelector('#browser-transcript-col .transcript-inner');
-  if (inner) new ResizeObserver(() => { _renderHeatmap(); _updateHeatmapViewport(); }).observe(inner);
+  if (!inner) return;
+  const observer = new ResizeObserver(() => { _renderHeatmap(); _updateHeatmapViewport(); });
+  observer.observe(inner);
+  signal.addEventListener('abort', () => observer.disconnect());
 }
 
 function _searchQuery() {
@@ -636,11 +670,12 @@ async function _loadHitsHeatmap(meetingId, query, scrollTo = null) {
     _updateNavCount();
     return;
   }
+  const signal = _meetingAbort?.signal;
   strip?.classList.add('loading');
   try {
-    const res  = await fetch(`/api/research/${_sid}/meeting/${encodeURIComponent(meetingId)}/hits?q=${encodeURIComponent(query)}`);
+    const res  = await fetch(`/api/research/${_sid}/meeting/${encodeURIComponent(meetingId)}/hits?q=${encodeURIComponent(query)}`, { signal });
     const data = await res.json();
-    if (meetingId !== _activeId) return;
+    if (meetingId !== _activeId || signal?.aborted) return;
     if (data.error) throw new Error(data.error);
     _hmHits = data.hits || [];
     _unmarkText(body, 'keyword-highlight');
@@ -659,6 +694,7 @@ async function _loadHitsHeatmap(meetingId, query, scrollTo = null) {
       if (first) _scrollColTo(first);
     }
   } catch (err) {
+    if (signal?.aborted) { console.debug(`[browser] ${meetingId}: hits cancelled (${err})`); return; }
     console.error('[browser] hits failed:', err);
   } finally {
     strip?.classList.remove('loading');
@@ -707,7 +743,7 @@ function _bandNear(strip, clientY) {
   return nearest;
 }
 
-function _wireHeatmapStrip(col) {
+function _wireHeatmapStrip(col, signal) {
   const strip = _panel.querySelector('#heatmap-strip');
   const tip   = _panel.querySelector('#hm-tip');
   strip.addEventListener('click', e => {
@@ -716,7 +752,7 @@ function _wireHeatmapStrip(col) {
     const rect = strip.getBoundingClientRect();
     const pct  = (e.clientY - rect.top) / rect.height;
     col.scrollTo({ top: Math.max(0, pct * col.scrollHeight), behavior: 'smooth' });
-  });
+  }, { signal });
   strip.addEventListener('mousemove', e => {
     const band = _bandNear(strip, e.clientY);
     const hit  = band && _hmHits.find(h => String(h.speech_idx) === band.dataset.speechIdx);
@@ -726,8 +762,8 @@ function _wireHeatmapStrip(col) {
     tip.innerHTML = `<b>${_esc(speaker)}</b><span>${_esc(hit.matched_words)} מתוך ${_esc(hit.query_words)} מילות החיפוש</span>`;
     tip.style.top = `${e.clientY - strip.parentElement.getBoundingClientRect().top}px`;
     tip.hidden = false;
-  });
-  strip.addEventListener('mouseleave', () => { tip.hidden = true; });
+  }, { signal });
+  strip.addEventListener('mouseleave', () => { tip.hidden = true; }, { signal });
 }
 
 /* ── Transcript navigation: start / end, previous / next search match ── */
