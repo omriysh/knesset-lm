@@ -69,7 +69,6 @@ function openSettings() {
     localStorage.getItem('showStagesAlways') === 'true';
   document.getElementById('toggle-share-search').checked = window.shareIncludesSearch();
   document.getElementById('toggle-research-tab').checked = researchTabShown();
-  document.getElementById('toggle-profile-simple').checked = profileSimpleFirst();
   gameSettingsRefresh();
   refreshGeminiKeySettingsStatus();
   refreshModelSettings();
@@ -85,7 +84,7 @@ function onStagesAlwaysToggle(el) {
 /* "?" opens it over whatever tab is showing and leaves the URL alone; /about/<tab> opens it over home
    (tabs.js), and then the address bar follows the dialog's tab and language until it is closed. */
 const HELP_PANEL_IDS = {
-  about: 'help-content', prompts: 'help-prompts',
+  about: 'help-content', prompts: 'help-prompts', reading: 'help-reading',
   support: 'help-support', privacy: 'help-privacy', terms: 'help-terms',
 };
 let _helpLoaded = false;

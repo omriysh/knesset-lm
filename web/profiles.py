@@ -115,7 +115,8 @@ def _offset(offset: int) -> int:
 @lru_cache(maxsize=1)
 def _theme_pool_cached(lists_path: str, lists_mtime: float, db_mtime: float) -> dict[int, game.PoolTheme]:
     candidates = [(party["id"], c["position"], c["mk_id"]) for party in candidate_lists()["parties"]
-                  for c in party["candidates"] if c["profile"] == "full" and c.get("mk_id")]
+                  for c in party["candidates"]
+                  if c["profile"] == "full" and c.get("mk_id") and ACTIVITY_KNESSET in c["knessets"]]
     conn = store.connect(interrupt_after_seconds=config.DB_QUERY_TIMEOUT_SECONDS)
     try:
         themes = mk_activity.themes_of_mks(conn, sorted({mk_id for *_, mk_id in candidates}), ACTIVITY_KNESSET)
@@ -247,10 +248,11 @@ def _candidate_activity(conn, candidate: dict, latest_knesset: int, roles: dict 
 
 
 def activity_knessets(conn, candidate: dict) -> list[int]:
-    """The processed Knessets with the candidate's committee activity, latest first; when there is none,
-    the latest processed Knesset they served in, so the page still has one Knesset to show."""
-    knessets = mk_activity.activity_knessets(conn, candidate["mk_id"], config.PROTOCOL_KNESSET_NUMS)
+    """The processed Knessets the candidate served in and was active in committees, latest first (a
+    non-member's guest appearances don't count); when there is none, the latest processed Knesset they
+    served in, so the page still has one Knesset to show."""
     served = [k for k in config.PROTOCOL_KNESSET_NUMS if k in candidate["knessets"]]
+    knessets = mk_activity.activity_knessets(conn, candidate["mk_id"], served)
     return knessets or [max(served or config.PROTOCOL_KNESSET_NUMS)]
 
 

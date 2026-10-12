@@ -276,7 +276,7 @@ async function gameResults() {
         <li><span class="gm-step-icon">${pfIcon('how_to_vote')}</span><span>זו לא המלצה למי להצביע! תמיד מומלץ לקרוא עוד על המועמדים והמפלגה.</span></li>
         <li><span class="gm-step-icon">${pfIcon('favorite')}</span><span>כמו באתרי היכרויות רגילים, גם פה לוקח זמן למצוא את האחת. ככל שתשחקו יותר ותגיבו ליותר נושאים, התוצאה תהיה יותר מדויקת.</span></li>
         <li><span class="gm-step-icon">${pfIcon('person_search')}</span><span>המשחק מורכב רק מעמדות שנאמרו בכנסת. ברוב המפלגות יש מועמדות ומועמדים רבים שעוד לא כיהנו בכנסת, ומומלץ לקרוא גם עליהם.</span></li>
-        <li><span class="gm-step-icon">${pfIcon('auto_awesome')}</span><span>את הסיכומים והעמדות כתב מודל שפה, והוא עלול לטעות, גם בייחוס עמדה לאדם הלא נכון. לכל עמדה מצורפים ציטוטים מהפרוטוקול.</span></li>
+        <li><span class="gm-step-icon">${pfIcon('auto_awesome')}</span><span>את הסיכומים והעמדות כתב מודל שפה, והוא עלול להכיל טעויות, גם בייחוס עמדה לאדם הלא נכון. לכל עמדה מצורפים ציטוטים מהפרוטוקול.</span></li>
       </ol>
       <button class="btn btn-primary gm-start" type="button" data-click="gameResultsNoteSeen">הבנתי, לתוצאות${pfIcon('arrow_back')}</button>
     </div>`;

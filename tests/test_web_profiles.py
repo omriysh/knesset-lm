@@ -170,6 +170,13 @@ class TestCommitteeActivity:
         assert all(isinstance(row, list) and len(row) == 2 for row in attendance["per_committee"])
         assert activity["opinions"] > 0
 
+    def test_guest_appearance_in_a_knesset_not_served_does_not_count(self, monkeypatch):
+        from web import profiles
+        monkeypatch.setattr(profiles.config, "PROTOCOL_KNESSET_NUMS", (24, 25))
+        monkeypatch.setattr(profiles.mk_activity, "activity_knessets",
+                            lambda conn, mk_id, nums: [k for k in (25, 24) if k in nums])
+        assert profiles.activity_knessets(None, {"mk_id": "x", "knessets": [22, 23, 24]}) == [24]
+
 
 class TestInputValidation:
     @pytest.mark.parametrize("params,error_code", [

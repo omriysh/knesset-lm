@@ -114,7 +114,11 @@ function _landingCopy(text, button, doneHtml) {
   });
 }
 
-const LANDING_STEP_COPY_TEXTS = { name: 'Meorav Yerushalmi', url: LANDING_MCP_URL };
+const LANDING_STEP_COPY_TEXTS = { url: LANDING_MCP_URL };
+const LANDING_CHATGPT_ADD_PROMPT = `Help me add the Meorav Yerushalmi MCP server to ChatGPT as an app, so you can use its tools in our chats.
+Server URL: ${LANDING_MCP_URL}
+Authentication: none.
+Walk me through the steps one at a time, and wait for me to finish each step before the next. Answer in Hebrew.`;
 const LANDING_STEP_OPEN_MS = 500;
 const LANDING_STEP_EDGE_GAP_FRACTION = 0.2;
 
@@ -166,8 +170,7 @@ function _landingKeepStepInView(track, next, isRow, stepRect) {
   requestAnimationFrame(frame);
 }
 
-function landingStepNext(el) {
-  const step = el.closest('.lp-step');
+function _landingOpenNextStep(step) {
   const next = step.nextElementSibling;
   if (!next || next.classList.contains('home-graph--open')) return;
   const track = step.closest('.lp-steps');
@@ -187,6 +190,10 @@ function landingCopyField(button) {
   _landingCopy(LANDING_STEP_COPY_TEXTS[button.dataset.arg], button.querySelector('.material-symbols-outlined'), 'check');
 }
 
+function landingCopyChatgptPrompt(button) {
+  _landingCopy(LANDING_CHATGPT_ADD_PROMPT, button, '<span class="material-symbols-outlined">check</span>הועתק');
+}
+
 const LANDING_INSTALL_SCROLL_MS = 500;
 
 function _landingGoInstall() {
@@ -198,6 +205,7 @@ function _landingGoInstall() {
 /* Opens the remaining steps of the shown panel one by one, as if the visitor clicked through them, then highlights the last (new chat) step. */
 function _landingRevealNewChatStep() {
   const steps = document.querySelectorAll('.lp-steps:not(.lp-panel-off) .lp-step');
+  if (!steps.length) return;
   const newChatStep = steps[steps.length - 1];
   if (newChatStep.classList.contains('home-graph--open')) {
     const card = newChatStep.querySelector('.home-next-card');
@@ -208,8 +216,19 @@ function _landingRevealNewChatStep() {
     return;
   }
   const openSteps = [...steps].filter(step => step.classList.contains('home-graph--open'));
-  landingStepNext(openSteps[openSteps.length - 1]);
+  _landingOpenNextStep(openSteps[openSteps.length - 1]);
   setTimeout(_landingRevealNewChatStep, LANDING_STEP_OPEN_MS);
+}
+
+const LANDING_STEPS_PLAY_DELAY_MS = 400;
+
+/* The first time the steps come into view, opens them one after another. */
+function _landingPlaySteps() {
+  const steps = [...document.querySelectorAll('.lp-steps .lp-step')];
+  const closed = steps.find(step => !step.classList.contains('home-graph--open'));
+  if (!closed) return;
+  _landingOpenNextStep(closed.previousElementSibling);
+  setTimeout(_landingPlaySteps, LANDING_STEP_OPEN_MS);
 }
 
 function _landingCopiedThenInstall() {
@@ -296,8 +315,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function _landingObserveReveals() {
   const sections = document.querySelectorAll('.lp-reveal');
+  let stepsPlayed = false;
   const observer = new IntersectionObserver(entries => {
-    entries.forEach(entry => entry.target.classList.toggle('lp-in', entry.isIntersecting));
+    entries.forEach(entry => {
+      entry.target.classList.toggle('lp-in', entry.isIntersecting);
+      if (entry.isIntersecting && entry.target.id === 'lp-install' && !stepsPlayed) {
+        stepsPlayed = true;
+        setTimeout(_landingPlaySteps, LANDING_STEPS_PLAY_DELAY_MS);
+      }
+    });
   }, { root: sections[0].closest('.landing'), rootMargin: '-20% 0px' });
   sections.forEach(section => observer.observe(section));
 }

@@ -40,8 +40,8 @@ const PAGE_ACTIONS = {
   gameInfoBackdrop:             (el, event) => { if (event.target === el) gameCloseInfo(); },
   gameOpenProfile:              (el, event) => gameOpenProfile(el, event),
   landingScrollToSection:       (el, event) => landingScrollToSection(event, el.getAttribute('href').slice(1)),
-  landingStepNext:              (el) => landingStepNext(el),
   landingCopyField:             (el) => landingCopyField(el),
+  landingCopyChatgptPrompt:     (el) => landingCopyChatgptPrompt(el),
   landingCopyReview:            (el) => landingCopyReview(el),
   landingCopyGuidelines:        (el) => landingCopyGuidelines(el),
   landingBuilderSet:            (el) => landingBuilderSet(el),
@@ -58,7 +58,6 @@ const PAGE_ACTIONS = {
   onStagesAlwaysToggle:         (el) => window.onStagesAlwaysToggle(el),
   onShareSearchToggle:          (el) => setShareIncludesSearch(el.checked),
   onResearchTabToggle:          (el) => setResearchTabShown(el.checked),
-  onProfileSimpleToggle:        (el) => setProfileSimpleFirst(el.checked),
   replaceGeminiKeyFromSettings: () => window.replaceGeminiKeyFromSettings(),
   deleteGeminiKeyFromSettings:  () => window.deleteGeminiKeyFromSettings(),
   setResearchModel:             (el) => window.setResearchModel(el.dataset.role, el.value),
@@ -135,10 +134,8 @@ const PAGE_ACTIONS = {
   profilesNewcomer:             (el) => profilesNewcomer(el),
   profilesCopyNewcomersPrompt:  (el) => profilesCopyNewcomersPrompt(el),
   profilesCloseNewcomer:        () => profilesCloseNewcomer(),
-  profilesSimpleToFull:         (el, event) => profilesSimpleToFull(el, event),
   profilesSimplePeriod:         (el) => profilesSimplePeriod(el),
   profilesSimplePlay:           () => profilesSimplePlay(),
-  profilesDefaultTip:           (el) => profilesDefaultTip(el),
 };
 
 function runDeclaredAction(event, actionAttribute) {

@@ -1,16 +1,11 @@
 /**
- * profile_simple.js — the simple profile of a candidate who served with committee activity: photo and
- * details, the visitor's swipes on their themes (game.js storage), habits, and their interests as umbrella
- * bubbles over a cumulative timeline with their approach to each shared subject. The full profile
- * (profiles.js) is one click away at #full; a setting decides which of the two opens first.
+ * profile_simple.js — the top of a candidate's profile: photo and details, the visitor's swipes on their themes
+ * (game.js storage) and habits; and the profile's subjects tab: their interests as umbrella bubbles over a
+ * cumulative timeline with their approach to each shared subject.
  *
  * Non-module script, loaded after profiles.js (pf* helpers, the theme sheet) and before game.js / actions.js.
  */
 
-const SIMPLE_FIRST_KEY = 'profileSimpleFirst';
-const FULL_CLICKS_KEY = 'profileFullClicks';
-const DEFAULT_TIP_SHOWN_KEY = 'profileDefaultTipShown';
-const FULL_CLICKS_BEFORE_TIP = 3;
 const INTEREST_PLAY_STEP_MS = 1300;
 const BUBBLE_MIN_RADIUS_PX = 36;
 const BUBBLE_COLORS = [['#266829', '#ffffff'], ['#2e7d32', '#ffffff'], ['#5a9e4b', '#ffffff'], ['#b2faa9', '#185c1e'], ['#cdeec4', '#185c1e'], ['#e8f5e3', '#185c1e']];
@@ -20,15 +15,6 @@ const HALF_LAST_MONTH = ['יוני', 'דצמבר'];
 const SIMPLE_FACT_ROWS = ['residence', 'education', 'military_service', 'profession'];
 
 let _pfs = null;
-
-function _pfsStored(key, fallback) {
-  try { const value = localStorage.getItem(key); return value === null ? fallback : value; } catch (exc) { console.warn('[profile_simple] localStorage unavailable:', exc); return fallback; }
-}
-function _pfsStore(key, value) {
-  try { localStorage.setItem(key, value); } catch (exc) { console.warn('[profile_simple] localStorage unavailable:', exc); }
-}
-function profileSimpleFirst() { return _pfsStored(SIMPLE_FIRST_KEY, '1') === '1'; }
-function setProfileSimpleFirst(on) { _pfsStore(SIMPLE_FIRST_KEY, on ? '1' : '0'); }
 
 function _pfsGameVotes() {
   try {
@@ -40,28 +26,18 @@ function _pfsGameVotes() {
 /* ── page ────────────────────────────────────────────────────────── */
 const pfsAvailable = data => data.candidate.profile === 'full' && Boolean(data.activity && data.activity.has_subjects);
 
-function pfsRender(root, data, partyId, candidateId, crumbs) {
-  const { candidate, party, activity } = data;
-  const api = `/api/profiles/party/${partyId}/candidate/${candidateId}`;
-  const fullHref = `${PROFILES_PATH}/party/${partyId}/candidate/${candidateId}#full`;
+function pfsLoadSubjectsTab(profile) {
+  const { data, api } = profile;
   _pfs = { api, data, period: 0, umbrella: 0, playing: null, interests: null };
-  const fullButton = cls => `<a class="pfs-full-btn ${cls}" href="${pfEsc(fullHref)}" data-click="profilesSimpleToFull">לפרופיל המלא${pfIcon('arrow_back')}</a>`;
-  const years = _pfLatestServiceYears([activity.knesset_num]);
-  root.innerHTML = `<div class="pf-page pfs">
-    <div class="pfs-topline">${crumbs}${fullButton('pfs-full-btn--top')}</div>
-    ${pfsHeader(data, true)}
-    <section class="pfs-card pfs-interests" id="pfs-interests">
-      <div class="pfs-section-head"><h2>תחומי עניין ${pfInLabel(pfKnessetLabel(activity.knesset_num))} (${years})</h2></div>
+  const years = _pfLatestServiceYears([data.activity.knesset_num]);
+  document.getElementById('pf-panel-subjects').innerHTML = `<section class="pfs-card pfs-interests" id="pfs-interests" data-pf-source="interests">
+      <div class="pfs-section-head"><h2>תחומי עניין ${pfInLabel(pfKnessetLabel(data.activity.knesset_num))} (${years})</h2></div>
       <div class="pfs-interests-body">${pfSpinner('טוען תחומי עניין…')}</div>
-    </section>
-    <div class="pfs-bottom">${fullButton('')}</div>
-  </div>`;
-  const state = _pfs;
-  pfsLoadHabits(api, () => state === _pfs);
-  _pfsLoadInterests(state);
+    </section>`;
+  _pfsLoadInterests(_pfs);
 }
 
-/* The photo, details, swipes and habits that open both the simple and the full profile. */
+/* The photo, details, swipes and habits that open the profile. */
 function pfsHeader(data, withSwipes) {
   const { candidate, party, activity } = data;
   const habitsWhen = activity ? `${pfInLabel(pfKnessetLabel(activity.knesset_num))} (${_pfLatestServiceYears([activity.knesset_num])})` : 'בכנסת';
@@ -191,7 +167,7 @@ async function _pfsLoadInterests(state) {
   try { payload = await pfFetch(`${state.api}/themes`); } catch (err) { if (state === _pfs) body.innerHTML = pfErrorBox(err); return; }
   if (state !== _pfs) return;
   const themes = pfsShowSwipes(payload, state.api, state.data.candidate.name);
-  pfSetThemeSource('profile', { themes, quarters: payload.quarters, evidence: _pfsEvidence(themes), api: state.api });
+  pfSetThemeSource('interests', { themes, quarters: payload.quarters, evidence: _pfsEvidence(themes), api: state.api });
   if (!themes.length) { body.innerHTML = '<div class="pf-empty">עוד לא נוצרו נושאים לחבר/ת הכנסת הזה/ו.</div>'; return; }
   state.interests = { ...payload, themes, themeById: Object.fromEntries(themes.map(t => [t.id, t])), periods: _pfsPeriods(payload.quarters) };
   state.period = state.interests.periods.length - 1;
@@ -286,7 +262,7 @@ function _pfsRenderApproaches(umbrellaOpinions) {
     }).join('')}`;
 }
 
-function _pfsStopPlay() {
+function pfsStopPlay() {
   if (!_pfs || !_pfs.playing) return;
   clearInterval(_pfs.playing);
   _pfs.playing = null;
@@ -296,7 +272,7 @@ function _pfsStopPlay() {
 
 function profilesSimplePeriod(button) {
   if (!_pfs?.interests) return;
-  _pfsStopPlay();
+  pfsStopPlay();
   _pfs.period = Number(button.dataset.arg);
   _pfsUpdateInterests();
 }
@@ -309,36 +285,18 @@ function _pfsSelectUmbrella(index) {
 
 function profilesSimplePlay() {
   if (!_pfs?.interests) return;
-  if (_pfs.playing) { _pfsStopPlay(); return; }
+  if (_pfs.playing) { pfsStopPlay(); return; }
   const state = _pfs;
   state.period = 0;
   _pfsUpdateInterests();
   document.querySelector('.pfs-play .material-symbols-outlined').textContent = 'pause';
   state.playing = setInterval(() => {
     if (state !== _pfs || !document.querySelector('.pfs-bubbles')) { clearInterval(state.playing); state.playing = null; return; }
-    if (state.period >= state.interests.periods.length - 1) { _pfsStopPlay(); return; }
+    if (state.period >= state.interests.periods.length - 1) { pfsStopPlay(); return; }
     state.period += 1;
     _pfsUpdateInterests();
   }, INTEREST_PLAY_STEP_MS);
 }
 
-const _pfsRelayout = pfDebounce(() => { if (_pfs?.interests && document.querySelector('.pfs-bubbles')) _pfsUpdateInterests(); }, 200);
+const _pfsRelayout = pfDebounce(() => { if (_pfs?.interests && document.querySelector('.pfs-bubbles')?.offsetParent) _pfsUpdateInterests(); }, 200);
 window.addEventListener('resize', _pfsRelayout);
-
-/* ── to the full profile ─────────────────────────────────────────── */
-function profilesSimpleToFull(link, event) {
-  event.preventDefault();
-  _pfsStopPlay();
-  const clicks = Number(_pfsStored(FULL_CLICKS_KEY, '0')) + 1;
-  _pfsStore(FULL_CLICKS_KEY, String(clicks));
-  profilesGo(link.getAttribute('href'));
-  if (clicks >= FULL_CLICKS_BEFORE_TIP && _pfsStored(DEFAULT_TIP_SHOWN_KEY, '0') !== '1') {
-    _pfsStore(DEFAULT_TIP_SHOWN_KEY, '1');
-    document.getElementById('pfs-default-overlay').classList.add('open');
-  }
-}
-
-function profilesDefaultTip(button) {
-  if (button.dataset.arg === 'full') setProfileSimpleFirst(false);
-  document.getElementById('pfs-default-overlay').classList.remove('open');
-}

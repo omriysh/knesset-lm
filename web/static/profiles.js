@@ -7,14 +7,15 @@
  */
 
 const PROFILE_TABS = {
+  subjects: ['נושאים', 'hub'],
   roles:  ['תפקידים', 'badge'],
-  themes: ['נושאים ועמדות', 'insights'],
+  themes: ['עמדות', 'insights'],
   votes:  ['הצבעות', 'how_to_vote'],
   bills:  ['הצעות חוק', 'gavel'],
 };
 const BILLS_DEFAULT_ROLE = 'initiator';
 const BILLS_DEFAULT_STAGE = 'passed';
-const PROFILE_TABS_BY_DEPTH = { full: ['themes', 'votes', 'bills', 'roles'], bills: ['votes', 'bills', 'roles'] };
+const PROFILE_TABS_BY_DEPTH = { full: ['subjects', 'themes', 'votes', 'bills', 'roles'], bills: ['votes', 'bills', 'roles'] };
 const THEME_COLORS = ['#7c3aed', '#1d4ed8', '#c2410c', '#0f766e', '#a16207', '#be185d', '#005f99', '#4d7c0f',
                       '#9333ea', '#b45309', '#0e7490', '#991b1b', '#475569', '#db2777', '#15803d', '#6d28d9'];
 const THEMES_SHOWN = 6;
@@ -28,12 +29,10 @@ const VOTE_LOOK = {
   'בעד': ['thumb_up', 'v-for'], 'נגד': ['thumb_down', 'v-against'], 'נמנע': ['do_not_disturb_on', 'v-abstain'],
   'נוכח': ['person_check', 'v-present'],
 };
-const FULL_PROFILE_TOKEN = 'full';
-const SIMPLE_PROFILE_TOKEN = 'simple';
 const KNESSET_SITE_MK_URL = 'https://main.knesset.gov.il/mk/apps/mk/mk-personal-details/';
 const KNESSET_SITE_BILL_URL = 'https://main.knesset.gov.il/activity/legislation/laws/pages/LawBill.aspx?t=lawsuggestionssearch&lawitemid=';
 
-let _pfRoute = { party: null, candidate: null, tab: null, full: false, simple: false };
+let _pfRoute = { party: null, candidate: null, tab: null };
 let _pfRenderToken = 0;
 let _pf = null;
 /* Theme cards outside the profile page (the game's results) carry data-pf-source="<name>" and register
@@ -87,15 +86,14 @@ function _pfParseRoute(pathname = location.pathname, hash = location.hash) {
   const tab = Object.hasOwn(PROFILE_TABS, token) ? token : null;
   return { party: match && match[1] ? Number(match[1]) : null,
            candidate: match && match[2] ? Number(match[2]) : null,
-           tab, full: tab !== null || token === FULL_PROFILE_TOKEN, simple: token === SIMPLE_PROFILE_TOKEN };
+           tab };
 }
 
 function _pfPath(route) {
   if (route.party == null) return PROFILES_PATH;
   const party = `${PROFILES_PATH}/party/${route.party}`;
   if (route.candidate == null) return party;
-  const token = route.tab || (route.full ? FULL_PROFILE_TOKEN : route.simple ? SIMPLE_PROFILE_TOKEN : '');
-  return `${party}/candidate/${route.candidate}${token ? '#' + token : ''}`;
+  return `${party}/candidate/${route.candidate}${route.tab ? '#' + route.tab : ''}`;
 }
 
 function profilesCurrentPath() { return _pfPath(_pfRoute); }
@@ -326,8 +324,7 @@ function _pfDetailItems(text) {
 async function _pfRenderCandidate(root, partyId, candidateId, current) {
   const base = `${PROFILES_PATH}/party/${partyId}/candidate/${candidateId}`;
   const api = `/api/profiles/party/${partyId}/candidate/${candidateId}`;
-  const simple = _pfRoute.simple || (!_pfRoute.full && profileSimpleFirst());
-  if (!simple && _pf && _pf.api === api && root.querySelector('.pf-tabs')) { _pfSelectTab(_pfRoute.tab || _pf.tabs[0], { writeUrl: false }); return; }
+  if (_pf && _pf.api === api && root.querySelector('.pf-tabs')) { _pfSelectTab(_pfRoute.tab || _pf.tabs[0], { writeUrl: false }); return; }
   root.innerHTML = `<div class="pf-page">${pfSpinner('טוען את הפרופיל…')}</div>`;
   let data;
   try { data = await pfFetch(api); } catch (err) { if (current()) root.innerHTML = `<div class="pf-page">${_pfCrumbs([['הרשימות', PROFILES_PATH], ['הרשימה', `${PROFILES_PATH}/party/${partyId}`]])}${pfErrorBox(err)}</div>`; return; }
@@ -338,22 +335,14 @@ async function _pfRenderCandidate(root, partyId, candidateId, current) {
     root.innerHTML = `<div class="pf-page">${crumbs}<div class="pf-empty">${pfEsc(candidate.name)}, מקום ${candidate.position} ברשימה, לא כיהן/ה בכנסת, ולכן אין עדיין פרופיל.</div></div>`;
     return;
   }
-  if (simple && pfsAvailable(data)) {
-    _pf = null;
-    pfsRender(root, data, partyId, candidateId, crumbs);
-    return;
-  }
-  const tabs = PROFILE_TABS_BY_DEPTH[candidate.profile];
+  const tabs = PROFILE_TABS_BY_DEPTH[candidate.profile].filter(tab => tab !== 'subjects' || pfsAvailable(data));
   _pf = { api, base, data, tabs, loaded: {}, themes: null, evidence: {}, knesset: null,
           opinions: { q: '', theme: '', from: '', to: '', group: 'date', rows: [], total: 0, facets: null, loading: false },
           votes: { q: '', filter: 'all', rows: [], total: 0, loading: false },
           bills: { q: '', role: BILLS_DEFAULT_ROLE, stage: BILLS_DEFAULT_STAGE, rows: [], total: 0, loading: false } };
-  const servedOnlyBefore = data.activity && data.activity.knesset_num < data.activity.simple_knesset;
-  const simpleButton = pfsAvailable(data) ? _pfLink(`${base}#${SIMPLE_PROFILE_TOKEN}`, `${pfIcon('arrow_forward')}לפרופיל הפשוט`, 'pfs-full-btn pfs-full-btn--top')
-    : servedOnlyBefore ? `<span class="pfs-no-simple">${pfIcon('info')}פרופיל פשוט זמין רק לחברי ${pfKnessetLabel(data.activity.simple_knesset)}</span>` : '';
   const withSwipes = candidate.profile === 'full';
   root.innerHTML = `<div class="pf-page pfs">
-    <div class="pfs-topline">${crumbs}${simpleButton}</div>
+    ${crumbs}
     ${pfsHeader(data, withSwipes)}
     <div class="pf-tabs"><nav class="seg">${tabs.map(tab => `<button class="seg-btn" type="button" data-click="profilesTab" data-arg="${_esc(tab)}">${pfIcon(PROFILE_TABS[tab][1])}${PROFILE_TABS[tab][0]}</button>`).join('')}</nav></div>
     ${tabs.map(tab => `<div class="pf-panel" id="pf-panel-${tab}" hidden></div>`).join('')}
@@ -369,6 +358,7 @@ function _pfSelectTab(tab, { writeUrl = true } = {}) {
   if (!_pf || !_pf.tabs.includes(tab)) return;
   document.querySelectorAll('.pf-tabs .seg-btn').forEach(b => b.classList.toggle('active', b.dataset.arg === tab));
   _pf.tabs.forEach(t => { document.getElementById(`pf-panel-${t}`).hidden = t !== tab; });
+  if (tab !== 'subjects') pfsStopPlay();
   _pfRoute.tab = tab === _pf.tabs[0] ? null : tab;
   if (writeUrl) {
     history.replaceState(null, '', profilesCurrentPath());
@@ -378,7 +368,7 @@ function _pfSelectTab(tab, { writeUrl = true } = {}) {
   }
   if (!_pf.loaded[tab]) {
     _pf.loaded[tab] = true;
-    ({ themes: _pfLoadThemesTab, votes: _pfLoadVotesTab, bills: _pfLoadBillsTab, roles: _pfLoadRolesTab })[tab]();
+    ({ subjects: () => pfsLoadSubjectsTab(_pf), themes: _pfLoadThemesTab, votes: _pfLoadVotesTab, bills: _pfLoadBillsTab, roles: _pfLoadRolesTab })[tab]();
   }
 }
 
@@ -471,7 +461,7 @@ function _pfRenderThemes(showAll) {
   sub.textContent = `חלוקה גסה של התבטאויות מדיוני הכנסת לנושאים. מתוך ${pfNum(data.total_opinions)} התבטאויות שנצפו בדיונים, ${pfNum(data.opinions_in_a_theme)} נכללות בנושאים העיקריים האלה.`;
   const shown = showAll ? data.themes : data.themes.slice(0, THEMES_SHOWN);
   body.innerHTML = `
-    <div class="pf-ai-band">${pfIcon('auto_awesome')}<span>נוצר על ידי AI מסיכומי הפרוטוקולים ועלול לטעות · לחצו על נושא לסיכום ולכל העמדות בו</span></div>
+    <div class="pf-ai-band">${pfIcon('auto_awesome')}<span>נוצר על ידי AI מסיכומי הפרוטוקולים ועלול להכיל טעויות · לחצו על נושא לסיכום ולכל העמדות בו</span></div>
     <div class="pf-theme-map">${data.themes.map(t => `<button type="button" style="flex:${t.opinion_count};--tc:${t.color}" title="${pfEsc(t.title)} · ${pfNum(t.opinion_count)} עמדות" data-click="profilesThemeJump" data-arg="${_esc(t.id)}"></button>`).join('')}</div>
     <div class="pf-themes">${shown.map(theme => pfThemeCard(theme)).join('')}</div>
     ${data.themes.length > THEMES_SHOWN ? `<div class="pf-center"><button class="btn btn-secondary btn-sm" type="button" data-click="profilesThemesAll" data-arg="${_esc(showAll ? '' : '1')}">${showAll ? `${pfIcon('expand_less')}הצגת ${THEMES_SHOWN} הנושאים הראשונים` : `${pfIcon('expand_more')}הצגת כל ${data.themes.length} הנושאים`}</button></div>` : ''}`;

@@ -650,6 +650,7 @@ async def index(request: Request):
 ABOUT_TAB_TITLES = {
     "about":   {"he": "אודות",          "en": "About"},
     "prompts": {"he": "פרומפטים",       "en": "Prompts"},
+    "reading": {"he": "לקריאה נוספת",   "en": "Further reading"},
     "support": {"he": "יצירת קשר",      "en": "Support and contact"},
     "privacy": {"he": "מדיניות פרטיות", "en": "Privacy policy"},
     "terms":   {"he": "תנאי שימוש",     "en": "Terms of use"},
@@ -675,7 +676,7 @@ async def about_page(request: Request):
 
 @app.get(config.ABOUT_PAGE_PATH + "/{tab}", response_class=HTMLResponse, include_in_schema=False)
 async def about_tab_page(request: Request, tab: str):
-    """The home page under one help dialog tab: prompts, support, privacy or terms (?lang=en for English)."""
+    """The home page under one help dialog tab: prompts, reading, support, privacy or terms (?lang=en for English)."""
     if tab not in config.ABOUT_SUBPAGE_TABS:
         return JSONResponse({"detail": "Not Found"}, status_code=404)
     return _about_page(request, tab)
