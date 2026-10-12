@@ -883,7 +883,7 @@ class TestFrontendSanitizing:
         assert not re.search(r"PAGE_ACTIONS\[el\.getAttribute", actions_source)
 
     def test_data_attribute_interpolations_are_escaped(self):
-        escapers = ("_esc(", "esc(", "_rfEsc(", "encodeURIComponent(", "CSS.escape(")
+        escapers = ("_esc(", "esc(", "pfEsc(", "_rfEsc(", "encodeURIComponent(", "CSS.escape(")
         for name, source in self.static_js().items():
             for value in re.findall(r'data-[a-z-]+="\$\{([^}]*)\}"', source):
                 assert value.startswith(escapers), (name, value)

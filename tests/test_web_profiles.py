@@ -91,7 +91,7 @@ class TestLists:
         assert "person_id" not in party["candidates"][0]
 
     @pytest.mark.parametrize("path", ["/api/profiles/party/10", f"{BASE}/9", "/api/profiles/photo/7/2",
-                                      "/api/profiles/photo/10/1", "/api/profiles/ballot/7", "/api/profiles/logo/9"])
+                                      "/api/profiles/photo/10/1", "/api/profiles/logo/9"])
     def test_unknown_is_404(self, client, path):
         assert client.get(path).status_code == 404
 
@@ -222,7 +222,6 @@ class TestRateLimitBuckets:
     @pytest.mark.parametrize("path,bucket", [
         ("/profiles/party/7/candidate/1", None),
         ("/api/profiles/photo/7/1", None),
-        ("/api/profiles/ballot/7", None),
         ("/api/profiles/logo/7", None),
         ("/api/profiles/parties", "web"),
         (f"{BASE}/1/themes", "db"),

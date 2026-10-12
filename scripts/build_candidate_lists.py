@@ -5,7 +5,7 @@ The 26th Knesset candidate lists, as published by the Central Elections Committe
 Data/candidates/26/: lists.json, ballots/<party_id>.png and photos/<party_id>_<position>.jpg.
 
     python scripts/build_candidate_lists.py scrape   # gov.il pages → raw_pages.json (resumable)
-    python scripts/build_candidate_lists.py logos    # Wikipedia / party sites → logos/<party_id>.png
+    python scripts/build_candidate_lists.py logos    # Wikimedia Commons → logos/<party_id>.png
     python scripts/build_candidate_lists.py build    # raw_pages.json → lists.json, ballots, photos
 
 gov.il sits behind a Cloudflare challenge that only a real browser passes, so `scrape` drives Chrome
@@ -17,9 +17,9 @@ Party ids are the row order of the index page and candidate ids their list posit
 personal details from the Knesset site API, falls back to the Hebrew Wikipedia lead image, and prints
 the former-MK matches for manual review.
 
-`logos` takes each list's logo from its party's Hebrew Wikipedia infobox (PARTY_WIKIPEDIA_LOGOS, curated by
-hand: gov.il publishes only the ballot), or from the party's website when it has a newer or sharper one
-(PARTY_SITE_LOGOS, through Playwright since some sites need a browser). Lists with neither keep the ballot.
+`logos` takes each list's logo from Wikimedia Commons (PARTY_COMMONS_LOGOS, curated by hand), only files under a
+free licence, so the site may show them; the credits are in web/templates/about/terms.*.html. Lists with none get
+a ballot slip drawn by the site.
 """
 
 import argparse
@@ -62,46 +62,34 @@ PARTY_WEBSITES = {
     19: "https://kachollavan.org.il/",
     20: "https://beytenu.org.il/",
     21: "https://www.likud.org.il/",
-    22: "https://noam.org.il/",
+    22: "https://www.noamlisrael.org.il/",
     31: "https://piratim.org/",
     37: "https://be-yahad.org.il/",
 }
-# The logo in each party's Hebrew Wikipedia infobox, a File: name on he.wikipedia or Commons.
-PARTY_WIKIPEDIA_LOGOS = {
+# Each list's logo on Wikimedia Commons, only files whose page carries a free licence (public domain, CC0, CC BY-SA).
+PARTY_COMMONS_LOGOS = {
     1: "The Democrats led by Yair Golan.svg",
-    2: "עוצמה יהודית לוגו 2021.svg",
-    6: "יהדות התורה לוגו 2019.svg",
+    2: "Otzma Yehudit 2021 logo.svg",
+    4: "Tzomet logo.png",
+    5: "לוגו מפלגת אורות השחר.png",
+    6: "Yahadut HaTorah logo.png",
+    8: "Logo of The Reservists.svg",
     9: "Yashar2025.png",
     11: "Joint List logo 2019.svg",
-    15: "לוגו הציונות הדתית 2026.png",
-    18: "עמך-ישראל-סמל.png",
-    20: "לוגו ישראל ביתנו 2022.svg",
+    15: "Religious Zionist Party logo 2026.png",
+    16: "Israel First.png",
+    18: "Amcha Yisrael.svg",
+    19: "Blue and White logo 2021.svg",
+    20: "Israel-beytenu-logo.svg",
     21: "Likud Logo.svg",
-    27: "הרשימה הערבית המאוחדת לוגו 2021.svg",
+    22: "Logo Noam.png",
+    27: "Raam logo 2021.svg",
     31: "Piratim Party Logo.png",
-    38: "Shas logo.svg",
-}
-# Lists whose website shows a newer or sharper logo than Wikipedia's: the file itself, on its brand's background
-# when it is white, or else (None) a screenshot of the site's header logo.
-PARTY_SITE_LOGOS = {
-    8: ("https://www.themiluimnikim.org.il/wp-content/uploads/2026/03/לוגו-המילואמניקים-600x115.png", "#1c1c1c"),
-    19: ("https://kachollavan.org.il/wp-content/uploads/2025/07/CahoLavan-PNG.png", "#0f2350"),
-    22: None,
-    37: ("https://be-yahad.org.il/wp-content/uploads/2026/09/LOGO_RAK-02.svg", None),
+    37: "Beyahad berashut bennett blue.svg",
+    38: "Shas logo.png",
 }
 _WIKIPEDIA_LOGO_WIDTH_PX = 1280
 PNG_SIGNATURE = bytes.fromhex("89504e47")
-_LOGO_FILE_HEIGHT_PX = 120
-_LOGO_FINDER_JS = """() => {
-  const visible = el => { const r = el.getBoundingClientRect(); return r.width >= 40 && r.height >= 16 && r.top < 260 && r.bottom > 0; };
-  const selectors = ['.custom-logo', 'header [class*=logo] img', 'header [class*=logo] svg', '[class*=logo] img', 'img[src*=logo]',
-                     'img[alt*=logo i]', '[id*=logo] img', 'header a[href="/"] img', 'header img', 'header svg'];
-  for (const selector of selectors) {
-    const found = [...document.querySelectorAll(selector)].find(visible);
-    if (found) { found.setAttribute('data-knesset-lm-logo', '1'); return selector; }
-  }
-  return null;
-}"""
 
 
 def out_dir() -> Path:
@@ -176,21 +164,6 @@ def scrape() -> None:
                                 encoding="utf-8")
 
 
-def _render_logo_file(playwright, url: str, background: str | None, path: Path) -> None:
-    """The logo file drawn by the browser (so SVGs work too), padded on its background when given."""
-    browser = playwright.chromium.launch(channel="chrome", headless=True)
-    try:
-        page = browser.new_page()
-        padding = "16px 22px" if background else "0"
-        page.set_content(f'<body style="margin:0;background:transparent"><div id="logo" style="display:inline-block;'
-                         f'padding:{padding};background:{background or "transparent"}"><img src="{url}" '
-                         f'style="display:block;height:{_LOGO_FILE_HEIGHT_PX}px"></div></body>')
-        page.wait_for_function("document.querySelector('img').complete", timeout=30_000)
-        page.locator("#logo").screenshot(path=str(path), omit_background=True)
-    finally:
-        browser.close()
-
-
 def _download_wikipedia_logo(file_name: str, path: Path) -> None:
     response = requests.get(WIKIPEDIA_API, headers=_HEADERS, timeout=60, params={
         "action": "query", "prop": "imageinfo", "iiprop": "url", "iiurlwidth": _WIKIPEDIA_LOGO_WIDTH_PX,
@@ -208,47 +181,26 @@ def _download_wikipedia_logo(file_name: str, path: Path) -> None:
 
 
 def logos() -> None:
-    """logos/<party_id>.png: the Wikipedia infobox logo, or the one on the party's website (PARTY_SITE_LOGOS)."""
-    from playwright.sync_api import sync_playwright
-
+    """logos/<party_id>.png: the list's Commons logo (PARTY_COMMONS_LOGOS), and lists.json pointed at them."""
     directory = out_dir() / "logos"
     directory.mkdir(parents=True, exist_ok=True)
     for stale in directory.glob("*.png"):
-        if int(stale.stem) not in PARTY_WIKIPEDIA_LOGOS.keys() | PARTY_SITE_LOGOS.keys():
+        if int(stale.stem) not in PARTY_COMMONS_LOGOS:
             stale.unlink()
-    for party_id, file_name in PARTY_WIKIPEDIA_LOGOS.items():
-        if party_id in PARTY_SITE_LOGOS:
-            continue
+    for party_id, file_name in PARTY_COMMONS_LOGOS.items():
         try:
             _download_wikipedia_logo(file_name, directory / f"{party_id}.png")
-            print(f"  [{party_id}] Wikipedia: {file_name}")
+            print(f"  [{party_id}] Commons: {file_name}")
         except Exception as exc:
-            print(f"  [{party_id}] Wikipedia {file_name} failed: {exc}")
+            print(f"  [{party_id}] Commons {file_name} failed: {exc}")
         time.sleep(1)
-    with sync_playwright() as playwright:
-        for party_id, logo_file in PARTY_SITE_LOGOS.items():
-            if logo_file:
-                url, background = logo_file
-                _render_logo_file(playwright, url, background, directory / f"{party_id}.png")
-                print(f"  [{party_id}] {url}: the file{f' on {background}' if background else ''}")
-                continue
-            url = PARTY_WEBSITES[party_id]
-            browser = playwright.chromium.launch(channel="chrome", headless=False)
-            try:
-                page = browser.new_context(locale="he-IL", viewport={"width": 1400, "height": 900}).new_page()
-                page.goto(url, wait_until="domcontentloaded", timeout=60_000)
-                page.wait_for_timeout(8000)
-                selector = page.evaluate(_LOGO_FINDER_JS)
-                if selector is None:
-                    print(f"  [{party_id}] {url}: no logo found")
-                    continue
-                page.locator("[data-knesset-lm-logo]").first.screenshot(path=str(directory / f"{party_id}.png"),
-                                                                         omit_background=True)
-                print(f"  [{party_id}] {url}: {selector}")
-            except Exception as exc:
-                print(f"  [{party_id}] {url} failed: {exc}")
-            finally:
-                browser.close()
+    lists_path = out_dir() / "lists.json"
+    if lists_path.exists():
+        payload = json.loads(lists_path.read_text(encoding="utf-8"))
+        for party in payload["parties"]:
+            party["logo"] = f"logos/{party['id']}.png" if (directory / f"{party['id']}.png").exists() else None
+        lists_path.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+        print(f"updated the logos in {lists_path}")
 
 
 # ── build: parse ─────────────────────────────────────────────────────────────

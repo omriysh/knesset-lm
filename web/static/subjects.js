@@ -68,7 +68,7 @@ function subjectsNav(link, event) {
 
 const _sjLink = (href, inner, cls = '') => `<a href="${pfEsc(href)}" class="${cls}" data-click="subjectsNav">${inner}</a>`;
 const _sjCrumbs = items => `<nav class="pf-crumbs">${items.map(([label, href]) => href ? _sjLink(href, pfEsc(label)) : `<span>${pfEsc(label)}</span>`).join(pfIcon('chevron_left'))}</nav>`;
-const _sjAllAi = `<div class="pf-ai-band">${pfIcon('auto_awesome')}<span>כל התוכן בעמוד זה נוצר על ידי AI</span></div>`;
+const _sjAllAi = `<div class="pf-ai-band">${pfIcon('auto_awesome')}<span>כל התוכן בעמוד זה נוצר על ידי AI ועלול להכיל טעויות</span></div>`;
 
 function _sjStagger(root) {
   root.querySelectorAll('.pf-stagger').forEach(list => [...list.children].forEach((child, i) => child.style.setProperty('--pf-i', i)));

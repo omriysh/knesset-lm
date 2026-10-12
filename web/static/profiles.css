@@ -20,10 +20,13 @@
 .pf-head h1 { font-size: 1.6rem; font-weight: 800; color: var(--ink); line-height: 1.2; letter-spacing: -0.01em; }
 .pf-head p { font-size: 0.82rem; color: var(--ink-muted); margin-top: 4px; max-width: 70ch; line-height: 1.6; }
 .pf-head p a { color: var(--primary); }
-.pf-head-main { flex: 1 1 320px; min-width: 0; }
-.pf-head-title { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0 8px; }
-.pf-head-title h1 { white-space: nowrap; }
-.pf-head-title .sj-how { flex: none; padding-inline: 4px; }
+.pf-head--list { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 280px); grid-template-areas: "title how search" "desc how search"; align-items: end; }
+.pf-head--list .pf-head-main, .pf-head--list .pf-head-title { display: contents; }
+.pf-head--list h1 { grid-area: title; white-space: nowrap; }
+.pf-head--list p { grid-area: desc; }
+.pf-head--list .sj-how { grid-area: how; padding-inline: 4px; }
+.pf-head--list .pf-search { grid-area: search; width: 100%; }
+@media (max-width: 900px) { .pf-head--list { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "title how" "desc desc" "search search"; align-items: center; } }
 .pf-search { flex: 0 1 280px; width: auto; min-width: 0; }
 
 /* Party grid */
@@ -38,7 +41,11 @@
 .pf-ballot--logo img { width: 78%; height: 70%; object-fit: contain; object-position: center; transform: none; }
 .pf-ballot-chip { position: absolute; top: 8px; inset-inline-start: 8px; min-width: 30px; padding: 2px 8px; border-radius: 9999px; background: var(--surface-low); color: var(--ink-soft); font-size: 0.72rem; font-weight: 800; text-align: center; }
 .pf-party-hero .pf-links { margin-top: 10px; }
-.pf-ballot-letters { font-size: 2rem; font-weight: 800; color: var(--ink-soft); }
+.pf-ballot--slip { container-type: inline-size; background: color-mix(in srgb, var(--ink) 9%, var(--surface-low)); }
+.pf-slip { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4cqi; width: 54cqi; height: 86%; padding: 6cqi 5cqi; background: #fff; color: #161616; border: 1px solid #9a9a9a; box-shadow: 0 3px 10px color-mix(in srgb, var(--ink) 12%, transparent); transform: rotate(-2deg); transition: transform 0.2s; }
+.pf-party:hover .pf-slip { transform: rotate(0deg) scale(1.03); }
+.pf-slip b { font-family: 'Frank Ruhl Libre', 'David', serif; font-size: 24cqi; font-weight: 900; line-height: 1; white-space: nowrap; }
+.pf-slip span { font-size: 4.6cqi; font-weight: 600; line-height: 1.25; text-align: center; text-wrap: balance; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .pf-party-body { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 4px; flex: 1; }
 .pf-party-name { font-size: 0.92rem; font-weight: 800; line-height: 1.4; color: var(--ink); text-wrap: balance; }
 .pf-party-leader { font-size: 0.78rem; color: var(--ink-muted); }

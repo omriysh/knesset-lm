@@ -151,9 +151,7 @@ function _pfPartyTags(party) {
 
 const _pfBallot = party => party.logo_url
   ? `<div class="pf-ballot pf-ballot--logo"><img src="${pfEsc(party.logo_url)}" alt="${pfEsc(party.name)}" loading="lazy"><span class="pf-ballot-chip">${pfEsc(party.letters)}</span></div>`
-  : `<div class="pf-ballot">${party.ballot_url
-    ? `<img src="${pfEsc(party.ballot_url)}" alt="פתק ${pfEsc(party.letters)}" loading="lazy">`
-    : `<span class="pf-ballot-letters">${pfEsc(party.letters)}</span>`}</div>`;
+  : `<div class="pf-ballot pf-ballot--slip"><div class="pf-slip"><b>${pfEsc(party.letters)}</b><span>${pfEsc(party.name)}</span></div></div>`;
 
 async function _pfRenderParties(root, current) {
   root.innerHTML = `<div class="pf-page">${pfSpinner('טוען את הרשימות…')}</div>`;
@@ -161,7 +159,7 @@ async function _pfRenderParties(root, current) {
   try { data = await pfFetch('/api/profiles/parties'); } catch (err) { if (current()) root.innerHTML = `<div class="pf-page">${pfErrorBox(err)}</div>`; return; }
   if (!current()) return;
   root.innerHTML = `<div class="pf-page">
-    <div class="pf-head">
+    <div class="pf-head pf-head--list">
       <div class="pf-head-main"><div class="pf-head-title"><h1>הרשימות לכנסת ה-26</h1>
       <button class="btn btn-ghost sj-how" type="button" data-click="subjectsProcess" data-arg="profiles">${pfIcon('account_tree')}איך זה נוצר?</button></div>
       <p>${data.parties.length} רשימות, כפי שהוגשו <a href="${pfEsc(data.source)}" target="_blank" rel="noopener">לוועדת הבחירות המרכזית</a> (טרם אושרו סופית), בסדר אלפאביתי.</p></div>
@@ -174,7 +172,7 @@ async function _pfRenderParties(root, current) {
         <div class="pf-party-leader">בראשות ${pfEsc(party.leader)}</div>
         <div class="pf-party-match" hidden></div>
         <div class="pf-party-stats">${_pfPartyTags(party)}</div>
-      </div>`, 'pf-party').replace('<a ', `<a data-party="${party.id}" data-search="${pfEsc(`${party.name} ${party.leader} ${party.letters}`)}" `)).join('')}</div>
+      </div>`, 'pf-party').replace('<a ', `<a data-party="${pfEsc(party.id)}" data-search="${pfEsc(`${party.name} ${party.leader} ${party.letters}`)}" `)).join('')}</div>
   </div>`;
   _pfPartyCandidates = Object.fromEntries(data.parties.map(party => [party.id, party.candidates]));
   _pfStaggerIn(root);
@@ -473,7 +471,7 @@ function _pfRenderThemes(showAll) {
   sub.textContent = `חלוקה גסה של התבטאויות מדיוני הכנסת לנושאים. מתוך ${pfNum(data.total_opinions)} התבטאויות שנצפו בדיונים, ${pfNum(data.opinions_in_a_theme)} נכללות בנושאים העיקריים האלה.`;
   const shown = showAll ? data.themes : data.themes.slice(0, THEMES_SHOWN);
   body.innerHTML = `
-    <div class="pf-ai-band">${pfIcon('auto_awesome')}<span>נוצר על ידי AI מסיכומי הפרוטוקולים · לחצו על נושא לסיכום ולכל העמדות בו</span></div>
+    <div class="pf-ai-band">${pfIcon('auto_awesome')}<span>נוצר על ידי AI מסיכומי הפרוטוקולים ועלול לטעות · לחצו על נושא לסיכום ולכל העמדות בו</span></div>
     <div class="pf-theme-map">${data.themes.map(t => `<button type="button" style="flex:${t.opinion_count};--tc:${t.color}" title="${pfEsc(t.title)} · ${pfNum(t.opinion_count)} עמדות" data-click="profilesThemeJump" data-arg="${_esc(t.id)}"></button>`).join('')}</div>
     <div class="pf-themes">${shown.map(theme => pfThemeCard(theme)).join('')}</div>
     ${data.themes.length > THEMES_SHOWN ? `<div class="pf-center"><button class="btn btn-secondary btn-sm" type="button" data-click="profilesThemesAll" data-arg="${_esc(showAll ? '' : '1')}">${showAll ? `${pfIcon('expand_less')}הצגת ${THEMES_SHOWN} הנושאים הראשונים` : `${pfIcon('expand_more')}הצגת כל ${data.themes.length} הנושאים`}</button></div>` : ''}`;

@@ -76,7 +76,6 @@ def candidate_card(party_id: int, candidate: dict) -> dict:
 def party_card(party: dict) -> dict:
     candidates = party["candidates"]
     return {"id": party["id"], "letters": party["letters"], "name": party["name"], "leader": party["leader"],
-            "ballot_url": f"/api/profiles/ballot/{party['id']}" if party.get("ballot") else None,
             "logo_url": f"/api/profiles/logo/{party['id']}" if party.get("logo") else None,
             "website": party.get("website"),
             "leader_photo_url": _photo_url(party["id"], candidates[0]) if candidates else None,
@@ -172,14 +171,6 @@ def profile_photo(party_id: int, candidate_id: int):
     if not path.exists():
         return JSONResponse({}, status_code=404)
     return FileResponse(str(path), media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
-
-
-@router.get("/api/profiles/ballot/{party_id}")
-def profile_ballot(party_id: int):
-    path = config.candidate_lists_dir(26) / "ballots" / f"{party_id}.png"
-    if find_party(party_id) is None or not path.exists():
-        return JSONResponse({}, status_code=404)
-    return FileResponse(str(path), media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
 
 
 @router.get("/api/profiles/logo/{party_id}")

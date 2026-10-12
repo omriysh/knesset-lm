@@ -8,6 +8,7 @@
   <link rel="icon" href="/favicon.ico" sizes="any">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
   <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Frank+Ruhl+Libre:wght@900&display=swap" rel="stylesheet"/>
   <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="{{ asset('components.css') }}">
   <link rel="stylesheet" href="{{ asset('tailwind.css') }}">
@@ -88,7 +89,7 @@
             <span class="material-symbols-outlined home-next-arrow">arrow_back</span>
           </a>
           <a class="home-card home-next-card home-next-card--middle" data-option="read" href="/subjects" data-click="landingOpenTab" data-arg="subjects" hidden>
-            <p>הנושאים שעלו בדיונים, והגישות השונות של חברי הכנסת לכל אחד מהם.</p>
+            <p>הנושאים העיקריים מהדיונים, והגישות השונות של חברי הכנסת לכל אחד מהם.</p>
             <span class="material-symbols-outlined home-next-arrow">arrow_back</span>
           </a>
           <a class="home-card home-next-card home-next-card--advanced" data-option="read" href="/protocols" data-click="landingOpenTab" data-arg="reading" hidden>
@@ -460,10 +461,11 @@
     <div class="gm-page">
       <section class="gm-intro" id="gm-intro" hidden>
         <button class="btn btn-primary gm-start" type="button" data-click="gameStart"><span id="gm-start-label">בואו נתחיל</span><span class="material-symbols-outlined">arrow_back</span></button>
+        <button class="gm-intro-parties" type="button" data-click="gameChooseParties" data-arg="play"><span class="material-symbols-outlined">groups</span><span>משחקים עם <b id="gm-intro-parties-label">כל המפלגות</b></span><span class="gm-intro-parties-edit">שינוי</span></button>
         <h2 class="gm-intro-title">איך זה עובד?</h2>
         <ol class="gm-steps">
           <li><span class="gm-step-icon"><span class="material-symbols-outlined">forum</span></span><span>בכל פעם תראו נושא שדיבר עליו אחד מחברי הכנסת בדיונים רשמיים, בלי לראות מי זה</span></li>
-          <li><span class="gm-step-icon"><span class="material-symbols-outlined">format_quote</span></span><span>תראו סיכום AI קצר לצד ציטוטים מדיוני הכנסת</span></li>
+          <li><span class="gm-step-icon"><span class="material-symbols-outlined">format_quote</span></span><span>תראו סיכום AI קצר (שעלול לטעות) לצד ציטוטים מדיוני הכנסת</span></li>
           <li><span class="gm-step-icon"><span class="material-symbols-outlined">swipe</span></span><span>תחליקו ימינה כדי להסכים ושמאלה כדי לא להסכים</span></li>
           <li><span class="gm-step-icon"><span class="material-symbols-outlined">pie_chart</span></span><span>אחרי שעברתם על מספיק עמדות, תראו מי חברי הכנסת שהסכמתם איתם ותוכלו לקרוא עליהם עוד</span></li>
         </ol>

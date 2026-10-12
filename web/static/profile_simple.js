@@ -196,7 +196,7 @@ async function _pfsLoadInterests(state) {
   state.interests = { ...payload, themes, themeById: Object.fromEntries(themes.map(t => [t.id, t])), periods: _pfsPeriods(payload.quarters) };
   state.period = state.interests.periods.length - 1;
   body.innerHTML = `
-    <div class="pf-ai-band">${pfIcon('auto_awesome')}<span>נוצר על ידי AI מסיכומי הפרוטוקולים · גודל הבועה = כמה עמדות הביע בתחום · הגישות קובצו מעמדות כל חברי הכנסת</span></div>
+    <div class="pf-ai-band">${pfIcon('auto_awesome')}<span>נוצר על ידי AI מסיכומי הפרוטוקולים ועלול להכיל טעויות · גודל הבועה = כמה עמדות הביע בתחום · הגישות קובצו מעמדות כל חברי הכנסת</span></div>
     <div class="pfs-interests-grid">
       <div class="pfs-viz-col">
         <div class="pfs-timeline">

@@ -2798,9 +2798,19 @@ input.field--sm { padding: 8px 12px; }
 /* ── Answer export (render/export.js): button at the answer's bottom left + print-only document ── */
 .answer-export-row {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   margin-top: 8px;
 }
+.answer-ai-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.72rem;
+  color: var(--ink-muted);
+}
+.answer-ai-note .material-symbols-outlined { font-size: 14px; color: var(--primary); }
 .answer-export-btn {
   display: inline-flex;
   align-items: center;

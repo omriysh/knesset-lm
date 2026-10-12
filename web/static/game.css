@@ -18,6 +18,11 @@
 .gm-step-icon::after { content: counter(gm-step); position: absolute; top: -4px; left: -4px; display: grid; place-items: center; width: 19px; height: 19px; border-radius: 50%; background: var(--primary); color: var(--on-primary, #fff); font-size: 0.7rem; font-weight: 800; }
 .gm-start { gap: 10px; padding: 16px 40px; font-size: 1.25rem; border-radius: 16px; box-shadow: 0 8px 24px color-mix(in srgb, var(--primary) 30%, transparent); }
 .gm-start .material-symbols-outlined { font-size: 24px; }
+.gm-intro-parties { display: inline-flex; align-items: center; gap: 8px; margin-top: 14px; padding: 7px 14px; border-radius: 999px; background: var(--surface-lowest); box-shadow: var(--shadow-raised); font-size: 0.86rem; color: var(--ink-soft); transition: background 0.15s; animation: gm-rise 0.45s 0.15s cubic-bezier(0.2, 0.7, 0.3, 1) backwards; }
+.gm-intro-parties:hover { background: var(--hover-tint); }
+.gm-intro-parties .material-symbols-outlined { font-size: 19px; color: var(--primary); }
+.gm-intro-parties b { color: var(--ink); }
+.gm-intro-parties-edit { font-weight: 700; color: var(--primary); }
 
 /* ── play ── */
 .gm-play { display: flex; flex-direction: column; align-items: center; gap: 18px; }

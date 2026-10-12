@@ -82,6 +82,7 @@ function _gmView(name) {
 function gameShow() {
   if (!_gm) _gmLoad();
   document.getElementById('gm-start-label').textContent = _gm.votes.length ? 'להמשיך לשחק' : 'בואו נתחיל';
+  document.getElementById('gm-intro-parties-label').textContent = _gmPartiesLabel('play');
   _gmView('intro');
 }
 
@@ -227,7 +228,7 @@ async function gameInfo() {
   try { subject = await pfFetch(`/api/subjects/${encodeURIComponent(card.subject.id)}`); } catch (err) { body.innerHTML = pfErrorBox(err); return; }
   if (_gmQueue[0] !== card) return;
   body.innerHTML = `
-    <div class="pf-ai-band">${pfIcon('auto_awesome')}<span>נוצר על ידי AI מעמדות חברי הכנסת בדיונים</span></div>
+    <div class="pf-ai-band">${pfIcon('auto_awesome')}<span>נוצר על ידי AI מעמדות חברי הכנסת בדיונים ועלול להכיל טעויות</span></div>
     <h3 class="gm-info-head">${pfIcon('history_edu')}רקע</h3>
     <p class="gm-info-text">${pfEsc(subject.background)}</p>
     <h3 class="gm-info-head">${pfIcon('alt_route')}הגישות השונות</h3>
@@ -272,8 +273,10 @@ async function gameResults() {
     root.innerHTML = `<div class="gm-results-inner gm-before">
       <h2 class="gm-intro-title">שנייה לפני</h2>
       <ol class="gm-steps">
-        <li><span class="gm-step-icon">${pfIcon('how_to_vote')}</span><span>זו לא המלצה למי להצביע! ככל שתשחקו יותר התוצאה תהיה מדויקת יותר, ותמיד מומלץ לקרוא עוד על המועמדים והמפלגה.</span></li>
+        <li><span class="gm-step-icon">${pfIcon('how_to_vote')}</span><span>זו לא המלצה למי להצביע! תמיד מומלץ לקרוא עוד על המועמדים והמפלגה.</span></li>
+        <li><span class="gm-step-icon">${pfIcon('favorite')}</span><span>כמו באתרי היכרויות רגילים, גם פה לוקח זמן למצוא את האחת. ככל שתשחקו יותר ותגיבו ליותר נושאים, התוצאה תהיה יותר מדויקת.</span></li>
         <li><span class="gm-step-icon">${pfIcon('person_search')}</span><span>המשחק מורכב רק מעמדות שנאמרו בכנסת. ברוב המפלגות יש מועמדות ומועמדים רבים שעוד לא כיהנו בכנסת, ומומלץ לקרוא גם עליהם.</span></li>
+        <li><span class="gm-step-icon">${pfIcon('auto_awesome')}</span><span>את הסיכומים והעמדות כתב מודל שפה, והוא עלול לטעות, גם בייחוס עמדה לאדם הלא נכון. לכל עמדה מצורפים ציטוטים מהפרוטוקול.</span></li>
       </ol>
       <button class="btn btn-primary gm-start" type="button" data-click="gameResultsNoteSeen">הבנתי, לתוצאות${pfIcon('arrow_back')}</button>
     </div>`;
@@ -494,6 +497,7 @@ function _gmPrefsChanged(playChanged) {
     if (_gm && !document.getElementById('gm-play').hidden) { _gmRenderStack(); _gmFill(); }
   }
   if (_gmResults && !document.getElementById('gm-results').hidden) _gmRenderResults();
+  document.getElementById('gm-intro-parties-label').textContent = _gmPartiesLabel('play');
   if (document.getElementById('settings-overlay').classList.contains('open')) gameSettingsRefresh();
 }
 

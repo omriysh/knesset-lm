@@ -107,6 +107,7 @@ export function addAnswerExportButton(answerRow) {
   const buttonRow = document.createElement('div');
   buttonRow.className = 'answer-export-row';
   buttonRow.innerHTML = `
+    <span class="answer-ai-note"><span class="material-symbols-outlined">auto_awesome</span>נכתב על ידי AI ועלול להכיל טעויות · בדקו את המקורות</span>
     <button type="button" class="answer-export-btn" title="ייצוא ל-PDF">
       <span class="material-symbols-outlined">picture_as_pdf</span><span>ייצוא</span>
     </button>`;
