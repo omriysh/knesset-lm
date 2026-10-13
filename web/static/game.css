@@ -234,6 +234,16 @@
 .gm-cta:hover > .material-symbols-outlined { transform: translateX(-4px); }
 .gm-results-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
 .gm-results-actions .btn { gap: 6px; }
+.gm-reset { display: flex; align-items: center; gap: 4px; margin: 4px auto 0; padding: 4px 8px; border: 0; background: none; font: inherit; font-size: 0.82rem; font-weight: 600; color: var(--ink-faint); cursor: pointer; transition: color 0.15s; }
+.gm-reset .material-symbols-outlined { font-size: 17px; }
+.gm-reset:hover { color: var(--error); }
+.gm-bars-note .gm-reset { margin: 0; padding: 0; font-size: inherit; color: var(--ink-muted); }
+.gm-bars-note .gm-reset .material-symbols-outlined { font-size: 14px; }
+.gm-bars-note .gm-reset:hover { color: var(--error); }
+.gm-reset-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.gm-reset-actions .btn { gap: 6px; }
+.gm-reset-confirm { background: var(--error); color: #fff; }
+.gm-reset-confirm:hover { background: color-mix(in srgb, var(--error) 85%, #000); }
 
 /* ── full theme dialog ── */
 #gm-theme-overlay, #gm-info-overlay, #gm-parties-overlay { position: fixed; inset: 0; z-index: 80; display: none; align-items: center; justify-content: center; padding: 16px; background: color-mix(in srgb, var(--ink) 40%, transparent); }

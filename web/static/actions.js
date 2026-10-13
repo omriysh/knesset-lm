@@ -44,6 +44,8 @@ const PAGE_ACTIONS = {
   gameInfoBackdrop:             (el, event) => { if (event.target === el) gameCloseInfo(); },
   gameOpenProfile:              (el, event) => gameOpenProfile(el, event),
   gameHowOrdered:               () => gameHowOrdered(),
+  gameAskReset:                 () => gameAskReset(),
+  gameReset:                    () => gameReset(),
   landingScrollToSection:       (el, event) => landingScrollToSection(event, el.getAttribute('href').slice(1)),
   landingCopyField:             (el) => landingCopyField(el),
   landingCopyChatgptPrompt:     (el) => landingCopyChatgptPrompt(el),

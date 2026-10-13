@@ -10,7 +10,8 @@
 const GAME_STORAGE_KEY = 'knessetGame';
 const GAME_PREFS_KEY = 'knessetGamePrefs';
 const GAME_TOP_PARTIES = 5;
-const GAME_RANK_PRIOR = 4;
+const GAME_RANK_PRIOR = 6;
+const GAME_VIA_WEIGHT = 0.7;
 const GAME_FIRST_RESULTS = 10;
 const GAME_STRONG_RESULTS = 30;
 const GAME_SWIPE_PX = 100;
@@ -310,8 +311,15 @@ const _gmShownParties = () => {
   return chosen ? _gmResults.parties.filter(p => chosen.includes(p.party.id)) : _gmResults.parties;
 };
 
+/* A theme met through its approach counts less than a theme swiped directly. */
+const _gmWeight = refs => refs.reduce((sum, ref) => sum + (ref.swiped ? GAME_VIA_WEIGHT : 1), 0);
+const _gmWeightLabel = weight => pfNum(Math.round(weight * 10) / 10);
+
 /* Agreed minus disagreed over the approaches seen, plus a few, so a party met on few cards stays near zero. */
-const _gmBalance = party => (party.agreed.length - party.disagreed.length) / (party.agreed.length + party.disagreed.length + GAME_RANK_PRIOR);
+const _gmBalance = party => {
+  const agreed = _gmWeight(party.agreed), disagreed = _gmWeight(party.disagreed);
+  return (agreed - disagreed) / (agreed + disagreed + GAME_RANK_PRIOR);
+};
 const _gmBalanceLabel = party => {
   const balance = Math.round(100 * _gmBalance(party)) / 100;
   return `${balance > 0 ? '+' : balance < 0 ? '−' : ''}${Math.abs(balance).toFixed(2)}`;
@@ -348,7 +356,7 @@ function _gmRateBars(parties, score) {
     <div class="gm-bars-legend"><span></span><button type="button" class="gm-bars-score-head" data-click="gameHowOrdered" title="איך זה מסודר?"><span>ניקוד</span>${pfIcon('help')}</button><span class="gm-bars-legend-track"><span class="gm-bars-legend--no">${pfIcon('heart_broken')}לא הסכמת</span><span class="gm-bars-legend--yes">הסכמת${pfIcon('favorite')}</span></span></div>
     ${rows.map(row).join('')}
     ${more > 0 ? `<button type="button" class="gm-tool gm-bars-all" data-click="gameBarsAll">${pfIcon('expand_more')}<span class="gm-bars-more">עוד ${pfNum(more)} ${more === 1 ? 'מפלגה' : 'מפלגות'}</span><span class="gm-bars-less">הצגת פחות</span></button>` : ''}</div>
-  <p class="gm-bars-note">לחצו על מפלגה כדי לראות את הפירוט</p>`;
+  <p class="gm-bars-note">לחצו על מפלגה כדי לראות פירוט<span aria-hidden="true">·</span>${_gmResetButton()}</p>`;
 }
 
 function gameHowOrdered() {
@@ -361,9 +369,10 @@ function gameHowOrdered() {
     <div class="gm-order-formula"><span>הסכמות − אי־הסכמות</span><i></i><span>גישות של המפלגה שראית + ${GAME_RANK_PRIOR}</span></div>
     <ul class="gm-order-points">
       <li>${pfIcon('balance')}<span>מפלגה שהסכמת איתה ברוב הפעמים שפגשת אותה תהיה למעלה, גם אם פגשת אותה פחות פעמים ממפלגות אחרות.</span></li>
+      <li>${pfIcon('alt_route')}<span>עמדה שהחלקת עליה ישירות נספרת כ־1, ועמדה באותה גישה כמו עמדה שהחלקת נספרת כ־${GAME_VIA_WEIGHT}.</span></li>
       <li>${pfIcon('shield')}<span>ה־${GAME_RANK_PRIOR} שבמכנה שומר על מפלגות שפגשת רק מעט קרוב לאפס, כדי שהסכמה אחת לא תקפיץ אותן לראש. ככל שתשחקו יותר, ההשפעה שלו קטנה.</span></li>
     </ul>
-    ${top ? `<p class="gm-order-example">למשל, ${pfEsc(top.party.name)}: <bdi class="gm-order-math" dir="ltr">(${pfNum(top.agreed.length)} − ${pfNum(top.disagreed.length)}) ÷ (${pfNum(top.agreed.length + top.disagreed.length)} + ${GAME_RANK_PRIOR}) = <b>${_gmBalanceLabel(top)}</b></bdi></p>` : ''}`;
+    ${top ? `<p class="gm-order-example">למשל, ${pfEsc(top.party.name)}: <bdi class="gm-order-math" dir="ltr">(${_gmWeightLabel(_gmWeight(top.agreed))} − ${_gmWeightLabel(_gmWeight(top.disagreed))}) ÷ (${_gmWeightLabel(_gmWeight(top.agreed) + _gmWeight(top.disagreed))} + ${GAME_RANK_PRIOR}) = <b>${_gmBalanceLabel(top)}</b></bdi></p>` : ''}`;
   overlay.classList.add('open');
 }
 
@@ -405,6 +414,32 @@ function _gmResultsActions() {
     </div>`;
 }
 
+const _gmResetButton = () => `<button class="gm-reset" type="button" data-click="gameAskReset">${pfIcon('restart_alt')}איפוס</button>`;
+
+function gameAskReset() {
+  const overlay = document.getElementById('gm-info-overlay');
+  overlay.dataset.size = 'small';
+  overlay.querySelector('.gm-info-title').innerHTML = '<b>להתחיל מחדש?</b>';
+  overlay.querySelector('.gm-info-body').innerHTML = `
+    <p class="gm-info-text">כל ההחלקות והתוצאות שלכם יימחקו מהמכשיר הזה, בלי אפשרות לשחזר אותן.</p>
+    <div class="gm-reset-actions">
+      <button class="btn btn-secondary" type="button" data-click="gameCloseInfo">ביטול</button>
+      <button class="btn gm-reset-confirm" type="button" data-click="gameReset">${pfIcon('delete')}כן, למחוק</button>
+    </div>`;
+  overlay.classList.add('open');
+}
+
+function gameReset() {
+  _gm = { v: 1, votes: [] };
+  _gmSave();
+  _gmResults = null;
+  _gmQueue = [];
+  _gmDone = false;
+  _gmQueueGeneration++;
+  gameCloseInfo();
+  gameShow();
+}
+
 function _gmRenderResults() {
   const parties = _gmShownParties();
   const score = _gmScorer();
@@ -433,7 +468,7 @@ function _gmRenderResults() {
       <svg class="gm-pie" viewBox="-110 -105 220 210" aria-hidden="true">${_gmHalfPie('agreed', parties, score)}${_gmHalfPie('disagreed', parties, score)}</svg>
       <span class="gm-pie-label gm-pie-label--no">${pfIcon('heart_broken')}לא הסכמת</span>
     </div>
-    <div class="gm-legends"><div class="gm-legend">${legend('agreed')}</div><div class="gm-legend">${legend('disagreed')}</div></div>`}
+    <div class="gm-legends"><div class="gm-legend">${legend('agreed')}</div><div class="gm-legend">${legend('disagreed')}</div></div>${_gmResetButton()}`}
     <div class="gm-slice-panel" id="gm-slice-panel"></div>
     ${_gmResultsActions()}
   </div>`;
