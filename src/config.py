@@ -332,7 +332,7 @@ MCP_ALLOWED_ORIGINS           = ("https://meorav.com", "https://mcp.meorav.com",
 # Cloudflare Access in front of MCP: requests that came through Cloudflare must carry a valid
 # Cf-Access-Jwt-Assertion; local requests (peer in MCP_LOCAL_PEER_HOSTS, no Cloudflare headers) skip it.
 # Empty team domain or audiences → every Cloudflare request is refused (403).
-MCP_REQUIRE_CLOUDFLARE_ACCESS = True
+MCP_REQUIRE_CLOUDFLARE_ACCESS = False
 CF_ACCESS_TEAM_DOMAIN         = "wild-wildflower-e296.cloudflareaccess.com"
 CF_ACCESS_AUDIENCES           = ("497cbb31a985d70c20aa792149f1b0920d813b9f4c6c190c2f251085debeabc6",)  # Access app AUD tags covering MCP
 CF_ACCESS_JWKS_CACHE_SECONDS  = 3600
