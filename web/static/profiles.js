@@ -153,11 +153,11 @@ const _pfLink = (href, inner, cls = '') => `<a href="${pfEsc(href)}" class="${cl
 const _pfCrumbs = items => `<nav class="pf-crumbs">${items.map(([label, href]) => href ? _pfLink(href, pfEsc(label)) : `<span>${pfEsc(label)}</span>`).join(pfIcon('chevron_left'))}</nav>`;
 
 const pfKnessetLabel = knesset => `הכנסת ה-${knesset}`;
-/* 25 → '2022–2026'; the sitting Knesset → '2026–' */
+/* 25 → '2022–2026' (isolated LTR, so RTL text keeps its order); the sitting Knesset → '2026 עד היום' */
 function pfKnessetYears(knesset) {
   const start = KNESSET_START_YEARS[knesset - 1], end = KNESSET_START_YEARS[knesset];
   if (end == null) return `${start} עד היום`;
-  return start === end ? `${start}` : `${start}–${end}`;
+  return start === end ? `${start}` : `⁦${start}–${end}⁩`;
 }
 const pfInLabel = label => `ב${label.replace(/^ה/, '')}`;
 /* [24, 25] → 'הכנסות ה-24 וה-25' */
@@ -519,19 +519,19 @@ function profilesKnessetMenu(button) {
   menu.setAttribute('role', 'menu');
   menu._anchor = button;
   const positions = knesset => _pf.roles ? _pf.roles.knessets.find(k => k.knesset_num === knesset) : null;
-  menu.innerHTML = `<div class="pf-kmenu-head">באיזו כנסת להציג את הפרופיל?</div>${_pf.knessets.map((knesset, index) => {
+  menu.innerHTML = `<div class="pf-kmenu-scroll"><div class="pf-kmenu-head">באיזו כנסת להציג את הפרופיל?</div>${_pf.knessets.map((knesset, index) => {
     const faction = _pfFactionOf(positions(knesset));
     const selected = knesset === _pf.knesset;
     return `<button class="pf-kopt${selected ? ' sel' : ''}" style="--i:${index}" type="button" role="menuitem" data-click="profilesPickKnesset" data-arg="${_esc(knesset)}">
       <span class="pf-kopt-main"><span class="pf-kopt-years">${pfKnessetYears(knesset)}</span><span class="pf-kopt-sub">${pfKnessetLabel(knesset)}${faction ? ` · סיעת ${pfEsc(faction)}` : ''}</span></span>
       ${_pfKnessetTag(_pf, knesset)}${selected ? pfIcon('check') : ''}</button>`;
-  }).join('')}`;
+  }).join('')}</div>`;
   document.body.appendChild(menu);
   button.setAttribute('aria-expanded', 'true');
   const rect = button.getBoundingClientRect();
-  const width = Math.min(320, innerWidth - 24);
+  const width = Math.min(Math.max(rect.width, 300), innerWidth - 24);
   menu.style.width = `${width}px`;
-  menu.style.left = `${Math.max(12, Math.min(rect.right - width, innerWidth - width - 12))}px`;
+  menu.style.left = `${Math.max(12, Math.min(rect.left + (rect.width - width) / 2, innerWidth - width - 12))}px`;
   const below = innerHeight - rect.bottom - 8, above = rect.top - 8;
   const height = menu.offsetHeight;
   if (height <= below || below >= above) {

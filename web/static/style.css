@@ -3259,6 +3259,7 @@ body.show-welcome .research-slot { display: block; }
   #lp-install-tabs { display: flex; }
   #lp-install { width: calc(100cqw - 24px); padding-top: 32px; }
   .lp-install { padding: 10px 10px 0; border-radius: 20px; }
+  html:not(.election-mode) .lp-install { padding-inline: 0; background: none; box-shadow: none; }
   #lp-install-tabs { align-self: stretch; }
   .lp-steps { padding: 16px 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; mask-image: linear-gradient(transparent, #000 16px, #000 calc(100% - 16px), transparent); }
   .lp-steps > :first-child { margin-inline-start: 0; margin-block-start: auto; }

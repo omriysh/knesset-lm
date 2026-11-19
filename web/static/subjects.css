@@ -9,7 +9,7 @@
 .sj-how { display: inline-flex; align-items: center; gap: 6px; color: var(--primary); font-weight: 700; }
 .sj-how .material-symbols-outlined { font-size: 19px; }
 
-.sj-top { display: flex; align-items: center; justify-content: space-between; gap: 6px 12px; min-height: 40px; }
+.sj-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; min-height: 40px; }
 .sj-top .pf-crumbs { margin: 0; min-width: 0; }
 .sj-knesset { display: inline-flex; align-items: center; gap: 5px; margin-inline-start: auto; padding: 3px 11px; border-radius: 999px; background: var(--primary-soft); color: var(--primary); font-size: 0.8rem; font-weight: 700; white-space: nowrap; }
 .sj-knesset .material-symbols-outlined { font-size: 16px; }
@@ -97,6 +97,7 @@ a.sj-owner:hover, button.sj-owner:hover { background: color-mix(in srgb, var(--p
 .sj-prompt pre { max-height: 260px; overflow: auto; margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--surface-lowest); font-size: 0.7rem; line-height: 1.55; white-space: pre-wrap; text-align: left; color: var(--ink-soft); }
 
 @media (max-width: 640px) {
+  .sj-knesset { order: 3; margin-inline-start: 0; }
   .sj-about { grid-template-columns: minmax(0, 1fr); }
   #subjects-root:has(.sj-page--play) { height: 100%; }
   .sj-page--play { box-sizing: border-box; height: 100%; padding-bottom: calc(70px + env(safe-area-inset-bottom, 0px)); }
