@@ -76,10 +76,10 @@
   <div id="tab-home" class="app-tab-panel">
    <div class="landing">
     <div class="landing-content home">
-      <h1 class="lp-headline home-title">בואו להכיר את <span class="lp-mark">המועמדים</span> לכנסת</h1>
+      <h1 class="lp-headline home-title">בואו להכיר את <span class="lp-mark">חברי הכנסת</span></h1>
       <div class="home-graph" id="home-graph">
         <div class="home-card home-choices">
-          <button class="home-choice" type="button" data-click="homePick" data-arg="play"><span class="material-symbols-outlined">favorite</span>בואו נכיר</button>
+          <button class="home-choice election-only" type="button" data-click="homePick" data-arg="play"><span class="material-symbols-outlined">favorite</span>בואו נכיר</button>
           <button class="home-choice" type="button" data-click="homePick" data-arg="read"><span class="material-symbols-outlined">menu_book</span>תן לי לקרוא בעצמי</button>
           <button class="home-choice" type="button" data-click="homePick" data-arg="talk"><span class="material-symbols-outlined">forum</span>תן לי לדבר עם הצ'אט</button>
         </div>
@@ -95,7 +95,7 @@
             <span class="material-symbols-outlined home-next-arrow">arrow_back</span>
           </a>
           <a class="home-card home-next-card" data-option="talk" href="/chat" data-click="landingOpenTab" data-arg="chat" hidden>
-            <p>למתקדמים - נותנים לצ'אט שלכם גישה לאתר הכנסת ומבינים מה העמדות של הפוליטיקאים ומה הם עשו.</p>
+            <p>נותנים לצ'אט שלכם גישה לאתר הכנסת ומבינים מה העמדות של הפוליטיקאים ומה הם עשו.</p>
             <span class="material-symbols-outlined home-next-arrow">arrow_back</span>
           </a>
           <a class="home-card home-next-card" data-option="read" href="/profiles" data-click="landingOpenTab" data-arg="profiles" hidden>
@@ -133,9 +133,8 @@
         <h2>דקה והצ'אט שלכם מחובר לאתר הכנסת</h2>
         <p class="lp-section-lede">מעורב ירושלמי הוא תוסף לצ'אט שלכם שנותן לו לחפש בדיונים ולבדוק מה הצביעו חברי הכנסת שלנו.</p>
         <div class="lp-install" id="lp-install-card">
-          <div class="lp-copied-banner" id="lp-copied-banner" hidden><span class="material-symbols-outlined">check_circle</span><span>הפרומפט הועתק. עכשיו מחברים, ואז מדביקים בצ'אט חדש.</span></div>
           <div class="seg" id="lp-install-tabs" role="tablist">
-            <button class="seg-btn active" role="tab" type="button" aria-selected="true" data-click="landingSetInstallTab" data-arg="claude">Claude<span class="lp-badge">הכי פשוט</span></button>
+            <button class="seg-btn active" role="tab" type="button" aria-selected="true" data-click="landingSetInstallTab" data-arg="claude">Claude</button>
             <button class="seg-btn" role="tab" type="button" aria-selected="false" data-click="landingSetInstallTab" data-arg="chatgpt">ChatGPT</button>
             <button class="seg-btn" role="tab" type="button" aria-selected="false" data-click="landingSetInstallTab" data-arg="gemini">Gemini</button>
           </div>
@@ -143,23 +142,30 @@
           <div class="lp-install-panels">
             <div class="home-graph lp-steps" data-lp-panel="claude">
               <div class="lp-step home-graph--open">
-                <div class="home-next"><div class="lp-step-body"><a class="home-card home-next-card" href="https://claude.ai/login" target="_blank" rel="noopener"><span class="lp-step-text"><b>נרשמים לקלוד</b><span>זה חינם!</span></span><span class="material-symbols-outlined lp-step-icon">open_in_new</span></a><span class="lp-step-skip" aria-hidden="true"><span class="material-symbols-outlined">chevron_left</span></span></div></div>
+                <div class="home-next"><div class="lp-step-body"><a class="home-card home-next-card" href="https://claude.ai/login" target="_blank" rel="noopener"><span class="lp-step-text"><b>נרשמים לקלוד</b><span>זה חינם. כבר יש לכם חשבון? ממשיכים לשלב הבא.</span></span><span class="material-symbols-outlined lp-step-icon">open_in_new</span></a><span class="lp-step-skip" aria-hidden="true"><span class="material-symbols-outlined">chevron_left</span></span></div></div>
               </div>
-              <div class="lp-step">
+              <div class="lp-step home-graph--open">
                 <div class="home-edge" aria-hidden="true"></div>
-                <div class="home-next"><div class="lp-step-body"><a class="home-card home-next-card" id="lp-claude-install" href="https://claude.ai/customize/connectors" target="_blank" rel="noopener"><span class="lp-step-text"><b>מוסיפים את מעורב</b><span>ייפתח לכם טופס, צריך רק לאשר.</span></span><span class="material-symbols-outlined lp-step-icon">open_in_new</span></a><span class="lp-step-skip" aria-hidden="true"><span class="material-symbols-outlined">chevron_left</span></span></div></div>
+                <div class="home-next"><div class="lp-step-body"><a class="home-card home-next-card" href="https://claude.ai/customize/connectors" target="_blank" rel="noopener" id="lp-claude-install"><span class="lp-step-text"><b>מוסיפים את מעורב</b><span>ייפתח לכם טופס, צריך רק לאשר.</span></span><span class="material-symbols-outlined lp-step-icon">open_in_new</span></a><span class="lp-step-skip" aria-hidden="true"><span class="material-symbols-outlined">chevron_left</span></span></div></div>
               </div>
-              <div class="lp-step">
+              <div class="lp-step home-graph--open">
                 <div class="home-edge" aria-hidden="true"></div>
-                <div class="home-next"><div class="lp-step-body"><a class="home-card home-next-card" href="https://claude.ai/new" target="_blank" rel="noopener"><span class="lp-step-text"><b>פותחים צ'אט חדש</b><span>ופשוט מתחילים לשאול.</span></span><span class="material-symbols-outlined lp-step-icon">open_in_new</span></a></div></div>
+                <div class="home-next"><div class="lp-step-body"><a class="home-card home-next-card" href="https://claude.ai/new" target="_blank" rel="noopener" data-lp-chat="claude" data-lp-prompt="start"><span class="lp-step-text"><b>פותחים צ'אט חדש</b><span>עם פרומפט פתיחה שכבר מחכה בתיבה. רק לשלוח.</span></span><span class="material-symbols-outlined lp-step-icon">open_in_new</span></a></div></div>
               </div>
             </div>
 
-            <div class="lp-gemini-panel lp-panel-off" data-lp-panel="chatgpt">
-              <p class="lp-gemini">מעורב ירושלמי ממתין לאישור בתור תוסף רשמי ל-ChatGPT. עד אז, הוספה ל-ChatGPT היא אפשרית אבל מעט מורכבת.</p>
-              <p class="lp-gemini-alt">אם תרצו לנסות, תבקשו מהצ'אט להוסיף שרת MCP בכתובת:</p>
-              <div class="lp-form-row lp-mcp-url"><code>https://meorav.com/mcp</code><button class="lp-form-copy" type="button" data-click="landingCopyField" data-arg="url" aria-label="העתקה"><span class="material-symbols-outlined">content_copy</span></button></div>
-              <button class="btn btn-secondary btn-sm lp-chatgpt-prompt" type="button" data-click="landingCopyChatgptPrompt"><span class="material-symbols-outlined">content_copy</span>העתקת פרומפט שמבקש מהצ'אט להוסיף את השרת</button>
+            <div class="home-graph lp-steps lp-panel-off" data-lp-panel="chatgpt">
+              <div class="lp-step home-graph--open">
+                <div class="home-next"><div class="lp-step-body"><a class="home-card home-next-card" href="https://chatgpt.com/auth/login" target="_blank" rel="noopener"><span class="lp-step-text"><b>נרשמים ל-ChatGPT</b><span>כבר יש לכם חשבון? ממשיכים לשלב הבא.</span></span><span class="material-symbols-outlined lp-step-icon">open_in_new</span></a><span class="lp-step-skip" aria-hidden="true"><span class="material-symbols-outlined">chevron_left</span></span></div></div>
+              </div>
+              <div class="lp-step home-graph--open">
+                <div class="home-edge" aria-hidden="true"></div>
+                <div class="home-next"><div class="lp-step-body"><a class="home-card home-next-card" href="https://chatgpt.com/" target="_blank" rel="noopener" data-lp-chat="chatgpt" data-lp-prompt="chatgpt-add"><span class="lp-step-text"><b>מוסיפים את מעורב</b><span>ייפתח צ'אט שיוסיף את מעורב בשבילכם, צריך רק לאשר.</span></span><span class="material-symbols-outlined lp-step-icon">open_in_new</span></a><span class="lp-step-skip" aria-hidden="true"><span class="material-symbols-outlined">chevron_left</span></span></div></div>
+              </div>
+              <div class="lp-step home-graph--open">
+                <div class="home-edge" aria-hidden="true"></div>
+                <div class="home-next"><div class="lp-step-body"><a class="home-card home-next-card" href="https://chatgpt.com/" target="_blank" rel="noopener" data-lp-chat="chatgpt" data-lp-prompt="start"><span class="lp-step-text"><b>פותחים צ'אט חדש</b><span>עם פרומפט פתיחה שכבר מחכה בתיבה. רק לשלוח.</span></span><span class="material-symbols-outlined lp-step-icon">open_in_new</span></a></div></div>
+              </div>
             </div>
 
             <div class="lp-gemini-panel lp-panel-off" data-lp-panel="gemini">
@@ -167,22 +173,25 @@
               <p class="lp-gemini-alt">אם יש לכם מפתח API של Google, אפשר להשתמש <a href="/research" data-click="landingOpenTab" data-arg="research">בצ'אט שלנו</a>, שמציג כל שלב בתהליך.</p>
             </div>
           </div>
+          <p class="lp-install-url">כתובת השרת, לכל צ'אט אחר שתומך ב-MCP: <code>https://meorav.com/mcp</code><button class="lp-form-copy" type="button" data-click="landingCopyField" data-arg="url" aria-label="העתקת הכתובת"><span class="material-symbols-outlined">content_copy</span></button></p>
         </div>
-        <a class="lp-next-section" href="#lp-cases-section" data-click="landingScrollToSection">הצעה לפרומפט<span class="material-symbols-outlined">keyboard_arrow_down</span></a>
+        <a class="lp-next-section election-only" href="#lp-cases-section" data-click="landingScrollToSection">הכנה לבחירות<span class="material-symbols-outlined">keyboard_arrow_down</span></a>
       </section>
 
-      <div class="lp-band lp-snap">
+      <div class="lp-band lp-snap election-only">
         <section class="lp-wrap lp-reveal" id="lp-cases-section">
-          <h2>לא בטוחים מה לשאול?</h2>
-          <p class="lp-section-lede">הצ'אט יכול להיות גם כלי לחשיבה ולעזור לכם למצוא את השאלות שמעניינות אתכם. הנה הצעה לשיחה שתעזור לכם להתניע, או הנחיות שיוסיפו את התיבול הנכון לפרומפטים שלכם.</p>
+          <h2>הכנה לבחירות</h2>
+          <p class="lp-section-lede">הפרומפטים שהכנו לקראת הבחירות לכנסת ה-26: שיחה שעוברת יחד איתכם על הנושאים החשובים לכם ועל עמדות המפלגות, או הנחיות שיוסיפו את התיבול הנכון לפרומפטים שלכם.</p>
           <div class="lp-review">
             <div class="lp-review-actions">
               <div class="lp-action">
                 <button class="btn btn-primary lp-copy" type="button" data-click="landingCopyReview"><span class="material-symbols-outlined">content_copy</span><span class="lp-copy-text"><b>העתקת הפרומפט</b><small>מדביקים בצ'אט ומתחילים</small></span></button>
+                <div class="lp-open-in">פתיחה ב-<a href="https://claude.ai/new" target="_blank" rel="noopener" data-lp-chat="claude" data-lp-prompt="review">Claude</a> או ב-<a href="https://chatgpt.com/" target="_blank" rel="noopener" data-lp-chat="chatgpt" data-lp-prompt="review">ChatGPT</a></div>
                 <details class="lp-peek"><summary>ה-prompt המלא</summary><div class="lp-prompt" id="lp-review-prompt"></div></details>
               </div>
               <div class="lp-action">
                 <button class="btn lp-guidelines-btn" type="button" data-click="landingCopyGuidelines"><span class="material-symbols-outlined">tips_and_updates</span>הנחיות מומלצות לשיחה כללית</button>
+                <div class="lp-open-in">פתיחה ב-<a href="https://claude.ai/new" target="_blank" rel="noopener" data-lp-chat="claude" data-lp-prompt="guidelines">Claude</a> או ב-<a href="https://chatgpt.com/" target="_blank" rel="noopener" data-lp-chat="chatgpt" data-lp-prompt="guidelines">ChatGPT</a></div>
                 <details class="lp-peek"><summary>ההנחיות</summary><div class="lp-prompt" id="lp-guidelines-prompt"></div></details>
               </div>
             </div>
@@ -664,6 +673,20 @@
       </section>
 
       <section class="settings-group">
+        <h3 class="settings-group-title">הבחירות לכנסת ה-26</h3>
+        <div class="settings-row">
+          <div>
+            <div class="settings-label">מצב הכנה לבחירות</div>
+            <div class="settings-desc">משחק ההיכרות, רשימות המועמדים והפרומפטים שהכנו לקראת הבחירות</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="toggle-election-mode" data-change="onElectionModeToggle">
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+      </section>
+
+      <section class="settings-group" id="settings-game">
         <h3 class="settings-group-title">משחק ההיכרות</h3>
         <div class="settings-row">
           <div>

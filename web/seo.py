@@ -2,7 +2,8 @@
 web/seo.py
 
 robots.txt and sitemap.xml for search engines. The sitemap lists the pages worth indexing: the tabs, the
-about pages, every party, every candidate with a profile, and every subject area and subject.
+about pages, every faction and MK of the sitting Knesset, every party, every candidate with a profile, and every
+subject area and subject.
 The research agent page is left out (it needs the visitor's Gemini key and has no content of its own).
 """
 
@@ -15,7 +16,7 @@ from fastapi.responses import PlainTextResponse, Response
 import config
 from profiles import subjects
 from retrieval import knesset_db_store as store
-from web.profiles import ACTIVITY_KNESSET, candidate_lists
+from web.profiles import ACTIVITY_KNESSET, candidate_lists, knesset_roster
 
 router = APIRouter()
 
@@ -25,6 +26,9 @@ SITEMAP_TAB_PATHS = ("/", "/game", "/profiles", "/subjects", config.PROTOCOLS_PA
 
 def _profile_paths() -> list[str]:
     paths = []
+    for faction in knesset_roster()["factions"]:
+        paths.append(f"/profiles/faction/{faction['id']}")
+        paths += [f"/profiles/mk/{member['person_id']}" for member in faction["members"]]
     for party in candidate_lists()["parties"]:
         paths.append(f"/profiles/party/{party['id']}")
         paths += [f"/profiles/party/{party['id']}/candidate/{c['position']}"

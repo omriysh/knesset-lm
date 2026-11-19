@@ -52,6 +52,14 @@ function subjectsShow() {
   if (!document.querySelector('#subjects-root > *')) _sjRender();
 }
 
+/* MK links point at candidates in election mode and at sitting MKs otherwise. */
+document.addEventListener('electionmodechange', () => {
+  const root = document.getElementById('subjects-root');
+  if (!root) return;
+  root.innerHTML = '';
+  if (!document.getElementById('tab-subjects').classList.contains('hidden')) _sjRender();
+});
+
 function subjectsGo(href) {
   const url = new URL(href, location.origin);
   history.pushState(null, '', url.pathname);
@@ -105,7 +113,11 @@ const PLAY_MIN_RADIUS_PX = 32;
 
 let _sjPlay = null;
 
-const _sjTop = crumbs => `<div class="sj-top">${_sjCrumbs(crumbs)}
+const _sjKnessetChip = () => _sjAreas
+  ? `<span class="sj-knesset" title="הנושאים נוצרו מהדיונים בוועדות ${pfKnessetLabel(_sjAreas.knesset_num)}">${pfIcon('calendar_month')}${pfKnessetLabel(_sjAreas.knesset_num)} · ${pfKnessetYears(_sjAreas.knesset_num)}</span>`
+  : '';
+
+const _sjTop = crumbs => `<div class="sj-top">${_sjCrumbs(crumbs)}${_sjKnessetChip()}
   <button class="btn btn-ghost sj-how" type="button" data-click="subjectsProcess">${pfIcon('account_tree')}איך זה נוצר?</button></div>`;
 
 async function _sjAreasPage() {
@@ -156,14 +168,15 @@ const _sjMajority = (approach, approaches) => approach.mk_count === Math.max(...
 const _sjTag = majority => `<span class="pfs-tag ${majority ? 'pfs-tag--majority' : 'pfs-tag--minority'}">${majority ? 'דעת רוב' : 'דעת מיעוט'}</span>`;
 
 async function _sjSubjectPage(subjectId) {
-  const subject = _sjSubject && _sjSubject.id === subjectId ? _sjSubject : await pfFetch(`${SUBJECTS_API}/${subjectId}`);
+  const [subject] = await Promise.all([
+    _sjSubject && _sjSubject.id === subjectId ? _sjSubject : pfFetch(`${SUBJECTS_API}/${subjectId}`), _sjLoadAreas()]);
   _sjSubject = subject;
   const total = Math.max(1, subject.mk_count);
   const overlap = subject.approaches.reduce((sum, a) => sum + a.mk_count, 0) > subject.mk_count;
   return `<div class="pf-page sj-page">
     ${_sjTop([['כל התחומים', SUBJECTS_PATH], [subject.umbrella, _sjAreaPath(subject.umbrella)]])}${_sjAllAi}
     <div class="pf-head"><div><h1>${pfEsc(subject.name)}</h1>
-      <p>${pfNum(subject.mk_count)} חברי כנסת דיברו על הנושא · ${pfNum(subject.approaches.length)} גישות</p></div></div>
+      <p>${pfNum(subject.mk_count)} חברי כנסת דיברו על הנושא ${pfInLabel(pfKnessetLabel(_sjAreas.knesset_num))} · ${pfNum(subject.approaches.length)} גישות</p></div></div>
     <div class="sj-about">
       <section class="pfs-card"><h2 class="pfs-card-title">${pfIcon('info')}על הנושא</h2><p>${pfEsc(subject.description)}</p></section>
       <section class="pfs-card"><h2 class="pfs-card-title">${pfIcon('menu_book')}רקע</h2><p>${pfEsc(subject.background)}</p></section>
@@ -223,10 +236,12 @@ function subjectsApproach(button) {
 }
 
 function _sjThemeOwner(mk) {
-  const inner = `${pfAvatar(mk.photo_url, mk.name)}<span class="sj-owner-text"><b>${pfEsc(mk.name)}</b><small>${pfEsc(mk.party)}</small></span>`;
-  return mk.profile_url
-    ? `<a class="sj-owner" href="${pfEsc(mk.profile_url)}" data-click="subjectsOpenProfile" title="לפרופיל">${inner}${pfIcon('arrow_back')}</a>`
-    : `<button class="sj-owner" type="button" data-click="subjectsNotCandidate" data-name="${_esc(mk.name)}" data-party="${_esc(mk.party)}" data-photo="${_esc(mk.photo_url || '')}" title="אין פרופיל מלא">${inner}${pfIcon('info')}</button>`;
+  const profileUrl = electionMode() ? mk.profile_url : mk.mk_profile_url;
+  const photoUrl = (electionMode() ? mk.photo_url : mk.mk_photo_url) || mk.photo_url;
+  const inner = `${pfAvatar(photoUrl, mk.name)}<span class="sj-owner-text"><b>${pfEsc(mk.name)}</b><small>${pfEsc(mk.party)}</small></span>`;
+  return profileUrl
+    ? `<a class="sj-owner" href="${pfEsc(profileUrl)}" data-click="subjectsOpenProfile" title="לפרופיל">${inner}${pfIcon('arrow_back')}</a>`
+    : `<button class="sj-owner" type="button" data-click="subjectsNotCandidate" data-name="${_esc(mk.name)}" data-party="${_esc(mk.party)}" data-photo="${_esc(photoUrl || '')}" title="אין פרופיל מלא">${inner}${pfIcon('info')}</button>`;
 }
 
 function subjectsNotCandidate(button) {
@@ -234,7 +249,8 @@ function subjectsNotCandidate(button) {
   const overlay = document.getElementById('sj-mk-overlay');
   overlay.querySelector('.dialog-body').innerHTML = `<div class="sj-mk-note">
     ${pfAvatar(photo || null, name)}<b>${pfEsc(name)}</b><small>${pfEsc(party)}</small>
-    <p>חבר/ת הכנסת אינו/ה מועמד/ת לכנסת ה-26, ולכן אין לו/ה פרופיל מלא באתר.</p></div>`;
+    <p>${electionMode() ? 'חבר/ת הכנסת אינו/ה מועמד/ת לכנסת ה-26, ולכן אין לו/ה פרופיל מלא באתר.'
+      : 'חבר/ת הכנסת אינו/ה חבר/ת הכנסת ה-26, ולכן אין לו/ה פרופיל באתר.'}</p></div>`;
   overlay.classList.add('open');
 }
 
@@ -284,7 +300,8 @@ async function subjectsProcess(scope) {
     ${_sjProcessStep('themes', 'person', 'קיבוץ העמדות של כל ח״כ לנושאים', `${pfNum(counts.themes)} נושאים`,
       `המודל קיבל את כל העמדות של חבר/ת כנסת אחד/ת וקיבץ אותן לנושאים שחוזרים בדבריו/ה. אלה הנושאים שבעמוד הפרופילים.`)}`;
   if (forProfiles) {
-    body.innerHTML = `<p class="sj-flow-intro">רשימות המועמדים נלקחו מאתר ועדת הבחירות המרכזית. ההצבעות, הצעות החוק והכהונות מגיעים ישירות מאתר הכנסת, והנוכחות בוועדות מפרוטוקולי הדיונים.</p>
+    const roster = electionMode() ? 'רשימות המועמדים נלקחו מאתר ועדת הבחירות המרכזית.' : 'הסיעות וחברי הכנסת נלקחו מאתר הכנסת.';
+    body.innerHTML = `<p class="sj-flow-intro">${roster} ההצבעות, הצעות החוק והכהונות מגיעים ישירות מאתר הכנסת, והנוכחות בוועדות מפרוטוקולי הדיונים.</p>
     <p class="sj-flow-intro">את הנושאים והעמדות יצר מודל השפה gemini-3.8-flash מתוך הדיונים בוועדות ${pfInLabel(pfKnessetLabel(counts.knesset_num))}.</p>
     <div class="sj-flow">${opinionsAndThemes}</div>
     <p class="sj-flow-intro sj-flow-outro">הפרופילים המקוצרים מציגים גם נתונים שנוצרו עבור לשונית הנושאים (תחומים, נושאים משותפים וגישות), בתהליך שמוסבר שם.</p>

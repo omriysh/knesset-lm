@@ -72,6 +72,11 @@ def subjects_dir(knesset_num: int = 25) -> Path:
     return DATA_DIR / "subjects" / str(knesset_num)
 
 
+def knesset_roster_dir(knesset_num: int = 26) -> Path:
+    """Factions and MKs of a sitting Knesset (roster.json, photos/, logos/), built by scripts/build_knesset_roster.py."""
+    return DATA_DIR / "knesset_roster" / str(knesset_num)
+
+
 def candidate_lists_dir(election_knesset_num: int = 26) -> Path:
     """Candidate lists of an election (lists.json, ballots/, photos/), built by scripts/build_candidate_lists.py."""
     return DATA_DIR / "candidates" / str(election_knesset_num)
@@ -295,6 +300,7 @@ API_MAX_OFFSET                = 5000       # rows: query_bills, query_votes
 BILL_TEXT_MAX_OFFSET          = 2_000_000  # characters into one bill document's text (get_bill)
 API_KNESSET_NUM_RANGE         = (1, 25)  # live OData tools (votes, bills, find_mk, find_party, find_committee); omitted = every Knesset for votes and bills
 PROTOCOL_KNESSET_NUMS         = (24, 25) # Knessets preprocessed into knesset.db, ascending; protocol tools, find_mk and find_committee default to all of them
+CURRENT_KNESSET_NUM           = 26       # the sitting Knesset: the profiles tab's factions and MKs (Data/knesset_roster)
 ROSTER_DEFAULT_KNESSET_NUM    = max(PROTOCOL_KNESSET_NUMS)  # find_party (party names belong to one Knesset)
 API_RATE_LIMIT_WEB_PER_MINUTE = 300      # per client IP, every other web route (reading tab fires one request per meeting/speaker)
 
@@ -310,7 +316,7 @@ AGENT_LIST_MAX_TOP_K          = 100      # bills / votes; the OData service caps
 
 # Web page paths and the links the API/MCP rows carry to them (utils/source_links.py)
 PUBLIC_SITE_URL               = "https://meorav.com"
-SITE_DESCRIPTION              = ("כלי AI להנגשת מידע מהכנסת לקראת הבחירות: פרופילי מועמדים, הנושאים שחברי הכנסת "
+SITE_DESCRIPTION              = ("כלי AI להנגשת מידע מהכנסת: פרופילי חברי הכנסת, הנושאים שחברי הכנסת "
                                  "עסקו בהם ודיוני ועדות הכנסת, עם ציטוטים וקישורים למקור.")
 CHAT_PAGE_PATH                = "/chat"
 RESEARCH_PAGE_PATH            = "/research"

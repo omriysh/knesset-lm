@@ -11,6 +11,8 @@
 
 .sj-top { display: flex; align-items: center; justify-content: space-between; gap: 6px 12px; min-height: 40px; }
 .sj-top .pf-crumbs { margin: 0; min-width: 0; }
+.sj-knesset { display: inline-flex; align-items: center; gap: 5px; margin-inline-start: auto; padding: 3px 11px; border-radius: 999px; background: var(--primary-soft); color: var(--primary); font-size: 0.8rem; font-weight: 700; white-space: nowrap; }
+.sj-knesset .material-symbols-outlined { font-size: 16px; }
 .sj-top .pf-crumbs > * { white-space: nowrap; }
 .sj-play-hint { margin-top: -6px; text-align: center; font-size: 0.78rem; color: var(--ink-muted); }
 .sj-play { position: relative; height: clamp(440px, calc(100vh - 260px), 760px); border-radius: 22px; background: var(--surface-lowest); box-shadow: var(--shadow-raised); overflow: hidden; }

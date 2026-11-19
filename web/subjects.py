@@ -15,7 +15,8 @@ from profiles import mk_activity, subjects
 from retrieval import knesset_db_store as store
 from subjects import prompts as subject_prompts
 from summarization import prompts as summary_prompts
-from web.profiles import ACTIVITY_KNESSET, OPINIONS_PAGE_SIZE, _offset, _photo_url, candidate_lists
+from web.profiles import ACTIVITY_KNESSET, OPINIONS_PAGE_SIZE, _member_photo_url, _offset, _photo_url, candidate_lists, \
+    knesset_roster
 
 router = APIRouter()
 
@@ -33,6 +34,12 @@ def _candidates_by_mk() -> dict[str, dict]:
                          "photo_url": _photo_url(party["id"], c), "party_26": party["name"]}
             for party in candidate_lists()["parties"] for c in party["candidates"]
             if c["profile"] == "full" and c.get("mk_id")}
+
+
+def _sitting_mks_by_mk() -> dict[str, dict]:
+    """Profile links of the sitting Knesset's MKs (the profiles tab outside election mode)."""
+    return {m["mk_id"]: {"mk_profile_url": f"/profiles/mk/{m['person_id']}", "mk_photo_url": _member_photo_url(m)}
+            for faction in knesset_roster()["factions"] for m in faction["members"] if m.get("mk_id")}
 
 
 @router.get("/api/subjects")
@@ -88,9 +95,10 @@ def approach(subject_id: int, approach_id: int):
         conn.close()
     if result is None:
         return _not_found("הגישה לא נמצאה")
-    candidates = _candidates_by_mk()
+    candidates, sitting = _candidates_by_mk(), _sitting_mks_by_mk()
     for theme in result["themes"]:
         theme["mk"].update(candidates.get(theme["mk"]["mk_id"], {}))
+        theme["mk"].update(sitting.get(theme["mk"]["mk_id"], {}))
     return result
 
 

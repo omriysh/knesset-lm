@@ -1,6 +1,6 @@
 /**
- * profile_simple.js — the top of a candidate's profile: photo and details, the visitor's swipes on their themes
- * (game.js storage) and habits; and the profile's subjects tab: their interests as umbrella bubbles over a
+ * profile_simple.js — the top of a profile: photo, details and the Knesset selector, the visitor's swipes on their
+ * themes (game.js storage, election mode only) and habits in the Knesset on display; and the profile's subjects tab: their interests as umbrella bubbles over a
  * cumulative timeline with their approach to each shared subject.
  *
  * Non-module script, loaded after profiles.js (pf* helpers, the theme sheet) and before game.js / actions.js.
@@ -40,36 +40,40 @@ function pfsLoadSubjectsTab(profile) {
   _pfsLoadInterests(_pfs);
 }
 
-/* The photo, details, swipes and habits that open the profile. */
-function pfsHeader(data, withSwipes) {
-  const { candidate, party, activity } = data;
-  const habitsWhen = activity ? `${pfInLabel(pfKnessetLabel(activity.knesset_num))} (${_pfLatestServiceYears([activity.knesset_num])})` : 'בכנסת';
+/* The photo, details, swipes and habits that open the profile; pf: the profile state (profiles.js _pf). */
+function pfsHeader(data, withSwipes, pf) {
+  const { candidate, party } = data;
+  const sub = data.kind === 'candidate' ? `${pfEsc(party.name)} · מקום ${candidate.position}`
+    : pf.knesset === data.knesset_num ? `סיעת ${pfEsc(party.name)}` : '';
+  const note = pfKnessetNote(pf);
   return `<div class="pfs-top${withSwipes ? '' : ' pfs-top--two'}">
       <div class="pfs-photo">
         ${candidate.photo_url ? `<img src="${pfEsc(candidate.photo_url)}" alt="" data-hide-on-error>` : `<div class="pfs-initials">${pfInitials(candidate.name)}</div>`}
         <div class="pfs-photo-text">
           <h1>${pfEsc(candidate.name)}</h1>
-          <div>${pfEsc(party.name)} · מקום ${candidate.position}</div>
+          <div id="pfs-hero-sub">${sub}</div>
+          ${_pfKnessetPill(pf)}
         </div>
         ${candidate.photo_url ? '<div class="pfs-photo-credit">צילום: אתר הכנסת</div>' : ''}
       </div>
-      <section class="pfs-card pfs-facts">${_pfsFacts(data)}</section>
+      <section class="pfs-card pfs-facts">${_pfsFacts(data, pf)}</section>
       ${withSwipes ? `<section class="pfs-card pfs-swipes" id="pfs-swipes" data-pf-source="swipes">${pfSpinner('טוען…')}</section>` : ''}
     </div>
+    ${note ? `<div class="pf-knesset-note">${pfIcon('info')}<span>${note}</span></div>` : ''}
     <section class="pfs-habits">
-      <div class="pfs-section-head"><h2>ההרגלים ${habitsWhen}</h2></div>
-      <div class="pfs-tiles">${_pfsHabitTiles(data)}</div>
+      <div class="pfs-section-head"><h2>ההרגלים</h2><span class="pfs-chip">${pfKnessetLabel(pf.knesset)} · ${pfKnessetYears(pf.knesset)}</span></div>
+      <div class="pfs-tiles">${_pfsHabitTiles(data, pf)}</div>
     </section>`;
 }
 
-function _pfsFacts(data) {
+function _pfsFacts(data, pf) {
   const { candidate } = data;
   const details = candidate.details || {};
   const rows = SIMPLE_FACT_ROWS.filter(key => details[key]).map(key => {
     const [, icon, label] = DETAIL_ROWS.find(([rowKey]) => rowKey === key);
     return `<div class="pfs-fact" title="${label}">${pfIcon(icon)}<span>${pfEsc(_pfDetailItems(details[key])[0] || '')}</span></div>`;
   });
-  rows.unshift(`<div class="pfs-fact">${pfIcon('badge')}<span id="pfs-hero-role">${_pfHeroRole(data)}</span></div>`);
+  rows.unshift(`<div class="pfs-fact">${pfIcon('badge')}<span id="pfs-hero-role">${_pfHeroRole(data, pf.knesset)}</span></div>`);
   const site = candidate.site_id ? `<a href="${KNESSET_SITE_MK_URL}${Number(candidate.site_id)}" target="_blank" rel="noopener">אתר הכנסת</a>` : 'אתר הכנסת';
   return `${rows.join('')}<div class="pf-details-source">מקור הפרטים: ${site}</div>`;
 }
@@ -163,13 +167,15 @@ const _pfsTile = (id, icon, color, value, label, source, extra = '') =>
   `<div class="pfs-tile${value === '…' ? ' pfs-tile--wait' : ''}" id="${id}">${pfIcon(icon).replace('material-symbols-outlined', `material-symbols-outlined" style="color:${color}`)}
     <div class="pfs-tile-value">${value}${extra}</div><div class="pfs-tile-label">${label}</div><div class="pfs-tile-source">${source}</div></div>`;
 
-function _pfsHabitTiles(data) {
-  const activity = data.activity;
+function _pfsHabitTiles(data, pf) {
   const votesTile = _pfsTile('pfs-tile-votes', 'how_to_vote', 'var(--secondary)', '…', 'נוכחות בהצבעות במליאה', 'מקור: אתר הכנסת');
   const billsTile = _pfsTile('pfs-tile-bills', 'gavel', 'var(--primary)', '…', 'הצעות חוק שיזם/ה או הצטרף/ה אליהן', 'מקור: אתר הכנסת');
-  if (!activity) {
-    return [_pfsTile('pfs-tile-knessets', 'account_balance', 'var(--tertiary)', pfNum(data.candidate.knessets.length), `כהונות בכנסת (${pfKnessetsLabel(data.candidate.knessets)})`, 'מקור: אתר הכנסת'),
-      votesTile, billsTile].join('');
+  if (!pf.hasActivity) {
+    const why = pf.knesset > Math.max(...PROTOCOL_KNESSETS) ? 'הדיונים עוד לא עובדו' : 'אין באתר דיונים מהכנסת הזו';
+    return [votesTile,
+      _pfsTile('pfs-tile-committee', 'groups', 'var(--tertiary)', '—', `נוכחות בוועדות: ${why}`, 'מקור: פרוטוקולי הכנסת').replace('class="pfs-tile"', 'class="pfs-tile pfs-tile--off"'),
+      _pfsTile('pfs-tile-knessets', 'account_balance', 'var(--tertiary)', pfNum(data.candidate.knessets.length), `כהונות בכנסת (${pfKnessetsLabel(data.candidate.knessets)})`, 'מקור: אתר הכנסת'),
+      billsTile].join('');
   }
   return [
     votesTile,
@@ -203,25 +209,33 @@ function _pfsShowAttendance(latest) {
   _pfsSetTile('pfs-tile-other', `${pfNum(latest.other_committee_meetings_attended)}<small> ישיבות</small>`, null);
 }
 
-/* The roles line and the tiles from routes that call the Knesset OData, each on its own so a slow or
-   failed one leaves the rest of the profile in place. */
-function pfsLoadHabits(api, isCurrent, data) {
+/* The roles line and the tiles of the Knesset on display, from routes that call the Knesset OData, each on its
+   own so a slow or failed one leaves the rest of the profile in place. */
+function pfsLoadHabits(api, isCurrent, data, pf) {
+  const knesset = pf.knesset;
   pfFetch(`${api}/roles`).then(roles => {
-    const role = document.getElementById('pfs-hero-role');
-    if (isCurrent() && role) role.innerHTML = _pfHeroRole(data, roles.knessets[0]);
-  }).catch(err => console.warn('[profiles] roles:', err.message));
-  if (data.activity) {
-    pfFetch(`${api}/attendance`).then(attendance => { if (isCurrent()) _pfsShowAttendance(attendance.knessets[0]); })
-      .catch(err => { if (isCurrent()) _pfsShowAttendance({ error: err.message }); });
-  }
-  pfFetch(`${api}/vote-summary`).then(summary => {
     if (!isCurrent()) return;
-    const latest = summary.knessets.find(k => k.plenum_votes);
-    if (!latest) { _pfsSetTile('pfs-tile-votes', '—', 'אין הצבעות רשומות במליאה'); return; }
-    _pfsSetTile('pfs-tile-votes', `${pfPct(latest.votes_cast, latest.plenum_votes)}<small>%</small>`,
-      `נוכחות בהצבעות במליאה (${pfNum(latest.votes_cast)} מתוך ${pfNum(latest.plenum_votes)})`);
+    pf.roles = roles;
+    const positions = roles.knessets.find(k => k.knesset_num === knesset);
+    const role = document.getElementById('pfs-hero-role');
+    if (role) role.innerHTML = _pfHeroRole(data, knesset, positions);
+    const faction = _pfFactionOf(positions);
+    const sub = document.getElementById('pfs-hero-sub');
+    if (sub && faction && data.kind === 'mk') sub.textContent = `סיעת ${faction}`;
+  }).catch(err => console.warn('[profiles] roles:', err.message));
+  if (pf.hasActivity) {
+    pfFetch(`${api}/attendance`).then(attendance => {
+      if (isCurrent()) _pfsShowAttendance(attendance.knessets.find(k => k.knesset_num === knesset) || { error: 'אין נתוני נוכחות' });
+    }).catch(err => { if (isCurrent()) _pfsShowAttendance({ error: err.message }); });
+  }
+  pfFetch(`${api}/vote-summary?knesset=${knesset}`).then(summary => {
+    if (!isCurrent()) return;
+    const votes = summary.knessets.find(k => k.plenum_votes);
+    if (!votes) { _pfsSetTile('pfs-tile-votes', '—', 'אין הצבעות רשומות במליאה'); return; }
+    _pfsSetTile('pfs-tile-votes', `${pfPct(votes.votes_cast, votes.plenum_votes)}<small>%</small>`,
+      `נוכחות בהצבעות במליאה (${pfNum(votes.votes_cast)} מתוך ${pfNum(votes.plenum_votes)})`);
   }).catch(err => _pfsSetTile('pfs-tile-votes', '—', `הצבעות: ${err.message}`));
-  Promise.all([pfFetch(`${api}/bills`), pfFetch(`${api}/bills?stage=passed`)]).then(([bills, passed]) => {
+  Promise.all([pfFetch(`${api}/bills?knesset=${knesset}`), pfFetch(`${api}/bills?knesset=${knesset}&stage=passed`)]).then(([bills, passed]) => {
     if (!isCurrent()) return;
     const passedPct = pfPct(passed.total, bills.total);
     _pfsSetTile('pfs-tile-bills', pfNum(bills.total), null, bills.total ? `<div class="pfs-tile-bar" style="--pct:${passedPct}%"><i></i></div>

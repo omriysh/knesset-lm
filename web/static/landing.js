@@ -1,5 +1,6 @@
 /**
- * landing.js — the "בצ'אט שלכם" tab (/chat): the connect-to-chat steps and the review prompt builder.
+ * landing.js — the "בצ'אט שלכם" tab (/chat): the connect-to-chat steps, the start prompt, and in election mode
+ * the review prompt builder. Each prompt opens in a new Claude / ChatGPT chat through the sites' ?q= links.
  *
  * Non-module script, loaded before actions.js (whose PAGE_ACTIONS call these functions).
  */
@@ -11,10 +12,17 @@ Give short and concise answers.
 Answer only in Hebrew.
 Eliminate any political bias; be as balanced as possible.
 Always provide sources to the answers you write. Provide quotes when relevant, integrating the sources into the answer and not just writing a list at the end. Split sources into 3 categories: Knesset data, journalism, social media. Prefer Knesset sources over anything else, and then prefer recent information over old.
-Your job is to illustrate the opinions and narratives of the candidates, present them as such and help inspire critical thinking. Make sure to frame narratives as narratives.
+Your job is to illustrate the opinions and narratives of politicians and parties, present them as such and help inspire critical thinking. Make sure to frame narratives as narratives.
 Don't be critical of the user's world view unless they ask you to. If you think it's important for the process, ask the user before you do so. It's better to challenge and ask questions than to provide criticism.`;
 
 const LANDING_CANDIDATES_URL = 'https://www.gov.il/he/pages/candidates-lists-26';
+
+const LANDING_START_PROMPT = `Help me learn about the Israeli Knesset, its members and what they do. Use the Meorav Yerushalmi MCP for Knesset data: committee and plenum protocols, bills, plenum votes, MKs, factions and committees (check its coverage). Search the web for current news and statements when it helps.
+The 26th Knesset was sworn in on November 10, 2026, after the elections of October 27, 2026. Bills and votes come live from the Knesset; the protocols may cover only earlier Knessets. Faction names differ between Knessets.
+
+Start by explaining in two or three sentences what you can find out with Meorav, suggest three example questions, and ask me what interests me.
+
+${LANDING_PROMPT_GUIDELINES}`;
 
 const LANDING_DEPTHS = {
   deep:  { candidates: 5 },
@@ -86,8 +94,11 @@ ${LANDING_PROMPT_GUIDELINES}
 Before you begin a step, explain to the user what the step will be and the logic behind it.`;
 }
 
-function _landingReducedMotion() {
-  return matchMedia('(prefers-reduced-motion: reduce)').matches;
+const LANDING_CHAT_NEW_URLS = { claude: 'https://claude.ai/new?q=', chatgpt: 'https://chatgpt.com/?q=' };
+
+/* A new chat on the site with the prompt waiting in the input box. */
+function landingChatLink(site, prompt) {
+  return LANDING_CHAT_NEW_URLS[site] + encodeURIComponent(prompt);
 }
 
 function _landingFallbackCopy(text) {
@@ -115,70 +126,26 @@ function _landingCopy(text, button, doneHtml) {
 }
 
 const LANDING_STEP_COPY_TEXTS = { url: LANDING_MCP_URL };
-const LANDING_CHATGPT_ADD_PROMPT = `Help me add the Meorav Yerushalmi MCP server to ChatGPT as an app, so you can use its tools in our chats.
+const LANDING_CHATGPT_ADD_PROMPT = `@plugin-creator Add the Meorav Yerushalmi MCP server as an app, so you can use its tools in our chats.
 Server URL: ${LANDING_MCP_URL}
 Authentication: none.
-Walk me through the steps one at a time, and wait for me to finish each step before the next. Answer in Hebrew.`;
-const LANDING_STEP_OPEN_MS = 500;
-const LANDING_STEP_EDGE_GAP_FRACTION = 0.2;
+Answer in Hebrew.`;
 
-function _landingEaseInOut(t) {
-  return t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
+const _LANDING_PROMPTS = {
+  start: () => LANDING_START_PROMPT,
+  review: () => landingBuildReviewPrompt(_landingBuilder),
+  guidelines: () => LANDING_GUIDELINES_ONLY_PROMPT,
+  'chatgpt-add': () => LANDING_CHATGPT_ADD_PROMPT,
+};
+
+function _landingFillChatLinks() {
+  document.querySelectorAll('[data-lp-chat]').forEach(link => {
+    link.href = landingChatLink(link.dataset.lpChat, _LANDING_PROMPTS[link.dataset.lpPrompt]());
+  });
 }
 
-/* Where the next step (its card and arrowhead) lands once its open transition ends: open it with
-   transitions off, measure, then close it again so the real open still animates. */
-function _landingOpenedStepRect(track, next) {
-  track.classList.add('lp-measure');
-  next.classList.add('home-graph--open');
-  const rect = next.querySelector('.lp-step-body').getBoundingClientRect();
-  next.classList.remove('home-graph--open');
-  void track.offsetWidth;
-  track.classList.remove('lp-measure');
-  void track.offsetWidth;
-  return rect;
-}
-
-/* How far the track must scroll so the step keeps a gap of 20% of the track's width from its left edge
-   (a row of steps), or of its height from its bottom (a column on mobile). */
-function _landingStepScrollNeeded(track, stepRect, isRow) {
-  const trackRect = track.getBoundingClientRect();
-  if (isRow) return Math.min(0, stepRect.left - (trackRect.left + trackRect.width * LANDING_STEP_EDGE_GAP_FRACTION));
-  return Math.max(0, stepRect.bottom - (trackRect.bottom - trackRect.height * LANDING_STEP_EDGE_GAP_FRACTION));
-}
-
-function _landingScrollTrack(track, isRow, distance, behavior) {
-  track.scrollBy(isRow ? { left: distance, behavior } : { top: distance, behavior });
-}
-
-/* Scrolls the track along with the open transition, then corrects whatever the still-growing track
-   could not scroll yet. */
-function _landingKeepStepInView(track, next, isRow, stepRect) {
-  const distance = _landingStepScrollNeeded(track, stepRect, isRow);
-  if (!distance) return;
-  if (_landingReducedMotion()) { _landingScrollTrack(track, isRow, distance, 'auto'); return; }
-  const axis = isRow ? 'scrollLeft' : 'scrollTop';
-  const startScroll = track[axis];
-  const startTime = performance.now();
-  const frame = (now) => {
-    const progress = Math.min(1, (now - startTime) / LANDING_STEP_OPEN_MS);
-    track[axis] = startScroll + distance * _landingEaseInOut(progress);
-    if (progress < 1) { requestAnimationFrame(frame); return; }
-    const remaining = _landingStepScrollNeeded(track, next.querySelector('.lp-step-body').getBoundingClientRect(), isRow);
-    if (Math.abs(remaining) > 1) _landingScrollTrack(track, isRow, remaining, 'smooth');
-  };
-  requestAnimationFrame(frame);
-}
-
-function _landingOpenNextStep(step) {
-  const next = step.nextElementSibling;
-  if (!next || next.classList.contains('home-graph--open')) return;
-  const track = step.closest('.lp-steps');
-  const isRow = getComputedStyle(track).flexDirection === 'row';
-  const stepRect = _landingOpenedStepRect(track, next);
-  step.classList.add('lp-step--done');
-  next.classList.add('home-graph--open');
-  _landingKeepStepInView(track, next, isRow, stepRect);
+function _landingReducedMotion() {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
 function landingScrollToSection(event, sectionId) {
@@ -190,60 +157,14 @@ function landingCopyField(button) {
   _landingCopy(LANDING_STEP_COPY_TEXTS[button.dataset.arg], button.querySelector('.material-symbols-outlined'), 'check');
 }
 
-function landingCopyChatgptPrompt(button) {
-  _landingCopy(LANDING_CHATGPT_ADD_PROMPT, button, '<span class="material-symbols-outlined">check</span>הועתק');
-}
-
-const LANDING_INSTALL_SCROLL_MS = 500;
-
-function _landingGoInstall() {
-  const section = document.getElementById('lp-install');
-  section.scrollIntoView({ behavior: _landingReducedMotion() ? 'auto' : 'smooth', block: 'start' });
-  setTimeout(_landingRevealNewChatStep, LANDING_INSTALL_SCROLL_MS);
-}
-
-/* Opens the remaining steps of the shown panel one by one, as if the visitor clicked through them, then highlights the last (new chat) step. */
-function _landingRevealNewChatStep() {
-  const steps = document.querySelectorAll('.lp-steps:not(.lp-panel-off) .lp-step');
-  if (!steps.length) return;
-  const newChatStep = steps[steps.length - 1];
-  if (newChatStep.classList.contains('home-graph--open')) {
-    const card = newChatStep.querySelector('.home-next-card');
-    card.scrollIntoView({ behavior: _landingReducedMotion() ? 'auto' : 'smooth', block: 'nearest', inline: 'nearest' });
-    card.classList.remove('flash');
-    void card.offsetWidth;
-    card.classList.add('flash');
-    return;
-  }
-  const openSteps = [...steps].filter(step => step.classList.contains('home-graph--open'));
-  _landingOpenNextStep(openSteps[openSteps.length - 1]);
-  setTimeout(_landingRevealNewChatStep, LANDING_STEP_OPEN_MS);
-}
-
-const LANDING_STEPS_PLAY_DELAY_MS = 400;
-
-/* The first time the steps come into view, opens them one after another. */
-function _landingPlaySteps() {
-  const steps = [...document.querySelectorAll('.lp-steps .lp-step')];
-  const closed = steps.find(step => !step.classList.contains('home-graph--open'));
-  if (!closed) return;
-  _landingOpenNextStep(closed.previousElementSibling);
-  setTimeout(_landingPlaySteps, LANDING_STEP_OPEN_MS);
-}
-
-function _landingCopiedThenInstall() {
-  document.getElementById('lp-copied-banner').hidden = false;
-  setTimeout(_landingGoInstall, 600);
-}
+const _LANDING_COPIED_HTML = '<span class="material-symbols-outlined">check</span>הועתק';
 
 function landingCopyReview(button) {
-  _landingCopy(landingBuildReviewPrompt(_landingBuilder), button, '<span class="material-symbols-outlined">check</span>הועתק');
-  _landingCopiedThenInstall();
+  _landingCopy(landingBuildReviewPrompt(_landingBuilder), button, _LANDING_COPIED_HTML);
 }
 
 function landingCopyGuidelines(button) {
-  _landingCopy(LANDING_GUIDELINES_ONLY_PROMPT, button, '<span class="material-symbols-outlined">check</span>הועתק');
-  _landingCopiedThenInstall();
+  _landingCopy(LANDING_GUIDELINES_ONLY_PROMPT, button, _LANDING_COPIED_HTML);
 }
 
 function landingSetInstallTab(button) {
@@ -282,6 +203,7 @@ function _renderLandingBuilder() {
   const flowmap = document.getElementById('lp-flowmap');
   flowmap.dataset.depth = b.depth;
   document.getElementById('lp-review-prompt').innerHTML = _landingPromptHtml(landingBuildReviewPrompt(b));
+  _landingFillChatLinks();
 }
 
 function landingBuilderSet(button) {
@@ -289,14 +211,6 @@ function landingBuilderSet(button) {
   if (_landingBuilder[setting] === value) return;
   _landingBuilder[setting] = value;
   _renderLandingBuilder();
-  _landingBumpCopyButton();
-}
-
-function _landingBumpCopyButton() {
-  const copy = document.querySelector('.lp-copy');
-  copy.classList.remove('lp-copy--bump');
-  void copy.offsetWidth;
-  copy.classList.add('lp-copy--bump');
 }
 
 function _landingClaudeInstallLink() {
@@ -315,15 +229,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function _landingObserveReveals() {
   const sections = document.querySelectorAll('.lp-reveal');
-  let stepsPlayed = false;
   const observer = new IntersectionObserver(entries => {
-    entries.forEach(entry => {
-      entry.target.classList.toggle('lp-in', entry.isIntersecting);
-      if (entry.isIntersecting && entry.target.id === 'lp-install' && !stepsPlayed) {
-        stepsPlayed = true;
-        setTimeout(_landingPlaySteps, LANDING_STEPS_PLAY_DELAY_MS);
-      }
-    });
+    entries.forEach(entry => entry.target.classList.toggle('lp-in', entry.isIntersecting));
   }, { root: sections[0].closest('.landing'), rootMargin: '-20% 0px' });
   sections.forEach(section => observer.observe(section));
 }

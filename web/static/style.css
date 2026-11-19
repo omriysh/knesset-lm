@@ -1811,6 +1811,8 @@ body { font-size: 16px; }
   color: var(--primary);
 }
 html:not(.research-tab-shown) :is(#dt-tab-research, #mob-tab-research, #settings-research) { display: none; }
+html:not(.election-mode) :is(#dt-tab-game, #mob-tab-game, #settings-game, .election-only) { display: none !important; }
+html.election-mode .knesset-only { display: none !important; }
 .settings-group-note { display: none; font-size: 0.75rem; color: var(--ink-faint); }
 .settings-group:disabled .settings-group-note { display: block; }
 .settings-group:disabled .settings-row,
@@ -3213,12 +3215,14 @@ body.show-welcome .research-slot { display: block; }
 @keyframes lp-flash { 30% { box-shadow: 0 0 0 3px var(--highlight-strong), var(--shadow-raised); } }
 .lp-copied-banner { display: flex; margin: 0 14px 10px; align-items: center; gap: 8px; padding: 10px 14px; border-radius: var(--radius); background: var(--primary-soft); color: var(--primary-dim); font-size: 0.88rem; font-weight: 600; }
 .lp-copied-banner[hidden] { display: none; }
-.lp-badge { margin-inline-start: 6px; padding: 1px 7px; border-radius: 9999px; background: var(--primary-soft); color: var(--primary-dim); font-size: 0.64rem; font-weight: 700; }
 .lp-gemini { margin: 22px 0 6px; }
 .lp-gemini-alt { margin: 0; font-size: 0.9rem; color: var(--ink-muted); }
 .lp-gemini-alt a { color: var(--primary); }
 .lp-mcp-url { max-width: 20rem; margin: 14px auto 0; background: var(--surface-lowest); }
-.lp-chatgpt-prompt { margin-top: 10px; }
+.lp-install-url { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 6px; margin: 4px 14px 0; font-size: 0.8rem; color: var(--ink-faint); }
+.lp-install-url code { direction: ltr; font-size: 0.8rem; color: var(--ink-muted); }
+.lp-open-in { font-size: 0.78rem; color: var(--ink-faint); text-align: center; }
+.lp-open-in a { color: var(--primary); font-weight: 600; }
 
 .lp-footer { padding-block: 8px 40px; font-size: 0.78rem; color: var(--ink-faint); }
 .brand-home { padding: 0; border: 0; background: none; text-align: start; cursor: pointer; }
@@ -3265,7 +3269,6 @@ body.show-welcome .research-slot { display: block; }
   .lp-step-skip .material-symbols-outlined { transform: rotate(-90deg); }
   .lp-step-skip::before { top: -6px; bottom: 0; left: 50%; right: auto; width: 2px; height: auto; margin: 0 0 0 -1px; transform: scaleY(0); transform-origin: top; }
   #lp-install-tabs .seg-btn { flex: 1; padding-inline: 6px; }
-  .lp-badge { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .lp-mark, .lp-step .home-next-card.flash, .lp-next-section .material-symbols-outlined, .lp-action .lp-copy, .lp-copy--bump > .material-symbols-outlined { animation: none; }

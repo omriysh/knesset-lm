@@ -41,6 +41,7 @@ function switchTab(name, { writeUrl = true, push = true } = {}) {
   if (name === 'subjects') subjectsShow();
   if (name === 'game') gameShow();
   if (name === 'research') setResearchTabShown(true);
+  if (name === 'game') setElectionMode(true);
 
   const researchSettings = document.getElementById('settings-research');
   if (researchSettings) researchSettings.disabled = name !== 'research';
@@ -71,6 +72,33 @@ function setResearchTabShown(shown) {
 }
 
 document.documentElement.classList.toggle('research-tab-shown', researchTabShown());
+
+/* ── Election mode: the dating game, candidate lists and election prompts; off by default after the 2026 elections ── */
+const _ELECTION_MODE_KEY = 'electionMode';
+
+function electionMode() {
+  try {
+    return localStorage.getItem(_ELECTION_MODE_KEY) === 'true';
+  } catch (exc) {
+    console.warn('[tabs] localStorage unavailable:', exc);
+    return false;
+  }
+}
+
+function setElectionMode(on) {
+  const changed = on !== document.documentElement.classList.contains('election-mode');
+  document.documentElement.classList.toggle('election-mode', on);
+  try {
+    localStorage.setItem(_ELECTION_MODE_KEY, on ? 'true' : 'false');
+  } catch (exc) {
+    console.warn('[tabs] localStorage unavailable:', exc);
+  }
+  if (!changed) return;
+  if (!on && _activeTab === 'game') switchTab('home');
+  document.dispatchEvent(new CustomEvent('electionmodechange', { detail: { on } }));
+}
+
+document.documentElement.classList.toggle('election-mode', electionMode());
 
 /* ── URL routing: / (home), /chat, /research, /protocols?…, /profiles… (url_state.js, profiles.js);
    back/forward re-applies the URL ── */

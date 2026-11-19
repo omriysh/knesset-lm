@@ -642,6 +642,8 @@ class ResearchRespondRequest(BaseModel):
 @app.get(PROFILE_PAGE_PATHS[0], response_class=HTMLResponse, include_in_schema=False)
 @app.get(PROFILE_PAGE_PATHS[1], response_class=HTMLResponse, include_in_schema=False)
 @app.get(PROFILE_PAGE_PATHS[2], response_class=HTMLResponse, include_in_schema=False)
+@app.get(PROFILE_PAGE_PATHS[3], response_class=HTMLResponse, include_in_schema=False)
+@app.get(PROFILE_PAGE_PATHS[4], response_class=HTMLResponse, include_in_schema=False)
 @app.get(SUBJECT_PAGE_PATHS[0], response_class=HTMLResponse, include_in_schema=False)
 @app.get(SUBJECT_PAGE_PATHS[1], response_class=HTMLResponse, include_in_schema=False)
 @app.get(SUBJECT_PAGE_PATHS[2], response_class=HTMLResponse, include_in_schema=False)

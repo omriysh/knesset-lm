@@ -244,7 +244,7 @@ def submitted_by(text: str) -> str:
 # ── build: MKs of every Knesset ──────────────────────────────────────────────
 
 def _name_tokens(name: str) -> tuple[str, ...]:
-    name = re.sub(r"[\"'׳״`’]", "", name)
+    name = re.sub(r"[\"'׳״`’֑-ׇ]", "", name)
     name = re.sub(r"[-־–()]", " ", name)
     return tuple(name.split())
 
