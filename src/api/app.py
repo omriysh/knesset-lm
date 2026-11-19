@@ -28,7 +28,7 @@ def use_public_api_http_settings() -> None:
     """Fail fast on Knesset API outages instead of holding worker threads through long retries."""
     config.API_RETRY_ATTEMPTS = config.PUBLIC_API_RETRY_ATTEMPTS
     config.API_RETRY_SLEEP = config.PUBLIC_API_RETRY_SLEEP
-    config.HTTP_TIMEOUT_SECONDS = config.PUBLIC_API_HTTP_TIMEOUT_SECONDS
+    config.HTTP_TIMEOUT_SECONDS = (config.PUBLIC_API_HTTP_CONNECT_TIMEOUT_SECONDS, config.PUBLIC_API_HTTP_TIMEOUT_SECONDS)
 
 
 @asynccontextmanager

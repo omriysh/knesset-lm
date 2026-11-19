@@ -69,7 +69,7 @@ function _pfsFacts(data) {
     const [, icon, label] = DETAIL_ROWS.find(([rowKey]) => rowKey === key);
     return `<div class="pfs-fact" title="${label}">${pfIcon(icon)}<span>${pfEsc(_pfDetailItems(details[key])[0] || '')}</span></div>`;
   });
-  rows.unshift(`<div class="pfs-fact">${pfIcon('badge')}<span>${_pfHeroRole(data)}</span></div>`);
+  rows.unshift(`<div class="pfs-fact">${pfIcon('badge')}<span id="pfs-hero-role">${_pfHeroRole(data)}</span></div>`);
   const site = candidate.site_id ? `<a href="${KNESSET_SITE_MK_URL}${Number(candidate.site_id)}" target="_blank" rel="noopener">אתר הכנסת</a>` : 'אתר הכנסת';
   return `${rows.join('')}<div class="pf-details-source">מקור הפרטים: ${site}</div>`;
 }
@@ -171,14 +171,10 @@ function _pfsHabitTiles(data) {
     return [_pfsTile('pfs-tile-knessets', 'account_balance', 'var(--tertiary)', pfNum(data.candidate.knessets.length), `כהונות בכנסת (${pfKnessetsLabel(data.candidate.knessets)})`, 'מקור: אתר הכנסת'),
       votesTile, billsTile].join('');
   }
-  const attendance = activity.attendance;
-  const committeePct = pfPct(attendance.member_meetings_attended, attendance.member_meetings);
   return [
     votesTile,
-    attendance.member_meetings
-      ? _pfsTile('pfs-tile-committee', 'groups', 'var(--tertiary)', `${committeePct}<small>%</small>`, `נוכחות בוועדות שהוא/היא חבר/ה בהן (${pfNum(attendance.member_meetings_attended)} מתוך ${pfNum(attendance.member_meetings)} ישיבות)`, 'מקור: פרוטוקולי הכנסת')
-      : _pfsTile('pfs-tile-committee', 'groups', 'var(--tertiary)', '—', 'לא היה/תה חבר/ה בוועדות', 'מקור: אתר הכנסת'),
-    _pfsTile('pfs-tile-other', 'explore', 'var(--tertiary)', pfNum(attendance.other_committee_meetings_attended), 'נוכחות בוועדות שהוא/היא לא חבר/ה בהן', 'מקור: פרוטוקולי הכנסת', '<small> ישיבות</small>'),
+    _pfsTile('pfs-tile-committee', 'groups', 'var(--tertiary)', '…', 'נוכחות בוועדות שהוא/היא חבר/ה בהן', 'מקור: פרוטוקולי הכנסת'),
+    _pfsTile('pfs-tile-other', 'explore', 'var(--tertiary)', '…', 'נוכחות בוועדות שהוא/היא לא חבר/ה בהן', 'מקור: פרוטוקולי הכנסת'),
     billsTile,
   ].join('');
 }
@@ -192,7 +188,32 @@ function _pfsSetTile(id, valueHtml, label, afterLabelHtml = '') {
   if (afterLabelHtml) tile.querySelector('.pfs-tile-label').insertAdjacentHTML('afterend', afterLabelHtml);
 }
 
-function pfsLoadHabits(api, isCurrent) {
+function _pfsShowAttendance(latest) {
+  if (latest.error) {
+    _pfsSetTile('pfs-tile-committee', '—', 'נוכחות בוועדות: לא זמין כרגע');
+    _pfsSetTile('pfs-tile-other', '—', 'נוכחות בוועדות: לא זמין כרגע');
+    return;
+  }
+  if (latest.member_meetings) {
+    _pfsSetTile('pfs-tile-committee', `${pfPct(latest.member_meetings_attended, latest.member_meetings)}<small>%</small>`,
+      `נוכחות בוועדות שהוא/היא חבר/ה בהן (${pfNum(latest.member_meetings_attended)} מתוך ${pfNum(latest.member_meetings)} ישיבות)`);
+  } else {
+    _pfsSetTile('pfs-tile-committee', '—', 'לא היה/תה חבר/ה בוועדות');
+  }
+  _pfsSetTile('pfs-tile-other', `${pfNum(latest.other_committee_meetings_attended)}<small> ישיבות</small>`, null);
+}
+
+/* The roles line and the tiles from routes that call the Knesset OData, each on its own so a slow or
+   failed one leaves the rest of the profile in place. */
+function pfsLoadHabits(api, isCurrent, data) {
+  pfFetch(`${api}/roles`).then(roles => {
+    const role = document.getElementById('pfs-hero-role');
+    if (isCurrent() && role) role.innerHTML = _pfHeroRole(data, roles.knessets[0]);
+  }).catch(err => console.warn('[profiles] roles:', err.message));
+  if (data.activity) {
+    pfFetch(`${api}/attendance`).then(attendance => { if (isCurrent()) _pfsShowAttendance(attendance.knessets[0]); })
+      .catch(err => { if (isCurrent()) _pfsShowAttendance({ error: err.message }); });
+  }
   pfFetch(`${api}/vote-summary`).then(summary => {
     if (!isCurrent()) return;
     const latest = summary.knessets.find(k => k.plenum_votes);

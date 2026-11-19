@@ -23,8 +23,8 @@ UPSTREAM_ROUTE_PREFIXES = ("/v1/mks", "/v1/committees", "/v1/parties", "/v1/bill
 DB_ROUTE_PREFIXES = ("/v1/protocols", "/v1/meetings/", "/api/browse/search", "/api/game/")
 DB_ROUTE_PATHS = ("/v1/meta", "/api/health")
 PROFILE_UPSTREAM_ROUTE_PATTERN = re.compile(
-    r"^/api/profiles/(bill/\d+/text|party/\d+/candidate/\d+(/(vote-summary|votes|bills|cosponsors|roles))?)$")
-PROFILE_DB_ROUTE_PATTERN = re.compile(r"^/api/profiles/(party/\d+/candidate/\d+/(themes|opinions)|theme/\d+)$")
+    r"^/api/profiles/(bill/\d+/text|party/\d+/candidate/\d+/(vote-summary|votes|bills|cosponsors|roles|attendance))$")
+PROFILE_DB_ROUTE_PATTERN = re.compile(r"^/api/profiles/(party/\d+/candidate/\d+(/(themes|opinions))?|theme/\d+)$")
 PROFILE_PAGE_PATTERN = re.compile(r"^/profiles(/party/\d+(/candidate/\d+)?)?/?$")
 AGENT_ROUTE_PATTERN = re.compile(r"^/api/research/(start|[^/]+/(respond|workspace/ask))$")
 STREAM_REPLAY_PATTERN = re.compile(r"^/api/research/[^/]+/stream$")

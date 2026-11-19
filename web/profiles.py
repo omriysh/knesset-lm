@@ -184,18 +184,10 @@ def profile_logo(party_id: int):
 
 # ── a candidate ──────────────────────────────────────────────────────────────
 
-def _current_roles(person_id: int, knesset_num: int) -> dict:
-    positions = kdb.get_mk_positions(person_id, knesset_num)
-    current = lambda rows: [row for row in rows if not row.get("finish_date")]
-    return {"positions": positions,
-            "government": current(positions["govministries"]),
-            "knesset_roles": current(positions["knesset_roles"]),
-            "factions": positions["factions"]}
-
-
 @router.get("/api/profiles/party/{party_id}/candidate/{candidate_id}")
 def profile_candidate(party_id: int, candidate_id: int):
-    """The header card: who, which list, Knesset-site details, current roles and committee activity."""
+    """The header card: who, which list, Knesset-site details and committee activity counts. Database
+    only, so it loads when the Knesset OData is down; roles and attendance come from their own routes."""
     party, candidate = find_candidate(party_id, candidate_id)
     if candidate is None:
         return _not_found("המועמד לא נמצא")
@@ -203,48 +195,53 @@ def profile_candidate(party_id: int, candidate_id: int):
                                                        "details": candidate.get("details") or {},
                                                        "wikipedia": candidate.get("wikipedia"),
                                                        "site_id": candidate.get("site_id")}}
-    if candidate["profile"] == "none":
-        return body
-    latest_knesset = max(candidate["knessets"])
-    try:
-        roles = _current_roles(candidate["person_id"], latest_knesset)
-    except Exception as exc:
-        print(f"[profiles] roles of {candidate['person_id']} failed: {exc}")
-        roles = None
-    body["roles"] = {key: value for key, value in (roles or {}).items() if key != "positions"} if roles else None
     if candidate["profile"] == "full":
         conn = store.connect(interrupt_after_seconds=config.DB_QUERY_TIMEOUT_SECONDS)
         try:
-            body["activity"] = _candidate_activity(conn, candidate, latest_knesset, roles)
+            body["activity"] = _candidate_activity(conn, candidate)
         finally:
             conn.close()
     return body
 
 
-def _committee_positions(person_id: int, knesset_num: int, latest_knesset: int, roles: dict | None) -> list[dict]:
-    if knesset_num == latest_knesset:
-        return roles["positions"]["committee_positions"] if roles else []
+def _candidate_activity(conn, candidate: dict) -> dict:
+    """Opinion counts of the latest Knesset with activity (the header stats) and the activity Knessets."""
+    knessets = activity_knessets(conn, candidate)
+    return {**mk_activity.opinion_counts(conn, candidate["mk_id"], knessets[0]),
+            "knesset_num": knessets[0], "knessets": knessets, "simple_knesset": ACTIVITY_KNESSET,
+            "has_subjects": mk_activity.has_subjects(conn, candidate["mk_id"], knessets[0])}
+
+
+def _committee_positions(person_id: int, knesset_num: int) -> list[dict] | None:
     try:
         return kdb.get_mk_positions(person_id, knesset_num)["committee_positions"]
     except Exception as exc:
         print(f"[profiles] committee positions of {person_id} in Knesset {knesset_num} failed: {exc}")
-        return []
+        return None
 
 
-def _candidate_activity(conn, candidate: dict, latest_knesset: int, roles: dict | None) -> dict:
-    """Opinion counts of the latest Knesset with activity (the header stats) and committee attendance per
-    Knesset, latest first."""
-    knessets = activity_knessets(conn, candidate)
-    attendance_by_knesset = [
-        {"knesset_num": knesset_num, **mk_activity.committee_attendance(
-            conn, candidate["mk_id"], knesset_num,
-            _committee_positions(candidate["person_id"], knesset_num, latest_knesset, roles))}
-        for knesset_num in knessets]
-    latest_attendance = {key: value for key, value in attendance_by_knesset[0].items() if key != "knesset_num"}
-    return {**mk_activity.opinion_counts(conn, candidate["mk_id"], knessets[0]),
-            "knesset_num": knessets[0], "knessets": knessets, "simple_knesset": ACTIVITY_KNESSET,
-            "has_subjects": mk_activity.has_subjects(conn, candidate["mk_id"], knessets[0]),
-            "attendance": latest_attendance, "attendance_by_knesset": attendance_by_knesset}
+@router.get("/api/profiles/party/{party_id}/candidate/{candidate_id}/attendance")
+def profile_attendance(party_id: int, candidate_id: int):
+    """Committee attendance in each activity Knesset, latest first. Memberships come from the Knesset
+    OData, fetched before the database opens so a slow API doesn't use up the query deadline; a Knesset
+    whose memberships failed has an error instead."""
+    _, candidate, error = _profile_candidate(party_id, candidate_id, needs="full")
+    if error:
+        return error
+    conn = store.connect(interrupt_after_seconds=config.DB_QUERY_TIMEOUT_SECONDS)
+    try:
+        knessets = activity_knessets(conn, candidate)
+    finally:
+        conn.close()
+    positions_by_knesset = {knesset_num: _committee_positions(candidate["person_id"], knesset_num) for knesset_num in knessets}
+    conn = store.connect(interrupt_after_seconds=config.DB_QUERY_TIMEOUT_SECONDS)
+    try:
+        return {"knessets": [
+            {"knesset_num": knesset_num, "error": "שגיאה בטעינת הוועדות מאתר הכנסת"} if positions is None
+            else {"knesset_num": knesset_num, **mk_activity.committee_attendance(conn, candidate["mk_id"], knesset_num, positions)}
+            for knesset_num, positions in positions_by_knesset.items()]}
+    finally:
+        conn.close()
 
 
 def activity_knessets(conn, candidate: dict) -> list[int]:

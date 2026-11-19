@@ -9,6 +9,7 @@ a 502 when the Knesset API is down; their live behaviour is covered by tests/tes
 
 import json
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -37,6 +38,9 @@ NO_MK_PARTY = {"id": 8, "letters": "א", "name": "אאא רשימה חדשה", "
                "ballot": None, "leader": "דנה כהן", "candidates": [NEWCOMER]}
 OTHER_MK_PARTY = {**PARTY, "id": 9, "name": "תתת רשימה", "logo": None, "website": None}
 BASE = "/api/profiles/party/7/candidate"
+KONSTITUTION_MEMBER = {"factions": [], "govministries": [], "knesset_roles": [], "faction_chairpersons": [],
+                       "committee_positions": [{"committee_id": 4191, "committee_name": "ועדת החוקה, חוק ומשפט",
+                                                "position": "חבר ועדה", "start_date": "2023-01-09", "finish_date": None}]}
 
 
 @pytest.fixture()
@@ -114,11 +118,11 @@ class TestProfileDepth:
     def test_newcomer_has_header_only(self, client):
         body = ok(client.get(f"{BASE}/3"))
         assert body["candidate"]["profile"] == "none" and "activity" not in body
-        for tab in ("themes", "opinions", "votes", "bills", "roles", "cosponsors", "vote-summary"):
+        for tab in ("themes", "opinions", "attendance", "votes", "bills", "roles", "cosponsors", "vote-summary"):
             assert client.get(f"{BASE}/3/{tab}").status_code == 404, tab
 
     def test_former_mk_has_no_committee_activity(self, client):
-        for tab in ("themes", "opinions"):
+        for tab in ("themes", "opinions", "attendance"):
             assert client.get(f"{BASE}/2/{tab}").status_code == 404, tab
 
 
@@ -158,17 +162,30 @@ class TestCommitteeActivity:
         assert 0 < page["total"] < everything["total"]
         assert all("2024-01-01" <= o["date"] <= "2024-03-31" for o in page["opinions"])
 
-    def test_header_attendance(self, client, monkeypatch):
-        monkeypatch.setattr("utils.knesset_db.get_mk_positions", lambda person_id, knesset_num: {
-            "factions": [], "govministries": [], "knesset_roles": [], "faction_chairpersons": [],
-            "committee_positions": [{"committee_id": 4191, "committee_name": "ועדת החוקה, חוק ומשפט",
-                                     "position": "חבר ועדה", "start_date": "2023-01-09", "finish_date": None}]})
-        activity = ok(client.get(f"{BASE}/1"))["activity"]
-        attendance = activity["attendance"]
+    def test_header_is_db_only(self, client, upstream_down):
+        body = ok(client.get(f"{BASE}/1"))
+        assert body["activity"]["opinions"] > 0 and body["activity"]["knessets"]
+        assert "roles" not in body and "attendance" not in body["activity"]
+        assert not upstream_down.calls
+
+    def test_attendance(self, client, monkeypatch):
+        monkeypatch.setattr("utils.knesset_db.get_mk_positions", lambda person_id, knesset_num: KONSTITUTION_MEMBER)
+        knessets = ok(client.get(f"{BASE}/1/attendance"))["knessets"]
+        header_knessets = ok(client.get(f"{BASE}/1"))["activity"]["knessets"]
+        assert [k["knesset_num"] for k in knessets] == header_knessets
+        attendance = knessets[0]
         assert 0 < attendance["member_meetings_attended"] <= attendance["member_meetings"]
         assert attendance["meetings_attended"] >= attendance["member_meetings_attended"]
         assert all(isinstance(row, list) and len(row) == 2 for row in attendance["per_committee"])
-        assert activity["opinions"] > 0
+
+    def test_slow_positions_do_not_use_up_the_db_deadline(self, client, monkeypatch):
+        def slow_positions(person_id, knesset_num):
+            time.sleep(1.2)
+            return KONSTITUTION_MEMBER
+        monkeypatch.setattr("utils.knesset_db.get_mk_positions", slow_positions)
+        monkeypatch.setattr(config, "DB_QUERY_TIMEOUT_SECONDS", 1)
+        knessets = ok(client.get(f"{BASE}/1/attendance"))["knessets"]
+        assert all("error" not in k for k in knessets)
 
     def test_guest_appearance_in_a_knesset_not_served_does_not_count(self, monkeypatch):
         from web import profiles
@@ -220,9 +237,9 @@ class TestUpstreamDown:
         knessets = ok(client.get(f"{BASE}/2/roles"))["knessets"]
         assert [k["knesset_num"] for k in knessets] == [24, 23, 22] and all(k["error"] for k in knessets)
 
-    def test_header_survives_without_roles(self, client, upstream_down):
-        body = ok(client.get(f"{BASE}/1"))
-        assert body["roles"] is None and body["activity"]["opinions"] > 0
+    def test_attendance_reports_each_knesset(self, client, upstream_down):
+        knessets = ok(client.get(f"{BASE}/1/attendance"))["knessets"]
+        assert knessets and all(k["error"] for k in knessets)
 
 
 class TestRateLimitBuckets:
@@ -233,7 +250,8 @@ class TestRateLimitBuckets:
         ("/api/profiles/parties", "web"),
         (f"{BASE}/1/themes", "db"),
         (f"{BASE}/1/opinions", "db"),
-        (f"{BASE}/1", "profiles"),
+        (f"{BASE}/1", "db"),
+        (f"{BASE}/1/attendance", "profiles"),
         (f"{BASE}/1/bills", "profiles"),
         ("/api/profiles/bill/123/text", "profiles"),
         ("/api/profiles/theme/12", "db"),

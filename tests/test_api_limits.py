@@ -105,7 +105,8 @@ class TestUpstreamRetry:
         from api.app import use_public_api_http_settings
         use_public_api_http_settings()
         assert config.API_RETRY_ATTEMPTS == config.PUBLIC_API_RETRY_ATTEMPTS == 2
-        assert config.HTTP_TIMEOUT_SECONDS == config.PUBLIC_API_HTTP_TIMEOUT_SECONDS == 10
+        assert config.HTTP_TIMEOUT_SECONDS == (5, 10)
+        assert (config.PUBLIC_API_HTTP_CONNECT_TIMEOUT_SECONDS, config.PUBLIC_API_HTTP_TIMEOUT_SECONDS) == (5, 10)
 
     def test_timeouts_retry_twice_with_the_configured_timeout(self, monkeypatch):
         monkeypatch.setattr(config, "API_RETRY_ATTEMPTS", 2)

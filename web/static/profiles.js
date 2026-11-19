@@ -298,13 +298,15 @@ function profilesFilterCandidates(button) {
 }
 
 /* ── a candidate's profile ───────────────────────────────────────── */
-function _pfHeroRole(data) {
-  const roles = data.roles;
+/* latestPositions: the newest Knesset of the /roles route, once it loads. */
+function _pfHeroRole(data, latestPositions = null) {
+  const roles = latestPositions && !latestPositions.error ? latestPositions : null;
   const candidate = data.candidate;
   const parts = [];
+  const current = rows => rows.filter(row => !row.finish_date);
   if (roles) {
-    roles.government.forEach(r => parts.push(`<b>${pfEsc(r.position_name || r.govministry_name)}</b>`));
-    roles.knesset_roles.forEach(r => parts.push(`<b>${pfEsc(r.position)}</b>`));
+    current(roles.govministries).forEach(r => parts.push(`<b>${pfEsc(r.position_name || r.govministry_name)}</b>`));
+    current(roles.knesset_roles).forEach(r => parts.push(`<b>${pfEsc(r.position)}</b>`));
   }
   const knessets = candidate.knessets;
   const served = pfKnessetsLabel(knessets);
@@ -349,7 +351,7 @@ async function _pfRenderCandidate(root, partyId, candidateId, current) {
   </div>`;
   _pfSelectTab(_pfRoute.tab && tabs.includes(_pfRoute.tab) ? _pfRoute.tab : tabs[0], { writeUrl: false });
   const profile = _pf;
-  pfsLoadHabits(api, () => profile === _pf);
+  pfsLoadHabits(api, () => profile === _pf, data);
   if (withSwipes) pfFetch(`${api}/themes`).then(payload => { if (profile === _pf) pfsShowSwipes(payload, api, candidate.name); })
     .catch(err => { const box = document.getElementById('pfs-swipes'); if (box && profile === _pf) box.innerHTML = pfErrorBox(err); });
 }
@@ -955,17 +957,34 @@ function _pfKnessetBlock(k, isCurrent) {
   </div>`;
 }
 
+async function _pfLoadAttendanceCard(profile) {
+  const box = document.getElementById('pf-attendance');
+  box.innerHTML = `<section class="pf-card">${_pfCardHead('event_available', 'נוכחות לפי ועדה', 'מתוך הפרוטוקולים · מקור: אתר הכנסת')}<div class="pf-card-body">${pfSpinner('טוען נוכחות…')}</div></section>`;
+  let attendance;
+  try { attendance = await pfFetch(`${profile.api}/attendance`); } catch (err) { if (profile === _pf) box.querySelector('.pf-card-body').innerHTML = pfErrorBox(err); return; }
+  if (profile !== _pf) return;
+  const failed = attendance.knessets.filter(k => k.error);
+  const blocks = attendance.knessets.filter(k => !k.error && k.per_committee.length);
+  if (!blocks.length) {
+    if (failed.length) box.querySelector('.pf-card-body').innerHTML = pfErrorBox(new Error(failed[0].error));
+    else box.innerHTML = '';
+    return;
+  }
+  const block = k => `<div class="pf-k-block${k === blocks[0] ? ' current' : ''}"><div class="pf-k-head">${pfKnessetLabel(k.knesset_num)}${k.member_meetings ? ` <small>נוכחות ${pfPct(k.member_meetings_attended, k.member_meetings)}% בישיבות הוועדות שהיה/תה חבר/ה בהן</small>` : ''}</div>
+      ${k.per_committee.slice(0, 10).map(([committee, count]) => `<div class="pf-att-row"><span title="${pfEsc(committee)}">${pfEsc(committee)}</span><div class="pf-att-bar"><i style="width:${count / k.per_committee[0][1] * 100}%"></i></div><b>${pfNum(count)}</b></div>`).join('')}</div>`;
+  box.innerHTML = `<section class="pf-card">${_pfCardHead('event_available', 'נוכחות לפי ועדה', `ישיבות שנכח/ה בהן ${pfInLabel(pfKnessetsLabel(blocks.map(k => k.knesset_num)))}, מתוך הפרוטוקולים · מקור: אתר הכנסת`)}<div class="pf-card-body">
+      <div class="pf-roles">${blocks.map(block).join('')}</div>
+      ${failed.length ? `<p class="pf-note">${pfEsc(failed[0].error)}: ${pfEsc(pfKnessetsLabel(failed.map(k => k.knesset_num)))}</p>` : ''}
+      <p class="pf-note">מספר הישיבות לפי רשימת הנוכחים בפרוטוקול. אחוז הנוכחות מחושב רק על ועדות שהיה/תה חבר/ה בהן, בתקופת החברות.</p>
+    </div></section>`;
+}
+
 async function _pfLoadRolesTab() {
   const profile = _pf;
   const panel = document.getElementById('pf-panel-roles');
-  const attendanceBlocks = (profile.data.activity?.attendance_by_knesset || []).filter(k => k.per_committee.length);
-  const attendanceBlock = k => `<div class="pf-k-block${k === attendanceBlocks[0] ? ' current' : ''}"><div class="pf-k-head">${pfKnessetLabel(k.knesset_num)}${k.member_meetings ? ` <small>נוכחות ${pfPct(k.member_meetings_attended, k.member_meetings)}% בישיבות הוועדות שהיה/תה חבר/ה בהן</small>` : ''}</div>
-      ${k.per_committee.slice(0, 10).map(([committee, count]) => `<div class="pf-att-row"><span title="${pfEsc(committee)}">${pfEsc(committee)}</span><div class="pf-att-bar"><i style="width:${count / k.per_committee[0][1] * 100}%"></i></div><b>${pfNum(count)}</b></div>`).join('')}</div>`;
   panel.innerHTML = `<section class="pf-card">${_pfCardHead('badge', 'תפקידים', 'סיעות, ועדות ותפקידים בכל הכנסות שכיהן/ה בהן · מקור: אתר הכנסת')}<div class="pf-card-body" id="pf-roles">${pfSpinner('טוען תפקידים…')}</div></section>
-    ${attendanceBlocks.length ? `<section class="pf-card">${_pfCardHead('event_available', 'נוכחות לפי ועדה', `ישיבות שנכח/ה בהן ${pfInLabel(pfKnessetsLabel(attendanceBlocks.map(k => k.knesset_num)))}, מתוך הפרוטוקולים · מקור: אתר הכנסת`)}<div class="pf-card-body">
-      <div class="pf-roles">${attendanceBlocks.map(attendanceBlock).join('')}</div>
-      <p class="pf-note">מספר הישיבות לפי רשימת הנוכחים בפרוטוקול. אחוז הנוכחות מחושב רק על ועדות שהיה/תה חבר/ה בהן, בתקופת החברות.</p>
-    </div></section>` : ''}`;
+    <div id="pf-attendance"></div>`;
+  if (profile.data.candidate.profile === 'full') _pfLoadAttendanceCard(profile);
   try {
     const data = await pfFetch(`${profile.api}/roles`);
     if (profile !== _pf) return;

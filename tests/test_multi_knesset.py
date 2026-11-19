@@ -521,11 +521,14 @@ class TestProfileActivityKnessets:
         page = get_ok(profile_client, f"{PROFILE_BASE}/1/opinions", theme=str(older_theme["id"]))
         assert meeting_ids(page["opinions"]) == {"a24"}
 
-    def test_header_stats_latest_attendance_per_knesset(self, profile_client):
+    def test_header_stats_latest_knesset(self, profile_client):
         activity = get_ok(profile_client, f"{PROFILE_BASE}/1")["activity"]
         assert activity["knesset_num"] == NEWER and activity["opinions"] == 1
-        assert activity["attendance"]["meetings_attended"] == 1
-        blocks = activity["attendance_by_knesset"]
+        assert activity["knessets"] == [NEWER, OLDER]
+
+    def test_attendance_per_knesset(self, profile_client):
+        blocks = get_ok(profile_client, f"{PROFILE_BASE}/1/attendance")["knessets"]
+        assert blocks[0]["meetings_attended"] == 1
         assert [b["knesset_num"] for b in blocks] == [NEWER, OLDER]
         assert all(b["member_meetings"] == 1 and b["member_meetings_attended"] == 1 for b in blocks)
         assert all(b["per_committee"] == [[SHARED_COMMITTEE, 1]] for b in blocks)

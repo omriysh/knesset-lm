@@ -688,7 +688,7 @@ class TestWebProcessSettings:
         asyncio.run(enter_and_leave())
         assert config.API_RETRY_ATTEMPTS == config.PUBLIC_API_RETRY_ATTEMPTS
         assert config.API_RETRY_SLEEP == config.PUBLIC_API_RETRY_SLEEP
-        assert config.HTTP_TIMEOUT_SECONDS == config.PUBLIC_API_HTTP_TIMEOUT_SECONDS
+        assert config.HTTP_TIMEOUT_SECONDS == (config.PUBLIC_API_HTTP_CONNECT_TIMEOUT_SECONDS, config.PUBLIC_API_HTTP_TIMEOUT_SECONDS)
 
     def test_meta_is_cached_in_memory(self, web, monkeypatch):
         from retrieval import knesset_db_store as store
