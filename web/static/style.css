@@ -3260,6 +3260,11 @@ body.show-welcome .research-slot { display: block; }
   #lp-install { width: calc(100cqw - 24px); padding-top: 32px; }
   .lp-install { padding: 10px 10px 0; border-radius: 20px; }
   html:not(.election-mode) .lp-install { padding-inline: 0; background: none; box-shadow: none; }
+  html:not(.election-mode) #tab-chat .landing { scroll-snap-type: none; }
+  html:not(.election-mode) #lp-install { height: auto; padding-bottom: 32px; }
+  html:not(.election-mode) .lp-install { flex: none; overflow: visible; }
+  html:not(.election-mode) .lp-steps { height: auto; overflow: visible; mask-image: none; }
+  html:not(.election-mode) .lp-steps > :first-child, html:not(.election-mode) .lp-steps > :last-child { margin-block: 0; }
   #lp-install-tabs { align-self: stretch; }
   .lp-steps { padding: 16px 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; mask-image: linear-gradient(transparent, #000 16px, #000 calc(100% - 16px), transparent); }
   .lp-steps > :first-child { margin-inline-start: 0; margin-block-start: auto; }
