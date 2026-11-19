@@ -2,17 +2,20 @@
  * filters.js — Reading tab filter bar state + interactions
  *
  * Globals used by inline HTML handlers:
- *   rfToggle, rfFilterList, rfToggleItem, rfSetGuest,
+ *   rfToggle, rfFilterList, rfToggleItem (also the single-choice Knesset), rfSetGuest,
  *   rfSetDate, rfApplyDate, rfClearAll, rfRemoveFilter, rfGetFilters
  */
 
-/* ── Dropdown data (loaded from /api/meta on init) ──────────────── */
+/* ── Dropdown data (loaded from /api/meta; reloaded when the Knesset filter changes) ── */
+let _RF_KNESSETS   = [];
 let _RF_COMMITTEES = [];
 let _RF_MKS        = [];
 let _RF_PARTIES    = [];
+let _rfMetaRequest = 0;
 
 /* ── Filter state ───────────────────────────────────────────────── */
 const _rfState = {
+  knesset:    '',
   committees: new Set(),
   mks:        new Set(),
   parties:    new Set(),
@@ -25,11 +28,12 @@ let _rfOpen = null;
 
 /* ── Init ───────────────────────────────────────────────────────── */
 document.addEventListener('DOMContentLoaded', () => {
+  _rfSetListLoading('rf-knesset-list');
   _rfSetListLoading('rf-committee-list');
   _rfSetListLoading('rf-mk-list');
   _rfSetListLoading('rf-party-list');
 
-  _rfLoadMeta();
+  _rfLoadMeta(_rfState.knesset);
 
   // Portal: move all dropdowns to <body> so overflow-x:auto on rfb-filter-row
   // can't clip them (fixed children position relative to viewport, not parent).
@@ -52,22 +56,64 @@ document.addEventListener('DOMContentLoaded', () => {
   }, { passive: true, capture: true });
 });
 
-async function _rfLoadMeta() {
+/* Committees, MKs and parties differ per Knesset (party names too), so the lists follow the Knesset filter.
+   dropMissing: unselect values the new lists lack (the user changed the Knesset; a shared link keeps its own). */
+async function _rfLoadMeta(knesset, { dropMissing = false } = {}) {
+  const request = ++_rfMetaRequest;
   try {
-    const res  = await fetch('/api/meta');
+    const res  = await fetch(knesset ? `/api/meta?knesset=${encodeURIComponent(knesset)}` : '/api/meta');
     const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    if (request !== _rfMetaRequest) return;
+    _RF_KNESSETS   = data.knessets   || [];
     _RF_COMMITTEES = data.committees || [];
     _RF_MKS        = data.mks        || [];
     _RF_PARTIES    = data.parties    || [];
+    if (dropMissing) _rfDropMissingSelections();
+    _rfRenderKnessetList();
     _rfRenderList('rf-committee-list', _RF_COMMITTEES, 'committee');
     _rfRenderList('rf-mk-list',        _RF_MKS,        'mk');
     _rfRenderList('rf-party-list',     _RF_PARTIES,    'party');
   } catch (exc) {
     console.error('[filters] meta fetch failed:', exc);
+    if (request !== _rfMetaRequest) return;
+    if (!_RF_KNESSETS.length) _rfSetListError('rf-knesset-list');
     _rfSetListError('rf-committee-list');
     _rfSetListError('rf-mk-list');
     _rfSetListError('rf-party-list');
   }
+}
+
+function _rfDropMissingSelections() {
+  const available = { committees: new Set(_RF_COMMITTEES), mks: new Set(_RF_MKS), parties: new Set(_RF_PARTIES) };
+  for (const [key, values] of Object.entries(available)) {
+    _rfState[key] = new Set([..._rfState[key]].filter(v => values.has(v)));
+  }
+  _rfBadge('committee', _rfState.committees.size);
+  _rfBadge('participants', _rfParticipantCount());
+  _rfRenderChips();
+}
+
+const rfKnessetLabel = knesset => `הכנסת ה-${knesset}`;
+
+function _rfRenderKnessetList() {
+  const el = document.getElementById('rf-knesset-list');
+  if (!el) return;
+  el.innerHTML = [..._RF_KNESSETS].reverse().map(knesset => {
+    const sel = String(knesset) === _rfState.knesset ? 'rfb-option--selected' : '';
+    return `<button class="rfb-option ${sel}" data-type="knesset" data-value="${_rfEsc(knesset)}" data-click="rfToggleItem">
+  <span class="rfb-option-check material-symbols-outlined">check</span>${_rfEsc(rfKnessetLabel(knesset))}</button>`;
+  }).join('');
+}
+
+/* One Knesset or none (= every Knesset): choosing the selected one again clears it. */
+function _rfSetKnesset(knesset, { dropMissing = true } = {}) {
+  const changed = knesset !== _rfState.knesset;
+  _rfState.knesset = knesset;
+  _rfRenderKnessetList();
+  _rfBadge('knesset', knesset ? 1 : 0);
+  _rfRenderChips();
+  if (changed) _rfLoadMeta(knesset, { dropMissing });
 }
 
 function _rfSetListLoading(listId) {
@@ -160,6 +206,11 @@ function _rfSetFor(type) {
 
 /* ── Multi-select toggles ───────────────────────────────────────── */
 function rfToggleItem(type, value) {
+  if (type === 'knesset') {
+    _rfSetKnesset(_rfState.knesset === value ? '' : value);
+    _rfClose('knesset');
+    return;
+  }
   const set = _rfSetFor(type);
   if (set.has(value)) set.delete(value); else set.add(value);
 
@@ -208,6 +259,7 @@ function rfApplyDate() {
 
 /* ── Clear all ──────────────────────────────────────────────────── */
 function rfClearAll() {
+  _rfSetKnesset('', { dropMissing: false });
   _rfState.committees.clear();
   _rfState.mks.clear();
   _rfState.parties.clear();
@@ -247,6 +299,9 @@ function rfRemoveFilter(type, value) {
     _rfState.guest = '';
     _rfBadge('participants', _rfParticipantCount());
     const el = document.getElementById('rf-guest-input'); if (el) el.value = '';
+  } else if (type === 'knesset') {
+    _rfSetKnesset('');
+    return;
   } else if (type === 'date') {
     _rfState.dateFrom = '';
     _rfState.dateTo   = '';
@@ -283,6 +338,7 @@ function _rfBadge(type, count) {
 /* ── Active filter chips (filter bar row, and the collapsed bar after a search) ── */
 function _rfActiveChips() {
   const chips = [];
+  if (_rfState.knesset)            chips.push({ label: rfKnessetLabel(_rfState.knesset), type: 'knesset', value: _rfState.knesset });
   _rfState.committees.forEach(v => chips.push({ label: v,                           type: 'committee', value: v }));
   _rfState.mks.forEach(v        => chips.push({ label: `ח"כ ${v}`,                 type: 'mk',        value: v }));
   _rfState.parties.forEach(v    => chips.push({ label: v,                           type: 'party',     value: v }));
@@ -322,6 +378,7 @@ function _fmtDate(iso) {
 
 /* ── Set the whole filter state (a shared link) ─────────────────── */
 function rfSetFilters(filters) {
+  _rfSetKnesset(filters.knesset ? String(filters.knesset) : '', { dropMissing: false });
   _rfState.committees = new Set(filters.committees || []);
   _rfState.mks        = new Set(filters.mks || []);
   _rfState.parties    = new Set(filters.parties || []);
@@ -345,6 +402,7 @@ function rfSetFilters(filters) {
 /* ── Return current filter state for search API ─────────────────── */
 function rfGetFilters() {
   return {
+    knesset:    _rfState.knesset ? Number(_rfState.knesset) : null,
     committees: [..._rfState.committees],
     mks:        [..._rfState.mks],
     parties:    [..._rfState.parties],

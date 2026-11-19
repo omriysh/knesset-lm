@@ -7,6 +7,7 @@
 /* ── Tab switching ───────────────────────────────────────────────── */
 /* writeUrl: false when the URL already names this tab (opening a link, back/forward) */
 function switchTab(name, { writeUrl = true, push = true } = {}) {
+  if (name !== 'reading') browserUnloadMeeting();
   // Hide all panels
   document.querySelectorAll('.app-tab-panel').forEach(p => {
     p.classList.add('hidden');
@@ -34,8 +35,12 @@ function switchTab(name, { writeUrl = true, push = true } = {}) {
   const mobBtn = document.getElementById(`mob-tab-${name}`);
   if (mobBtn) mobBtn.classList.add('active');
 
+  if (name === 'reading') browserReloadMeeting();
   if (name === 'reading' && writeUrl && !_readingTabHasResults()) browseSearch({ push: false });
-  if (name === 'chat') landingStartDemo();
+  if (name === 'profiles') profilesShow();
+  if (name === 'subjects') subjectsShow();
+  if (name === 'game') gameShow();
+  if (name === 'research') setResearchTabShown(true);
 
   const researchSettings = document.getElementById('settings-research');
   if (researchSettings) researchSettings.disabled = name !== 'research';
@@ -43,10 +48,52 @@ function switchTab(name, { writeUrl = true, push = true } = {}) {
   setActiveTab(name, { writeUrl, push });
 }
 
-/* ── URL routing: / (in your chat), /research, /protocols?… (url_state.js); back/forward re-applies the URL ── */
+/* ── "בצ'אט שלנו" tab: hidden until turned on in the settings or opened by a link ── */
+const _RESEARCH_TAB_SHOWN_KEY = 'showResearchTab';
+
+function researchTabShown() {
+  try {
+    return localStorage.getItem(_RESEARCH_TAB_SHOWN_KEY) === 'true';
+  } catch (exc) {
+    console.warn('[tabs] localStorage unavailable:', exc);
+    return false;
+  }
+}
+
+function setResearchTabShown(shown) {
+  document.documentElement.classList.toggle('research-tab-shown', shown);
+  try {
+    localStorage.setItem(_RESEARCH_TAB_SHOWN_KEY, shown ? 'true' : 'false');
+  } catch (exc) {
+    console.warn('[tabs] localStorage unavailable:', exc);
+  }
+  if (!shown && _activeTab === 'research') switchTab('home');
+}
+
+document.documentElement.classList.toggle('research-tab-shown', researchTabShown());
+
+/* ── URL routing: / (home), /chat, /research, /protocols?…, /profiles… (url_state.js, profiles.js);
+   back/forward re-applies the URL ── */
 function applyUrlRoute() {
+  if (location.pathname === ABOUT_PATH || location.pathname.startsWith(ABOUT_PATH + '/')) {
+    switchTab('home', { writeUrl: false });
+    openHelp(location.pathname.slice(ABOUT_PATH.length + 1) || 'about');
+    return;
+  }
   if (location.pathname === RESEARCH_PATH) { switchTab('research', { writeUrl: false }); return; }
-  if (location.pathname !== PROTOCOLS_PATH) { switchTab('chat', { writeUrl: false }); return; }
+  if (location.pathname === CHAT_PATH) { switchTab('chat', { writeUrl: false }); return; }
+  if (location.pathname === GAME_PATH) { switchTab('game', { writeUrl: false }); return; }
+  if (location.pathname === SUBJECTS_PATH || location.pathname.startsWith(SUBJECTS_PATH + '/')) {
+    switchTab('subjects', { writeUrl: false });
+    subjectsApplyRoute();
+    return;
+  }
+  if (location.pathname === PROFILES_PATH || location.pathname.startsWith(PROFILES_PATH + '/')) {
+    switchTab('profiles', { writeUrl: false });
+    profilesApplyRoute();
+    return;
+  }
+  if (location.pathname !== PROTOCOLS_PATH) { switchTab('home', { writeUrl: false }); return; }
   switchTab('reading', { writeUrl: false });
   const target = readProtocolUrl();
   setProtocolUrlState(target);
@@ -110,6 +157,9 @@ function _readingTabHasResults() {
   return !!document.querySelector('#reading-browser-area .browser-standalone-wrapper, #browse-loading-overlay');
 }
 
+/* The filters stay open over the first results, and fold away over later ones. */
+let _browseSearchedBefore = false;
+
 /* push: false when the search only loads what the current URL already says (a link, the first visit). */
 async function browseSearch({ push = true } = {}) {
   const input = document.getElementById('reading-search-input');
@@ -162,7 +212,9 @@ async function browseSearch({ push = true } = {}) {
       }
     );
 
-    _collapseRfb();
+    if (_browseSearchedBefore) _collapseRfb();
+    else document.querySelector('.rfb')?.classList.add('rfb-has-results');
+    _browseSearchedBefore = true;
 
   } catch (err) {
     console.error('[tabs] browse search failed:', err);
@@ -175,7 +227,7 @@ async function browseSearch({ push = true } = {}) {
 /* ── Filter bar collapse ─────────────────────────────────────────── */
 /* The collapsed bar shows the search as chips; removing one searches again without it. */
 function rfbExpand() {
-  document.querySelector('.rfb')?.classList.remove('rfb-collapsed');
+  _setRfbCollapsed(false);
   _scrolledSinceExpand = 0;
 }
 
@@ -184,7 +236,8 @@ function rfbCollapse() {
 }
 
 function _collapseRfb() {
-  document.querySelector('.rfb')?.classList.add('rfb-collapsed', 'rfb-has-results');
+  document.querySelector('.rfb')?.classList.add('rfb-has-results');
+  _setRfbCollapsed(true);
   const chips = document.getElementById('rfb-collapsed-chips');
   if (!chips) return;
   const query = document.getElementById('reading-search-input')?.value.trim() || '';
@@ -192,6 +245,29 @@ function _collapseRfb() {
     ? rfChipHtml(`"${query}"`, 'rfClearQueryAndSearch', { extraClass: 'chip--query' })
     : '';
   chips.innerHTML = queryChip + rfActiveChipsHtml('rfRemoveFilterAndSearch');
+}
+
+/* The rows cross-fade by the CSS grid transition, but its 0fr/1fr rows keep the bar at its full height until the
+   end; the bar's own height animates between the two states' measured heights instead. */
+const _RFB_FOLD_MS = 300;
+let _rfbFold = null;
+function _setRfbCollapsed(collapsed) {
+  const rfb = document.querySelector('.rfb');
+  if (!rfb || rfb.classList.contains('rfb-collapsed') === collapsed) return;
+  const fromHeight = rfb.getBoundingClientRect().height;
+  _rfbFold?.cancel();
+  rfb.style.transition = 'none';
+  rfb.classList.toggle('rfb-collapsed', collapsed);
+  const toHeight = rfb.getBoundingClientRect().height;
+  rfb.classList.toggle('rfb-collapsed', !collapsed);
+  void rfb.offsetHeight;
+  rfb.style.transition = '';
+  rfb.classList.toggle('rfb-collapsed', collapsed);
+  rfb.style.overflow = 'hidden';
+  const fold = rfb.animate([{ height: `${fromHeight}px` }, { height: `${toHeight}px` }],
+    { duration: _RFB_FOLD_MS, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' });
+  fold.onfinish = () => { if (_rfbFold === fold) rfb.style.overflow = ''; };
+  _rfbFold = fold;
 }
 
 function rfClearQueryAndSearch() {
@@ -210,11 +286,22 @@ document.addEventListener('scroll', (event) => {
   const previous = _lastScrollTop.get(scroller) ?? scroller.scrollTop;
   _lastScrollTop.set(scroller, scroller.scrollTop);
   const rfb = document.querySelector('.rfb');
-  if (!rfb?.classList.contains('rfb-has-results') || rfb.classList.contains('rfb-collapsed')) return;
+  if (!rfb?.classList.contains('rfb-has-results')) return;
+  if (rfb.classList.contains('rfb-collapsed')) {
+    if (_scrolledUpToTranscriptTop(scroller, previous)) rfbExpand();
+    return;
+  }
   if (document.querySelector('.rfb-dropdown:not(.hidden)')) return;
   _scrolledSinceExpand += Math.abs(scroller.scrollTop - previous);
   if (_scrolledSinceExpand > _AUTO_COLLAPSE_SCROLL_PX) _collapseRfb();
 }, true);
+
+/* Reaching the top of the transcript by scrolling (not by a jump, like opening another meeting) unfolds the filters. */
+const _MAX_SCROLL_STEP_PX = 400;
+function _scrolledUpToTranscriptTop(scroller, previousScrollTop) {
+  return scroller.id === 'browser-transcript-col' && scroller.scrollTop <= 0
+    && previousScrollTop > 0 && previousScrollTop < _MAX_SCROLL_STEP_PX;
+}
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
 function _setBrowseLoading(on) {

@@ -126,6 +126,14 @@ class TestSqlFilters:
     def test_votes_mk_id_format(self, client):
         bad_request(client.get("/v1/votes", params={"mk_id": "1' or '1'='1"}), "invalid_mk_id")
 
+    def test_bills_mk_id_format(self, client):
+        bad_request(client.get("/v1/bills", params={"mk_id": "1 or PersonID gt 0"}), "invalid_mk_id")
+
+    @pytest.mark.parametrize("role", ["author", "initiator' or '1'='1", "IsInitiator eq true"])
+    def test_bills_initiator_role_is_an_enum(self, client, role):
+        bad_request(client.get("/v1/bills", params={"mk_id": "30807", "initiator_role": role}),
+                    "invalid_initiator_role")
+
 
 # ── OData $filter ────────────────────────────────────────────────────────────
 
@@ -157,6 +165,18 @@ class TestODataInjection:
         assert filters or r.status_code == 400
         for flt in filters:
             assert re.fullmatch(r"contains\(Name,S\)( and KnessetNum eq \d+)?", filter_shape(flt)), flt
+            assert not any(ord(ch) < 32 for ch in flt)
+
+    @pytest.mark.parametrize("payload", ODATA_PAYLOADS)
+    def test_mk_bill_search_filter_is_escaped(self, client, upstream_down, monkeypatch, payload):
+        monkeypatch.setattr("utils.tools._vote_person_id", lambda mk_id: 30807)
+        r = client.get("/v1/bills", params={"q": payload, "mk_id": "30807", "initiator_role": "joined"})
+        assert r.status_code in (400, 502), r.text
+        filters = outgoing_filters(upstream_down, "/KNS_BillInitiator")
+        assert filters or r.status_code == 400
+        for flt in filters:
+            assert re.fullmatch(r"PersonID eq 30807( and contains\(KNS_Bill/Name,S\))? and IsInitiator eq false",
+                                filter_shape(flt)), flt
             assert not any(ord(ch) < 32 for ch in flt)
 
     @pytest.mark.parametrize("payload", ODATA_PAYLOADS)
@@ -262,6 +282,13 @@ class TestBillDocuments:
         assert "page 2" in text and "page 3" not in text
         text = kdb._extract_pdf_text_pdfplumber(pdf_bytes)
         assert "page 2" in text and "page 3" not in text
+
+    def test_pdf_word_reading_order(self):
+        def words(*placed):
+            return [(x, 0, x + 10, 10, text, 0, 0, 0) for x, text in placed]
+        line = kdb._reading_order(words((300, "מפתח"), (200, "API"), (100, "Gemini"), (0, "חדש")))
+        assert [w[4] for w in line] == ["מפתח", "Gemini", "API", "חדש"]
+        assert [w[4] for w in kdb._reading_order(words((50, "2"), (0, "page")))] == ["page", "2"]
 
 
 # ── sizes / counts / ranges ──────────────────────────────────────────────────

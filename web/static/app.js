@@ -68,6 +68,8 @@ function openSettings() {
   document.getElementById('toggle-stages-always').checked =
     localStorage.getItem('showStagesAlways') === 'true';
   document.getElementById('toggle-share-search').checked = window.shareIncludesSearch();
+  document.getElementById('toggle-research-tab').checked = researchTabShown();
+  gameSettingsRefresh();
   refreshGeminiKeySettingsStatus();
   refreshModelSettings();
 }
@@ -79,21 +81,112 @@ function onStagesAlwaysToggle(el) {
 }
 
 // ── Help overlay (lazy-fetched markdown) ───────────────────────────────
+/* "?" opens it over whatever tab is showing and leaves the URL alone; /about/<tab> opens it over home
+   (tabs.js), and then the address bar follows the dialog's tab and language until it is closed. */
+const HELP_PANEL_IDS = {
+  about: 'help-content', prompts: 'help-prompts', reading: 'help-reading',
+  support: 'help-support', privacy: 'help-privacy', terms: 'help-terms',
+};
 let _helpLoaded = false;
-async function openHelp() {
+let _helpTab = 'about';
+let _helpLang = new URLSearchParams(location.search).get('lang') === 'en' ? 'en' : 'he';
+
+function _helpOpenedByUrl() {
+  return location.pathname === ABOUT_PATH || location.pathname.startsWith(ABOUT_PATH + '/');
+}
+
+function _writeHelpUrl() {
+  if (!_helpOpenedByUrl()) return;
+  const path = _helpTab === 'about' ? ABOUT_PATH : `${ABOUT_PATH}/${_helpTab}`;
+  history.replaceState(null, '', path + (_helpLang === 'en' ? '?lang=en' : ''));
+}
+
+function openHelp(tab = 'about') {
   document.getElementById('help-overlay').classList.add('open');
+  helpSetTab(HELP_PANEL_IDS[tab] ? tab : 'about');
+}
+
+/* Footer links are real /about/<tab> links for crawlers and new tabs; a plain click opens the dialog in place */
+function openHelpLink(el, event) {
+  if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0) return;
+  event.preventDefault();
+  openHelp(el.dataset.arg);
+}
+
+async function _loadHelpAbout() {
   if (_helpLoaded) return;
   try {
     const md = await fetch('/api/help').then(r => r.text());
-    document.getElementById('help-content').innerHTML = renderMarkdown(md);
+    const content = document.getElementById('help-content');
+    content.innerHTML = renderMarkdown(md);
     _helpLoaded = true;
   } catch (exc) {
     console.error('[app] help load failed:', exc);
     document.getElementById('help-content').innerHTML = '<p>שגיאה בטעינת העזרה.</p>';
   }
 }
+
 function closeHelp() {
   document.getElementById('help-overlay').classList.remove('open');
+  if (_helpOpenedByUrl()) history.replaceState(null, '', HOME_PATH);
+}
+
+function helpSetTab(tab) {
+  _helpTab = tab;
+  document.querySelectorAll('#help-tabs .seg-btn').forEach(button => {
+    const active = button.dataset.arg === tab;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+  for (const [panelTab, panelId] of Object.entries(HELP_PANEL_IDS)) {
+    document.getElementById(panelId).hidden = panelTab !== tab;
+  }
+  const tabHasLanguages = document.getElementById(HELP_PANEL_IDS[tab]).classList.contains('help-legal');
+  document.getElementById('help-lang-toggle').hidden = !tabHasLanguages;
+  _helpSetLang(_helpLang);
+  if (tab === 'about') _loadHelpAbout();
+  if (tab === 'prompts') _loadHelpPrompts();
+}
+
+const HELP_LANGS = [
+  { code: 'he', name: 'עברית' },
+  { code: 'en', name: 'English' },
+];
+
+function helpCycleLang() {
+  const index = HELP_LANGS.findIndex(lang => lang.code === _helpLang);
+  _helpSetLang(HELP_LANGS[(index + 1) % HELP_LANGS.length].code);
+}
+
+function _helpSetLang(lang) {
+  _helpLang = lang;
+  document.querySelectorAll('.help-legal article').forEach(article => {
+    article.hidden = article.lang !== lang;
+  });
+  const next = HELP_LANGS[(HELP_LANGS.findIndex(l => l.code === lang) + 1) % HELP_LANGS.length];
+  const toggle = document.getElementById('help-lang-toggle');
+  toggle.title = next.name;
+  toggle.setAttribute('aria-label', next.name);
+  _writeHelpUrl();
+}
+
+let _helpPromptsLoaded = false;
+async function _loadHelpPrompts() {
+  const promptsPanel = document.getElementById('help-prompts');
+  if (_helpPromptsLoaded) return;
+  try {
+    const prompts = await fetch('/api/help/prompts').then(r => r.json());
+    promptsPanel.innerHTML = `<p class="help-prompts-lead">אלה ה-prompt-ים ששימשו את מודלי Gemini לבניית המידע שמוצג באתר, כלשונם.</p>`
+      + prompts.map(prompt => `<section class="help-prompt">
+          <h3>${_esc(prompt.title)}</h3>
+          <p>${_esc(prompt.used_for)}</p>
+          <pre dir="ltr">${_esc(prompt.text)}</pre>
+        </section>`).join('');
+    _helpPromptsLoaded = true;
+  } catch (exc) {
+    console.error('[app] help prompts load failed:', exc);
+    promptsPanel.innerHTML = '<p>שגיאה בטעינת ה-prompt-ים.</p>';
+  }
 }
 
 // ── Expose inline HTML handlers on window ──────────────────────────────
@@ -101,5 +194,8 @@ window.openSettings         = openSettings;
 window.closeSettings        = closeSettings;
 window.openHelp             = openHelp;
 window.closeHelp            = closeHelp;
+window.helpSetTab           = helpSetTab;
+window.helpCycleLang        = helpCycleLang;
+window.openHelpLink         = openHelpLink;
 window.onStagesAlwaysToggle = onStagesAlwaysToggle;
 

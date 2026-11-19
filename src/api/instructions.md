@@ -1,6 +1,6 @@
 # KnessetLM API
 
-> Read-only data on the Israeli Knesset (25th Knesset and on): committee meeting protocols
+> Read-only data on the Israeli Knesset (protocols from the 24th Knesset on): committee meeting protocols
 > (full transcripts, AI-extracted discussion topics, MK positions with verbatim quotes),
 > MKs and their positions, committees, parties, bills and plenum votes.
 
@@ -18,11 +18,14 @@ All endpoints are `GET` with query-string parameters and return JSON
 
 ## Endpoints
 
-- `/v1/mks?q=<name>`: resolve an MK name to `mk_id`, with party, committee and government positions.
-- `/v1/committees?q=<name>`: resolve a committee name; the returned `name` is the `committee` filter.
-- `/v1/parties?q=<name>`: party members; the returned `party` is the `party` filter.
-- `/v1/protocols?q=<words>&search_in=topics,opinions,speeches&mk_id=&party=&committee=&meeting_id=&date_from=&date_to=&sort=&offset=`:
-  keyword search over protocols. Scopes: `topics` (meeting discussion topics), `opinions`
+- `/v1/mks?q=<name>`: resolve an MK name to `mk_id`, with party, committee and government positions
+  (MKs of every processed Knesset unless `knesset_num` names one; an `mk_id` is the same person in every Knesset).
+- `/v1/committees?q=<name>`: resolve a committee name; the returned `name` is the `committee` filter
+  (committees of every processed Knesset unless `knesset_num` names one).
+- `/v1/parties?q=<name>&knesset_num=`: party members in one Knesset (default: the latest); the returned `party` is the
+  `party` filter. Party names differ between Knessets.
+- `/v1/protocols?q=<words>&search_in=topics,opinions,speeches&mk_id=&party=&committee=&meeting_id=&date_from=&date_to=&sort=&offset=&knesset_num=`:
+  keyword search over protocols, of every processed Knesset unless `knesset_num` names one (rows carry their `knesset_num`). Scopes: `topics` (meeting discussion topics), `opinions`
   (who said what, with a verbatim quote), `speeches` (the transcript). Default scopes:
   topics, opinions. An empty `q` lists rows instead (newest meetings first). Pages are about 28000
   characters of JSON per scope, whole rows only; there is no page-size parameter. `offset` counts the

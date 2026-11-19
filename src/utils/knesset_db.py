@@ -385,6 +385,54 @@ def _is_garbage(text: str, threshold: float = 0.3) -> bool:
     return (garbage_count / len(text)) > threshold
 
 
+_PDF_WORD_GAP_JOIN_POINTS = 1.0
+
+
+_HEBREW_LETTER_RE = re.compile(r"[א-ת]")
+_LATIN_LETTER_RE = re.compile(r"[A-Za-z]")
+
+
+def _reading_order(words: list[tuple]) -> list[tuple]:
+    """A line's PyMuPDF words in reading order: right to left when the line has Hebrew, with runs of
+    Latin words inside it kept left to right; left to right otherwise."""
+    if not any(_HEBREW_LETTER_RE.search(word[4]) for word in words):
+        return sorted(words, key=lambda word: word[0])
+    ordered = sorted(words, key=lambda word: word[2], reverse=True)
+    result, latin_run = [], []
+    for word in ordered + [None]:
+        if word is not None and _LATIN_LETTER_RE.search(word[4]) and not _HEBREW_LETTER_RE.search(word[4]):
+            latin_run.append(word)
+            continue
+        result.extend(reversed(latin_run))
+        latin_run = []
+        if word is not None:
+            result.append(word)
+    return result
+
+
+def _pdf_page_lines(page) -> list[str]:
+    """The page's visual lines, right to left: each text block's words grouped by their vertical center, since the "text"
+    mode breaks a line wherever a Word-exported PDF starts a new run (bidi, font), often mid-sentence.
+    Words closer than _PDF_WORD_GAP_JOIN_POINTS are one token ("פנימי:" not "פנימי :")."""
+    words = sorted(page.get_text("words"), key=lambda word: (word[5], (word[1] + word[3]) / 2))
+    lines: list[list[tuple]] = []
+    for word in words:
+        center, height = (word[1] + word[3]) / 2, word[3] - word[1]
+        if lines and lines[-1][0][1][5] == word[5] and abs(center - lines[-1][0][0]) <= height / 2:
+            lines[-1].append((center, word))
+        else:
+            lines.append([(center, word)])
+    text_lines = []
+    for line in lines:
+        ordered = _reading_order([word for _, word in line])
+        text = ordered[0][4]
+        for previous, word in zip(ordered, ordered[1:]):
+            gap = max(previous[0] - word[2], word[0] - previous[2])
+            text += ("" if gap < _PDF_WORD_GAP_JOIN_POINTS else " ") + word[4]
+        text_lines.append(text)
+    return text_lines
+
+
 def _extract_pdf_text_pymupdf(pdf_bytes: bytes) -> str:
     """
     Extract text from a PDF using PyMuPDF (fitz).
@@ -393,7 +441,7 @@ def _extract_pdf_text_pymupdf(pdf_bytes: bytes) -> str:
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     pages = []
     for page_number in range(min(len(doc), _config.BILL_PDF_MAX_PAGES)):
-        text = doc[page_number].get_text("text")
+        text = "\n".join(_pdf_page_lines(doc[page_number]))
         if text:
             pages.append(text)
     doc.close()
@@ -448,6 +496,8 @@ def _sanitize_odata_search(name: str) -> str:
     """
     # Remove anything inside parentheses (including nested)
     sanitized = re.sub(r'\(.*?\)', '', name)
+    # The Knesset WAF answers 473 to $filter=, &, # and the like inside a literal; bill names never hold them
+    sanitized = re.sub(r'[$=&#%*!^~<>;\/{}\[\]|`]', ' ', sanitized)
     # Collapse whitespace and strip
     sanitized = re.sub(r'\s+', ' ', sanitized).strip()
     # Remove trailing comma/dash left after stripping parens
@@ -457,28 +507,79 @@ def _sanitize_odata_search(name: str) -> str:
     return sanitized
 
 
-def _bill_record_to_dict(bill: dict) -> dict:
+_BILL_EXPAND = "KNS_Status,KNS_BillInitiator($expand=KNS_Person),KNS_DocumentBill($select=Id,LastUpdatedDate)"
+# KNS_BillInitiator → KNS_Bill → KNS_BillInitiator → KNS_Person is one level deeper than the service allows,
+# so bills reached from an initiator carry person ids only and the names come from _person_names.
+_BILL_EXPAND_FROM_INITIATOR = "KNS_Bill($expand=KNS_Status,KNS_BillInitiator,KNS_DocumentBill($select=Id,LastUpdatedDate))"
+_PERSON_FILTER_BATCH = 50
+
+BILL_STATUS_IDS_BY_STAGE = {
+    "tabled":      (104, 150, 120, 175, 181),
+    "preliminary": (106, 142, 101, 108, 109, 167, 111, 141),
+    "first":       (113, 114, 115, 117, 130, 131, 178, 179, 158, 161, 162, 165),
+    "passed":      (118,),
+    "stopped":     (177, 122, 124, 140, 143, 126, 169, 110, 176),
+}
+_BILL_STAGE_BY_STATUS_ID = {status_id: stage for stage, ids in BILL_STATUS_IDS_BY_STAGE.items() for status_id in ids}
+
+
+def _person_display_name(person: dict) -> str:
+    return f"{person.get('FirstName', '')} {person.get('LastName', '')}".strip()
+
+
+def _person_names(person_ids) -> dict[int, str]:
+    unique_ids = sorted({int(person_id) for person_id in person_ids})
+    names: dict[int, str] = {}
+    for start in range(0, len(unique_ids), _PERSON_FILTER_BATCH):
+        batch = unique_ids[start:start + _PERSON_FILTER_BATCH]
+        rows = odata_all_rows("KNS_Person", {"$filter": f"Id in ({','.join(str(i) for i in batch)})",
+                                             "$select": "Id,FirstName,LastName", "$orderby": "Id"})
+        names.update({row["Id"]: _person_display_name(row) for row in rows})
+    return names
+
+
+def _bill_initiators(bill: dict, person_names: dict[int, str] | None = None) -> list[dict]:
+    """Initiators in list order, then the MKs who joined after the bill was tabled (is_initiator False);
+    each group has its own Ordinal sequence."""
+    rows = sorted(bill.get("KNS_BillInitiator") or [],
+                  key=lambda row: (not row.get("IsInitiator"), row.get("Ordinal") or 0, row.get("Id") or 0))
+    initiators = []
+    for row in rows:
+        person = row.get("KNS_Person")
+        person_id = person["Id"] if person else row.get("PersonID")
+        if person_id is None:
+            continue
+        initiators.append({
+            "person_id":    person_id,
+            "full_name":    _person_display_name(person) if person else (person_names or {}).get(person_id, ""),
+            "is_initiator": bool(row.get("IsInitiator")),
+            "ordinal":      row.get("Ordinal"),
+        })
+    return initiators
+
+
+def _first_document_date(bill: dict) -> str | None:
+    """The earliest bill document's date, the closest the OData has to a tabling date."""
+    dates = [doc["LastUpdatedDate"] for doc in bill.get("KNS_DocumentBill") or [] if doc.get("LastUpdatedDate")]
+    return min(dates)[:10] if dates else None
+
+
+def _bill_record_to_dict(bill: dict, person_names: dict[int, str] | None = None) -> dict:
     """Normalise a raw KNS_Bill OData record into our standard shape."""
-    initiators = [
-        {
-            "person_id": bi["KNS_Person"]["Id"],
-            "full_name": f"{bi['KNS_Person'].get('FirstName', '')} {bi['KNS_Person'].get('LastName', '')}".strip(),
-        }
-        for bi in (bill.get("KNS_BillInitiator") or [])
-        if bi.get("KNS_Person")
-    ]
     return {
-        "bill_id":          bill.get("Id"),
-        "name":             bill.get("Name"),
-        "bill_number":      bill.get("Number"),
-        "knesset_num":      bill.get("KnessetNum"),
-        "type":             bill.get("TypeDesc"),
-        "sub_type":         bill.get("SubTypeDesc"),
-        "status":           (bill.get("KNS_Status") or {}).get("Desc"),
-        "committee_id":     bill.get("CommitteeID"),
-        "publication_date": bill.get("PublicationDate"),
-        "last_updated":     bill.get("LastUpdatedDate"),
-        "initiators":       initiators,
+        "bill_id":             bill.get("Id"),
+        "name":                bill.get("Name"),
+        "bill_number":         bill.get("Number"),
+        "private_number":      bill.get("PrivateNumber"),
+        "knesset_num":         bill.get("KnessetNum"),
+        "type":                bill.get("TypeDesc"),
+        "sub_type":            bill.get("SubTypeDesc"),
+        "status":              (bill.get("KNS_Status") or {}).get("Desc"),
+        "committee_id":        bill.get("CommitteeID"),
+        "first_document_date": _first_document_date(bill),
+        "publication_date":    bill.get("PublicationDate"),
+        "last_updated":        bill.get("LastUpdatedDate"),
+        "initiators":          _bill_initiators(bill, person_names),
     }
 
 
@@ -498,10 +599,51 @@ def search_bills_page(
         filter_expr += f" and KnessetNum eq {int(knesset_num)}"
     params = {
         "$filter":  filter_expr,
-        "$expand":  "KNS_Status,KNS_BillInitiator($expand=KNS_Person)",
+        "$expand":  _BILL_EXPAND,
         "$orderby": "LastUpdatedDate desc,Id desc",
     }
     return odata_page("KNS_Bill", params, offset, limit)
+
+
+def person_bills_page(
+    person_id: int,
+    search_term: str,
+    knesset_num: int | None,
+    initiator_role: str = "",
+    offset: int = 0,
+    limit: int = 10,
+    stage: str = "",
+) -> tuple[list[dict], int | None]:
+    """
+    Bills one person (KNS_Person id) initiated or joined, most recently updated first, as
+    _bill_record_to_dict rows plus `mk_is_initiator` (False = joined after tabling).
+    search_term (already OData-escaped, may be empty) filters the bill name; initiator_role is
+    "initiator", "joined" or "" for both; stage is a BILL_STATUS_IDS_BY_STAGE key or "" for any.
+    Each row also carries its `stage`. Returns (rows [offset, offset+limit), total match count).
+    """
+    clauses = [f"PersonID eq {int(person_id)}"]
+    if search_term:
+        clauses.append(f"contains(KNS_Bill/Name,'{search_term}')")
+    if knesset_num is not None:
+        clauses.append(f"KNS_Bill/KnessetNum eq {int(knesset_num)}")
+    if initiator_role == "initiator":
+        clauses.append("IsInitiator eq true")
+    elif initiator_role == "joined":
+        clauses.append("IsInitiator eq false")
+    if stage:
+        clauses.append("(" + " or ".join(f"KNS_Bill/StatusID eq {status_id}" for status_id in BILL_STATUS_IDS_BY_STAGE[stage]) + ")")
+    params = {
+        "$filter":  " and ".join(clauses),
+        "$expand":  _BILL_EXPAND_FROM_INITIATOR,
+        "$orderby": "KNS_Bill/LastUpdatedDate desc,Id desc",
+    }
+    initiator_rows, total = odata_page("KNS_BillInitiator", params, offset, limit)
+    bills = [row["KNS_Bill"] for row in initiator_rows if row.get("KNS_Bill")]
+    person_names = _person_names(initiator["PersonID"] for bill in bills
+                                 for initiator in bill.get("KNS_BillInitiator") or [] if initiator.get("PersonID"))
+    return [{**_bill_record_to_dict(row["KNS_Bill"], person_names), "mk_is_initiator": bool(row.get("IsInitiator")),
+             "stage": _BILL_STAGE_BY_STATUS_ID.get(row["KNS_Bill"].get("StatusID"), "")}
+            for row in initiator_rows if row.get("KNS_Bill")], total
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -730,7 +872,7 @@ def _download_bill_document(url: str) -> bytes | None:
 def _get_bill_text_by_id(bill_id: int, max_chars: int = 8000, text_offset: int = 0) -> dict | None:
     """
     Fetch the most relevant document for a bill and extract its text.
-    Tries documents in priority order until one succeeds.
+    Tries PDF documents in priority order, then .docx ones (older private bills only have those), until one succeeds.
     Returns {bill_id, doc_id, group, url, text, text_chars, truncated} or None if all fail:
     text is characters [text_offset, text_offset + max_chars) of the document text, text_chars is
     [start, end, total] and truncated says the text continues after end.
@@ -739,14 +881,14 @@ def _get_bill_text_by_id(bill_id: int, max_chars: int = 8000, text_offset: int =
     if not docs:
         return None
 
-    for doc in docs:
-        if doc["format"] not in ("PDF",):
-            continue
+    pdf_docs = [doc for doc in docs if doc["format"] == "PDF"]
+    docx_docs = [doc for doc in docs if doc["format"] != "PDF" and doc["url"].lower().endswith(".docx")]
+    for doc in pdf_docs + docx_docs:
         try:
-            pdf_bytes = _download_bill_document(doc["url"])
-            if not pdf_bytes:
+            document_bytes = _download_bill_document(doc["url"])
+            if not document_bytes:
                 continue
-            full_text = _extract_pdf_text(pdf_bytes)
+            full_text = _extract_pdf_text(document_bytes) if doc["format"] == "PDF" else _extract_docx_text(document_bytes)
             if not full_text:
                 continue  # try next doc
 
@@ -770,43 +912,18 @@ def _get_bill_text_by_id(bill_id: int, max_chars: int = 8000, text_offset: int =
 
 
 def _get_bill_details_by_id(bill_id: int) -> dict | None:
-    # Request 1: bill + status only (no nested expand)
-    url = (
-        f"{OFFICIAL_KNESSET_NEW_API}/KNS_Bill({bill_id})"
-        f"?$expand=KNS_Status"
-    )
-    r = _retry_get(url, timeout=_config.HTTP_TIMEOUT_SECONDS)
-    if r.status_code == 404:
+    # A collection query: on the single-entity URL KNS_Bill(id) the service returns KNS_Status as null.
+    bills, _ = odata_page("KNS_Bill", {"$filter": f"Id eq {int(bill_id)}", "$expand": _BILL_EXPAND,
+                                       "$orderby": "Id"}, 0, 1)
+    if not bills:
         return None
-    r.raise_for_status()
-    bill = r.json()
-
-    # Request 2: initiators separately
-    initiator_rows = odata_all_rows("KNS_BillInitiator", {
-        "$filter": f"BillID eq {int(bill_id)}", "$expand": "KNS_Person", "$orderby": "Ordinal,Id"})
-    initiators = [
-        {
-            "person_id": bi["KNS_Person"]["Id"],
-            "full_name": f"{bi['KNS_Person'].get('FirstName', '')} {bi['KNS_Person'].get('LastName', '')}".strip(),
-        }
-        for bi in initiator_rows
-        if bi.get("KNS_Person")
-    ]
-
-    return {
-        "bill_id":          bill.get("Id"),
-        "bill_name":        bill.get("Name"),
-        "bill_number":      bill.get("Number"),
-        "knesset_num":      bill.get("KnessetNum"),
-        "type":             bill.get("TypeDesc"),
-        "sub_type":         bill.get("SubTypeDesc"),
-        "status":           (bill.get("KNS_Status") or {}).get("Desc"),
-        "committee_id":     bill.get("CommitteeID"),
-        "publication_date": bill.get("PublicationDate"),
-        "last_updated":     bill.get("LastUpdatedDate"),
-        "initiators":       initiators,
-        "documents":        _get_bill_documents(bill_id),
-    }
+    record = _bill_record_to_dict(bills[0])
+    if len(record["initiators"]) >= ODATA_PAGE_SIZE:
+        initiator_rows = odata_all_rows("KNS_BillInitiator", {
+            "$filter": f"BillID eq {int(bill_id)}", "$expand": "KNS_Person", "$orderby": "Ordinal,Id"})
+        record["initiators"] = _bill_initiators({"KNS_BillInitiator": initiator_rows})
+    return {"bill_id": record["bill_id"], "bill_name": record.pop("name"), **record,
+            "documents": _get_bill_documents(bill_id)}
 
 
 # ── Committee sessions ────────────────────────────────────────────────────────
@@ -1233,6 +1350,39 @@ def get_person_votes(
     return [{**_plenum_vote_row(row.get("Vote") or {"Id": row.get("VoteID")}),
              "result": row.get("ResultDesc") or ""}
             for row in results], total
+
+
+VOTE_RESULTS_COUNTED = ("בעד", "נגד", "נמנע")
+
+
+def _odata_count(entity: str, filter_expr: str) -> int:
+    _, total = odata_page(entity, {"$filter": filter_expr, "$orderby": "Id"}, 0, 1)
+    return int(total or 0)
+
+
+def get_person_vote_summary(person_id: int, knesset_num: int) -> dict:
+    """
+    How one person voted in one Knesset's plenum: votes_cast, a count per result
+    (VOTE_RESULTS_COUNTED plus "other" for נוכח and the like) and plenum_votes, the number of
+    votes held between the person's first and last vote, as the denominator of vote attendance.
+    """
+    person_filter = (f"MkId eq {int(person_id)} and "
+                     f"Vote/KNS_PlenumSession/KnessetNum eq {int(knesset_num)}")
+    votes_cast = _odata_count("KNS_PlenumVoteResult", person_filter)
+    by_result = {result: _odata_count("KNS_PlenumVoteResult", f"{person_filter} and ResultDesc eq '{result}'")
+                 for result in VOTE_RESULTS_COUNTED}
+    by_result["other"] = votes_cast - sum(by_result.values())
+    summary = {"knesset_num": int(knesset_num), "votes_cast": votes_cast, "by_result": by_result,
+               "plenum_votes": 0, "first_vote": None, "last_vote": None}
+    if not votes_cast:
+        return summary
+    first_rows, _ = odata_page("KNS_PlenumVoteResult", {"$filter": person_filter, "$orderby": "VoteDate,Id"}, 0, 1)
+    last_rows, _ = odata_page("KNS_PlenumVoteResult", {"$filter": person_filter, "$orderby": "VoteDate desc,Id desc"}, 0, 1)
+    first_vote, last_vote = first_rows[0]["VoteDate"], last_rows[0]["VoteDate"]
+    summary.update(first_vote=first_vote, last_vote=last_vote, plenum_votes=_odata_count(
+        "KNS_PlenumVote", f"KNS_PlenumSession/KnessetNum eq {int(knesset_num)} and "
+                          f"VoteDateTime ge {first_vote} and VoteDateTime le {last_vote}"))
+    return summary
 
 
 def get_person_votes_on_topic(

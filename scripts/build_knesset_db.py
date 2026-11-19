@@ -11,6 +11,10 @@ Targets, in dependency order:
     summaries   topics + opinions from Data/summaries/<k>/**/*.json, opinion speakers
                 resolved to mk_id, quotes located in the transcript
     speeches    every speech (structured or parsed from full_text), speaker resolved
+    mk_themes   per-MK themes from Data/mk_themes/<k>/<mk_id>.json (scripts/summarize_mk_themes_batches.py),
+                linked to opinions by (meeting_id, idx); may be empty before the first themes run
+    subjects    shared subjects + approaches from Data/subjects/<k>/subjects.json (scripts/group_mk_subjects.py),
+                linked to the current mk_themes ids; built whenever mk_themes is (the theme ids change)
 
 Bills and votes are not stored: the agent queries them live from OData.
 
@@ -31,6 +35,7 @@ meetings like any other; the committees target adds their committee row.
 """
 
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
@@ -52,7 +57,8 @@ from utils.protocol_download import json_files_by_meeting, transcripts_by_meetin
 from utils.tool_helpers.filter_resolution import normalized_name_key
 from utils.tool_helpers.fuzzy_name_index import FuzzyNameIndex
 
-TARGETS = ("mks", "committees", "meetings", "summaries", "speeches")
+TARGETS = ("mks", "committees", "meetings", "summaries", "speeches", "mk_themes", "subjects")
+TARGETS_ALLOWED_EMPTY = {"mk_themes", "subjects"}
 
 
 def _iso_date(stem: str) -> str:
@@ -344,9 +350,48 @@ def build_speeches(conn, knesset_num: int, rebuild: bool) -> int:
     return total
 
 
+def build_mk_themes(conn, knesset_num: int, rebuild: bool) -> int:
+    theme_files = sorted(config.mk_themes_dir(knesset_num).glob("*.json"))
+    if not theme_files:
+        print(f"  [mk_themes] no theme files under {config.mk_themes_dir(knesset_num)}")
+        return 0
+    if rebuild:
+        store.clear_target(conn, "mk_themes", knesset_num)
+    themes_written = links_dropped = mks_written = 0
+    for theme_path in theme_files:
+        try:
+            theme_file = json.loads(theme_path.read_text(encoding="utf-8"))
+            written, dropped = store.replace_mk_themes(conn, theme_file)
+        except Exception as exc:
+            print(f"  [mk_themes] skipping {theme_path.name}: {exc}")
+            continue
+        themes_written += written
+        links_dropped += dropped
+        mks_written += 1
+    store.rebuild_fts(conn, "mk_themes")
+    print(f"  [mk_themes] {themes_written} themes for {mks_written} MKs; "
+          f"{links_dropped} links to opinions no longer in the db dropped")
+    return themes_written
+
+
+def build_subjects(conn, knesset_num: int, rebuild: bool) -> int:
+    """Always a full replace of the Knesset's subjects (rebuild makes no difference)."""
+    subjects_path = config.subjects_dir(knesset_num) / "subjects.json"
+    if not subjects_path.exists():
+        print(f"  [subjects] no {subjects_path}")
+        return 0
+    counts = store.replace_subjects(conn, json.loads(subjects_path.read_text(encoding="utf-8")))
+    store.rebuild_fts(conn, "subjects")
+    print(f"  [subjects] {counts['subjects']} subjects, {counts['approaches']} approaches, {counts['links']} theme "
+          f"links; {counts['stale_refs']} theme refs stale (theme text changed: rerun group_mk_subjects.py), "
+          f"{counts['empty_subjects']} subjects with no theme left")
+    return counts["subjects"]
+
+
 _BUILDERS = {
     "mks": build_mks, "committees": build_committees, "meetings": build_meetings,
-    "summaries": build_summaries, "speeches": build_speeches,
+    "summaries": build_summaries, "speeches": build_speeches, "mk_themes": build_mk_themes,
+    "subjects": build_subjects,
 }
 
 
@@ -364,6 +409,9 @@ def main() -> None:
         config.KNESSET_DB = config.DATA_DIR / "knesset.db"
 
     targets = list(TARGETS) if args.target == "all" else [t.strip() for t in args.target.split(",") if t.strip()]
+    if "mk_themes" in targets and "subjects" not in targets:
+        print("mk_themes changes the theme ids the subjects link to: building subjects too")
+        targets.append("subjects")
     unknown = [t for t in targets if t not in _BUILDERS]
     if unknown:
         print(f"ERROR: unknown target(s) {unknown}")
@@ -381,6 +429,9 @@ def main() -> None:
             except Exception as exc:
                 print(f"  ERROR building {target}: {exc}")
                 failed_targets.append(target)
+                continue
+            if n == 0 and target in TARGETS_ALLOWED_EMPTY:
+                print(f"  [{target}] nothing to build yet")
                 continue
             if n == 0:
                 print(f"  ERROR: builder produced 0 rows for '{target}', nothing written")

@@ -37,6 +37,10 @@ from utils.tools import (
 )
 
 
+_EVERY_PROCESSED_KNESSET_DESCRIPTION = (
+    f"One Knesset; omit it to cover every processed Knesset "
+    f"({', '.join(map(str, config.PROTOCOL_KNESSET_NUMS))})")
+
 # Each entry's ``schema`` is the JSON Schema fragment that goes under the
 # ``parameters`` key in an OpenAI-style tool definition.
 
@@ -56,7 +60,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
             ),
             "properties": {
                 "query":       {"type": "string"},
-                "knesset_num": {"type": "integer", "default": 25},
+                "knesset_num": {"type": "integer", "description": _EVERY_PROCESSED_KNESSET_DESCRIPTION},
                 "top_k":       {"type": "integer", "default": 5, "minimum": 1},
             },
             "required": ["query"],
@@ -90,7 +94,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
             ),
             "properties": {
                 "query":       {"type": "string", "description": "Committee name; empty to list all committees"},
-                "knesset_num": {"type": "integer", "default": 25},
+                "knesset_num": {"type": "integer", "description": _EVERY_PROCESSED_KNESSET_DESCRIPTION},
                 "top_k":       {"type": "integer", "default": 5, "minimum": 1},
             },
         },
@@ -125,7 +129,8 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
             ),
             "properties": {
                 "query":       {"type": "string", "description": "Party or faction name; empty to list all parties"},
-                "knesset_num": {"type": "integer", "default": 25},
+                "knesset_num": {"type": "integer", "default": config.ROSTER_DEFAULT_KNESSET_NUM,
+                                "description": "Party names belong to one Knesset"},
                 "top_k":       {"type": "integer", "default": 3, "minimum": 1, "maximum": 5},
             },
         },
@@ -201,7 +206,7 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
                     "maximum": config.QUERY_PROTOCOLS_MAX_TOP_K,
                 },
                 "offset":      {"type": "integer", "default": 0, "minimum": 0},
-                "knesset_num": {"type": "integer", "default": 25},
+                "knesset_num": {"type": "integer", "description": _EVERY_PROCESSED_KNESSET_DESCRIPTION},
             },
         },
         handler=handle_query_protocols,
@@ -247,16 +252,21 @@ RESEARCH_TOOL_REGISTRY: list[ToolSpec] = [
             "description": (
                 "Search bills by Hebrew title words (the whole query must appear in "
                 "the bill name), most recently updated first, in one Knesset or in "
-                "all of them when knesset_num is omitted. Page with offset. "
-                "Returns bill_id, name, knesset_num, status, type, initiators."
+                "all of them when knesset_num is omitted. mk_id (from find_mk) lists "
+                "the bills that MK initiated or joined; query is then optional and "
+                "initiator_role keeps only bills they initiated or only bills they joined. "
+                "Page with offset. Returns bill_id, name, knesset_num, status, type, "
+                "first_document_date, initiators (is_initiator false = joined later); "
+                "with mk_id also mk_is_initiator."
             ),
             "properties": {
-                "query":       {"type": "string"},
-                "knesset_num": {"type": "integer", "minimum": 1},
-                "top_k":       {"type": "integer", "default": 10, "minimum": 1, "maximum": 100},
-                "offset":      {"type": "integer", "default": 0, "minimum": 0},
+                "query":          {"type": "string"},
+                "mk_id":          {"type": "string"},
+                "initiator_role": {"type": "string", "enum": ["initiator", "joined"]},
+                "knesset_num":    {"type": "integer", "minimum": 1},
+                "top_k":          {"type": "integer", "default": 10, "minimum": 1, "maximum": 100},
+                "offset":         {"type": "integer", "default": 0, "minimum": 0},
             },
-            "required": ["query"],
         },
         handler=handle_query_bills,
         task_kinds=["discover"],

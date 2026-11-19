@@ -9,9 +9,12 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
+from summarization.gemini_batch import describe_failure
 from summarization.output_parsing import parse_topics, parse_opinions, verify_quotes
 import summarize_knesset_batches as batch
 
@@ -146,7 +149,8 @@ def test_unparsable_and_missing_results_count_attempts_then_drop(tmp_path):
     state = _state([entry])
     opinions_key = _opinions_key(entry)
     for _ in range(batch.MAX_PASS_ATTEMPTS - 1):
-        batch._process_results([{"key": opinions_key, "response": _response("")}], ["3|topics", opinions_key], state)
+        batch._process_results([{"key": opinions_key, "response": _response("", "SAFETY")}],
+                               ["3|topics", opinions_key], state)
     assert entry["attempts"] == {"topics": batch.MAX_PASS_ATTEMPTS - 1,
                                  batch._split_key(opinions_key)[1]: batch.MAX_PASS_ATTEMPTS - 1}
     assert state["queue"] == [entry]
@@ -154,6 +158,41 @@ def test_unparsable_and_missing_results_count_attempts_then_drop(tmp_path):
     batch._process_results([], ["3|topics"], state)
     assert state["queue"] == [] and state["stats"]["failed"] == 1
     assert not Path(entry["summ"]).exists()
+    assert state["failures"] == [{"meeting_id": "3", "transcript": entry["proto"], "task": "topics",
+                                  "reasons": ["no result in batch output"] * batch.MAX_PASS_ATTEMPTS}]
+    assert entry["failure_reasons"][batch._split_key(opinions_key)[1]] ==         ["empty answer (finishReason SAFETY)"] * (batch.MAX_PASS_ATTEMPTS - 1)
+
+
+def test_empty_opinions_answer_writes_the_topics_with_no_opinions(tmp_path):
+    entry = _entry(tmp_path, "6")
+    state = _state([entry])
+    batch._process_results([{"key": "6|topics", "response": _response("- הצבעה על רביזיה")},
+                            {"key": _opinions_key(entry), "response": _response("")}],
+                           ["6|topics", _opinions_key(entry)], state)
+    assert state["queue"] == [] and state["stats"]["summarized"] == 1 and state["stats"]["failed"] == 0
+    assert json.loads(Path(entry["summ"]).read_text(encoding="utf-8")) == {
+        "is_protocol": True, "topics": ["הצבעה על רביזיה"], "opinions": []}
+
+
+def test_empty_topics_answer_still_fails(tmp_path):
+    entry = _entry(tmp_path, "7")
+    state = _state([entry])
+    batch._process_results([{"key": "7|topics", "response": _response("")}], ["7|topics"], state)
+    assert entry["attempts"] == {"topics": 1} and entry["results"]["topics"] is None
+
+
+@pytest.mark.parametrize("result, reason", [
+    ({"error": {"message": "Internal error"}}, "Internal error"),
+    ({"response": {"promptFeedback": {"blockReason": "PROHIBITED_CONTENT"}}}, "prompt blocked: PROHIBITED_CONTENT"),
+    ({"response": {"candidates": []}}, "no candidates in the response"),
+    ({"response": _response("", "SAFETY")}, "empty answer (finishReason SAFETY)"),
+])
+def test_describe_failure_names_the_cause(result, reason):
+    assert describe_failure(result) == reason
+
+
+def test_describe_failure_quotes_an_unparsable_answer():
+    assert describe_failure({"response": _response("אין עמדות")}, "אין עמדות") ==         "unparsable answer (finishReason STOP): 'אין עמדות'"
 
 
 def test_pending_passes_only_builds_missing_requests(tmp_path):

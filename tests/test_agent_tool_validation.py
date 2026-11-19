@@ -55,6 +55,8 @@ class TestInvalidAgentArgumentsBecomeErrorEnvelopes:
     @pytest.mark.parametrize("tool,args,error_code", [
         ("find_mk", {"query": "x", "top_k": "many"}, "invalid_top_k"),
         ("query_votes", {"query": "x", "mk_id": "../1"}, "invalid_mk_id"),
+        ("query_bills", {"mk_id": "30807 or 1"}, "invalid_mk_id"),
+        ("query_bills", {"mk_id": "30807", "initiator_role": "sponsor"}, "invalid_initiator_role"),
         ("get_bill", {"bill_id": "12a"}, "invalid_bill_id"),
         ("get_meeting_attendance", {"meeting_id": "٣"}, "invalid_meeting_id"),
         ("get_meeting_attendance", {"meeting_id": "1" * 200}, "invalid_meeting_id"),

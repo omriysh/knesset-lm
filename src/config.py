@@ -62,6 +62,26 @@ def summary_batch_state_path(knesset_num: int = 25) -> Path:
     return DATA_DIR / "summary_batches" / f"batch_state_k{knesset_num}.json"
 
 
+def mk_themes_dir(knesset_num: int = 25) -> Path:
+    """Per-MK theme files (<mk_id>.json) written by scripts/summarize_mk_themes_batches.py."""
+    return DATA_DIR / "mk_themes" / str(knesset_num)
+
+
+def subjects_dir(knesset_num: int = 25) -> Path:
+    """subjects.json (the MK subjects pipeline state) and history/, written by scripts/group_mk_subjects.py."""
+    return DATA_DIR / "subjects" / str(knesset_num)
+
+
+def candidate_lists_dir(election_knesset_num: int = 26) -> Path:
+    """Candidate lists of an election (lists.json, ballots/, photos/), built by scripts/build_candidate_lists.py."""
+    return DATA_DIR / "candidates" / str(election_knesset_num)
+
+
+def mk_themes_batch_state_path(knesset_num: int = 25) -> Path:
+    """Resume state of scripts/summarize_mk_themes_batches.py."""
+    return DATA_DIR / "summary_batches" / f"mk_themes_state_k{knesset_num}.json"
+
+
 # ── Plenum protocols ──────────────────────────────────────────────────────────
 # Plenum sessions are stored as meetings of one pseudo-committee, next to the committees.
 
@@ -79,6 +99,33 @@ WORD_EXTRACTION_TIMEOUT_SECONDS = 120   # per .doc; the worker and its own Word 
 # longer than the model context (scripts/summarize_knesset_batches.py MAX_TRANSCRIPT_CHARS).
 SUMMARY_OPINIONS_CHUNK_THRESHOLD_CHARS = 150_000
 SUMMARY_OPINIONS_CHUNK_TARGET_CHARS    = 120_000
+
+# ── MK themes (scripts/summarize_mk_themes_batches.py) ───────────────────────
+# One request per MK holding all their opinions; the largest MK (~4,800 opinions) is ~300K input tokens.
+MK_THEMES_MODEL             = "gemini-3.8-flash"
+MK_THEMES_THINKING_LEVEL    = "low"
+MK_THEMES_MAX_OUTPUT_TOKENS = 100_000
+
+# ── MK subjects (scripts/group_mk_subjects.py) ───────────────────────────────
+# The themes of all MKs grouped into shared subjects, each with the approaches MKs take to it.
+# Interactive calls (each step needs the previous one); a full run is ~$32, an incremental one a few dollars.
+SUBJECTS_MODEL                           = "gemini-3.8-flash"
+SUBJECTS_THINKING_LEVEL                  = "high"
+SUBJECTS_FALLBACK_THINKING_LEVEL         = "medium"   # retry when high thinking runs out of output tokens
+SUBJECTS_MAX_OUTPUT_TOKENS               = 100_000
+SUBJECTS_SHARD_MAX_TOKENS                = 50_000     # theme text per pass 1 shard
+SUBJECTS_CHARS_PER_TOKEN                 = 1.93       # Hebrew theme text, measured with gemini-3.8-flash
+SUBJECTS_ASSIGN_CHUNK_SIZE               = 50
+SUBJECTS_MIN_ASSIGN_CHUNK_SIZE_TO_SPLIT  = 6
+SUBJECTS_MAX_BACKGROUND_THEMES_TO_VERIFY = 20
+SUBJECTS_MIN_MKS_FOR_APPROACHES          = 2
+SUBJECTS_MAX_REPAIRS                     = 1          # per subject; --repair-again allows one more per run
+SUBJECTS_LEFTOVER_MIN_THEMES             = 50         # themes without a subject that trigger a leftover round
+SUBJECTS_PARALLEL_CALLS                  = 8
+GEMINI_INTERACTIVE_PRICE_PER_M_TOKENS    = {          # USD per 1M tokens: input, output incl. thinking
+    "gemini-3.8-flash":      (0.75, 3.75),
+    "gemini-3.1-flash-lite": (0.25, 1.5),
+}
 
 
 # ── Plan-execute agent ───────────────────────────────────────────────────────
@@ -219,6 +266,7 @@ PUBLIC_API_HTTP_TIMEOUT_SECONDS  = 10
 API_RATE_LIMIT_ENABLED              = True
 API_RATE_LIMIT_UPSTREAM_PER_MINUTE  = 10   # per client IP, routes that call the Knesset APIs
 API_RATE_LIMIT_DB_PER_MINUTE        = 60   # per client IP, knesset.db-only routes
+API_RATE_LIMIT_PROFILES_PER_MINUTE  = 60   # per client IP, candidate-profile routes that call the Knesset APIs (cached)
 API_TRUST_CLOUDFLARE_IP_HEADER      = True  # True only when the server is reachable solely through Cloudflare
 API_RATE_LIMIT_AGENT_PER_MINUTE     = 5    # per client IP, web routes that run an LLM
 WEB_REQUIRE_USER_GEMINI_KEY         = True   # web agent tab bills the visitor's key (X-Gemini-Api-Key), never the server's
@@ -244,8 +292,9 @@ API_MAX_LIST_ITEMS            = 20       # repeated / comma-separated list param
 API_MAX_ID_DIGITS             = 12
 API_MAX_OFFSET                = 5000       # rows: query_bills, query_votes
 BILL_TEXT_MAX_OFFSET          = 2_000_000  # characters into one bill document's text (get_bill)
-API_KNESSET_NUM_RANGE         = (1, 25)  # live OData tools (votes, bills, find_mk, find_party, find_committee); omitted = every Knesset
-PROTOCOL_KNESSET_NUMS         = (25,)    # Knessets preprocessed into knesset.db: query_protocols, committee listing with meeting counts
+API_KNESSET_NUM_RANGE         = (1, 25)  # live OData tools (votes, bills, find_mk, find_party, find_committee); omitted = every Knesset for votes and bills
+PROTOCOL_KNESSET_NUMS         = (24, 25) # Knessets preprocessed into knesset.db, ascending; protocol tools, find_mk and find_committee default to all of them
+ROSTER_DEFAULT_KNESSET_NUM    = max(PROTOCOL_KNESSET_NUMS)  # find_party (party names belong to one Knesset)
 API_RATE_LIMIT_WEB_PER_MINUTE = 300      # per client IP, every other web route (reading tab fires one request per meeting/speaker)
 
 # Research agent tool arguments: validated like the public API (api.tool_arguments) but with room for
@@ -260,8 +309,18 @@ AGENT_LIST_MAX_TOP_K          = 100      # bills / votes; the OData service caps
 
 # Web page paths and the links the API/MCP rows carry to them (utils/source_links.py)
 PUBLIC_SITE_URL               = "https://meorav.com"
+SITE_DESCRIPTION              = ("כלי AI להנגשת מידע מהכנסת לקראת הבחירות: פרופילי מועמדים, הנושאים שחברי הכנסת "
+                                 "עסקו בהם ודיוני ועדות הכנסת, עם ציטוטים וקישורים למקור.")
+CHAT_PAGE_PATH                = "/chat"
 RESEARCH_PAGE_PATH            = "/research"
 PROTOCOLS_PAGE_PATH           = "/protocols"
+GAME_PAGE_PATH                = "/game"
+ABOUT_PAGE_PATH               = "/about"   # the help dialog over home; /about/<tab> opens a tab, ?lang=en the English text
+ABOUT_SUBPAGE_TABS            = ("prompts", "reading", "support", "privacy", "terms")
+
+# "היכרות" game (web/game.py): the browser sends the theme ids it has seen / voted on
+GAME_MAX_IDS                  = 2500     # per list in a request; above the number of themes in the pool
+GAME_MAX_CARDS_PER_FETCH      = 3
 
 # MCP endpoint (src/api/mcp_server.py): POST /mcp on both servers, and the whole of MCP_SUBDOMAIN_HOSTS
 MCP_ENABLED                   = True
@@ -273,7 +332,7 @@ MCP_ALLOWED_ORIGINS           = ("https://meorav.com", "https://mcp.meorav.com",
 # Cloudflare Access in front of MCP: requests that came through Cloudflare must carry a valid
 # Cf-Access-Jwt-Assertion; local requests (peer in MCP_LOCAL_PEER_HOSTS, no Cloudflare headers) skip it.
 # Empty team domain or audiences → every Cloudflare request is refused (403).
-MCP_REQUIRE_CLOUDFLARE_ACCESS = True
+MCP_REQUIRE_CLOUDFLARE_ACCESS = False
 CF_ACCESS_TEAM_DOMAIN         = "wild-wildflower-e296.cloudflareaccess.com"
 CF_ACCESS_AUDIENCES           = ("497cbb31a985d70c20aa792149f1b0920d813b9f4c6c190c2f251085debeabc6",)  # Access app AUD tags covering MCP
 CF_ACCESS_JWKS_CACHE_SECONDS  = 3600

@@ -75,7 +75,8 @@ class TestAdvertisedSchemas:
         assert "/v1/" not in instructions and "top_k" not in instructions
         assert "query_protocols(" in instructions and "next" in instructions
         first_date, last_date = real_conn.execute(
-            "SELECT MIN(date), MAX(date) FROM meetings WHERE knesset_num = 25").fetchone()
+            f"SELECT MIN(date), MAX(date) FROM meetings WHERE knesset_num IN "
+            f"({','.join('?' * len(config.PROTOCOL_KNESSET_NUMS))})", config.PROTOCOL_KNESSET_NUMS).fetchone()
         assert first_date in instructions and last_date in instructions
         low, high = config.API_KNESSET_NUM_RANGE
         assert f"Knessets {low}-{high}" in instructions and "26" not in instructions.replace(first_date, "").replace(last_date, "")

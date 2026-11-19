@@ -54,6 +54,8 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
 import config
+from summarization import prompts as summary_prompts
+from subjects import prompts as subject_prompts
 from api import validation as valid
 from api.app import use_public_api_http_settings
 from api.rate_limit import RateLimitMiddleware, SlidingWindowRateLimiter
@@ -64,9 +66,13 @@ from api.docs import install_public_docs
 from api.mcp_server import McpSubdomainMiddleware, install_mcp_endpoint, running_mcp_sessions
 from api.validation import install_error_handlers
 from web.concurrency import ResearchRunSlots
+from web.game import router as game_router
 from web.gemini_keys import (forget_server_gemini_keys, gemini_text_models, stop_on_rejected_gemini_key,
                               unavailable_models_error, visitor_gemini_key_or_error)
 from web.middleware import RequestBodyLimitMiddleware, SecurityHeadersMiddleware
+from web.profiles import PROFILE_PAGE_PATHS, router as profiles_router
+from web.seo import router as seo_router
+from web.subjects import SUBJECT_PAGE_PATHS, router as subjects_router
 from agent.llm.google import GoogleBackend
 from agent.model_choice import MODEL_ID_PATTERN, ResearchModels
 
@@ -459,6 +465,10 @@ class RevalidatedStaticFiles(StaticFiles):
 
 app.mount("/static", RevalidatedStaticFiles(directory=str(_STATIC_DIR)), name="static")
 app.include_router(api_router)
+app.include_router(profiles_router)
+app.include_router(subjects_router)
+app.include_router(game_router)
+app.include_router(seo_router)
 install_mcp_endpoint(app, rate_limiter)
 install_public_docs(app, WEB_API_TITLE)
 install_error_handlers(app)
@@ -471,6 +481,8 @@ def _static_asset_url(path: str) -> str:
 
 
 templates.env.globals["asset"] = _static_asset_url
+templates.env.globals["site_url"] = config.PUBLIC_SITE_URL
+templates.env.globals["site_description"] = config.SITE_DESCRIPTION
 
 _MK_PHOTO_EXTS = (".jpeg", ".jpg", ".png")
 
@@ -497,12 +509,12 @@ def _get_mk_fuzzy_index():
     global _mk_fuzzy_index, _mk_fuzzy_loaded
     with _mk_fuzzy_lock:
         if not _mk_fuzzy_loaded:
-            _mk_fuzzy_index = _load_mk_fuzzy_index(25)
+            _mk_fuzzy_index = _load_mk_fuzzy_index(config.PROTOCOL_KNESSET_NUMS)
             _mk_fuzzy_loaded = True
         return _mk_fuzzy_index
 
 
-def _load_mk_fuzzy_index(knesset_num: int):
+def _load_mk_fuzzy_index(knesset_nums: tuple[int, ...]):
     from utils.tool_helpers.fuzzy_name_index import FuzzyNameIndex
     if not store.exists():
         print(f"[web] {store.db_path()} not found; MK name resolution unavailable", flush=True)
@@ -510,7 +522,7 @@ def _load_mk_fuzzy_index(knesset_num: int):
     try:
         conn = store.connect()
         try:
-            return FuzzyNameIndex(store.name_entries(conn, "mks", knesset_num))
+            return FuzzyNameIndex(store.name_entries(conn, "mks", knesset_nums))
         finally:
             conn.close()
     except Exception as exc:
@@ -623,11 +635,55 @@ class ResearchRespondRequest(BaseModel):
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+@app.get(config.CHAT_PAGE_PATH, response_class=HTMLResponse, include_in_schema=False)
 @app.get(config.RESEARCH_PAGE_PATH, response_class=HTMLResponse, include_in_schema=False)
 @app.get(config.PROTOCOLS_PAGE_PATH, response_class=HTMLResponse, include_in_schema=False)
+@app.get(config.GAME_PAGE_PATH, response_class=HTMLResponse, include_in_schema=False)
+@app.get(PROFILE_PAGE_PATHS[0], response_class=HTMLResponse, include_in_schema=False)
+@app.get(PROFILE_PAGE_PATHS[1], response_class=HTMLResponse, include_in_schema=False)
+@app.get(PROFILE_PAGE_PATHS[2], response_class=HTMLResponse, include_in_schema=False)
+@app.get(SUBJECT_PAGE_PATHS[0], response_class=HTMLResponse, include_in_schema=False)
+@app.get(SUBJECT_PAGE_PATHS[1], response_class=HTMLResponse, include_in_schema=False)
+@app.get(SUBJECT_PAGE_PATHS[2], response_class=HTMLResponse, include_in_schema=False)
+@app.get(SUBJECT_PAGE_PATHS[3], response_class=HTMLResponse, include_in_schema=False)
 async def index(request: Request):
     """One page for every tab; the path (and the reading tab's query parameters) pick the starting view."""
     return templates.TemplateResponse(request, "index.html")
+
+
+ABOUT_TAB_TITLES = {
+    "about":   {"he": "אודות",          "en": "About"},
+    "prompts": {"he": "פרומפטים",       "en": "Prompts"},
+    "reading": {"he": "לקריאה נוספת",   "en": "Further reading"},
+    "support": {"he": "יצירת קשר",      "en": "Support and contact"},
+    "privacy": {"he": "מדיניות פרטיות", "en": "Privacy policy"},
+    "terms":   {"he": "תנאי שימוש",     "en": "Terms of use"},
+}
+ABOUT_LEGAL_TABS = ("support", "privacy", "terms")
+templates.env.globals["about_tab_titles"] = ABOUT_TAB_TITLES
+templates.env.globals["about_legal_tabs"] = ABOUT_LEGAL_TABS
+
+
+def _about_page(request: Request, tab: str):
+    lang = "en" if request.query_params.get("lang") == "en" else "he"
+    return templates.TemplateResponse(request, "index.html", {
+        "page_title": f"{ABOUT_TAB_TITLES[tab][lang]} · {'Meorav Yerushalmi' if lang == 'en' else 'מעורב ירושלמי'}",
+        "about_lang": lang,
+    })
+
+
+@app.get(config.ABOUT_PAGE_PATH, response_class=HTMLResponse, include_in_schema=False)
+async def about_page(request: Request):
+    """The home page under the help dialog's about tab."""
+    return _about_page(request, "about")
+
+
+@app.get(config.ABOUT_PAGE_PATH + "/{tab}", response_class=HTMLResponse, include_in_schema=False)
+async def about_tab_page(request: Request, tab: str):
+    """The home page under one help dialog tab: prompts, reading, support, privacy or terms (?lang=en for English)."""
+    if tab not in config.ABOUT_SUBPAGE_TABS:
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    return _about_page(request, tab)
 
 
 @app.get("/favicon.ico", include_in_schema=False)
@@ -640,6 +696,39 @@ async def help_content():
     """The site's help page (Hebrew markdown)."""
     path = Path(__file__).parent / "templates" / "user-help.md"
     return path.read_text(encoding="utf-8")
+
+
+SITE_DATA_PROMPTS = [
+    {"title": "נושאי הישיבה", "used_for": "רשימת הנושאים של כל ישיבה בדיוני הכנסת. מקבל את הפרוטוקול המלא.",
+     "text": summary_prompts.SYSTEM_PROMPT_TOPICS},
+    {"title": "עמדות וציטוטים", "used_for": "העמדות והציטוטים של כל דובר בישיבה, בדיוני הכנסת ובפרופילים. מקבל את הפרוטוקול המלא, "
+                                         "וכל ציטוט נבדק מול הפרוטוקול אחרי שהמודל מחזיר את התשובה שלו.",
+     "text": summary_prompts.SYSTEM_PROMPT_OPINIONS},
+    {"title": "נושאים מרכזיים של ח\"כ", "used_for": "הנושאים המרכזיים בפרופיל של כל ח\"כ. מקבל את כל העמדות שחולצו לאותו ח\"כ.",
+     "text": summary_prompts.SYSTEM_PROMPT_MK_THEMES},
+    {"title": "הצעת סוגיות", "used_for": "השלב הראשון בחלוקת הנושאים המרכזיים של כל חברי הכנסת לסוגיות משותפות. "
+                                       "הנושאים מחולקים לקבוצות, וכל קבוצה נשלחת בנפרד.",
+     "text": subject_prompts.SHARD_SYSTEM_PROMPT},
+    {"title": "איחוד הצעות הסוגיות", "used_for": "מאחד את הסוגיות שהוצעו לכל הקבוצות לרשימה אחת, בלי כפילויות.",
+     "text": subject_prompts.MERGE_SYSTEM_PROMPT},
+    {"title": "בדיקת רקע הסוגיה", "used_for": "בודק שכל טענה ברקע של הסוגיה נתמכת בנושאים של חברי הכנסת שעליהם הוא נשען.",
+     "text": subject_prompts.VERIFY_SYSTEM_PROMPT},
+    {"title": "תיקון רקע הסוגיה", "used_for": "מתקן רקע שלא עבר את הבדיקה, ואז הוא נבדק שוב.",
+     "text": subject_prompts.REPAIR_SYSTEM_PROMPT},
+    {"title": "איחוד סוגיות", "used_for": "עובר על כל הסוגיות יחד, מאחד סוגיות חופפות ומיישר את השמות ואת המטריות.",
+     "text": subject_prompts.CONSOLIDATE_SYSTEM_PROMPT},
+    {"title": "שיוך נושאים לסוגיות", "used_for": "משייך כל נושא מרכזי של ח\"כ לסוגיות שהוא עוסק בהן.",
+     "text": subject_prompts.ASSIGN_SYSTEM_PROMPT},
+    {"title": "גישות בסוגיה", "used_for": "משווה בין העמדות של חברי הכנסת באותה סוגיה ומקבץ אותן לגישות. "
+                                       "נושאים שאינם שייכים לסוגיה מוצאים ממנה.",
+     "text": subject_prompts.APPROACHES_SYSTEM_PROMPT},
+]
+
+
+@app.get("/api/help/prompts")
+async def help_prompts():
+    """The system prompts that built the summaries and themes shown on the site."""
+    return SITE_DATA_PROMPTS
 
 
 @app.get("/api/health")
@@ -1145,6 +1234,7 @@ class BrowseFilterRequest(BaseModel):
     date_from:  str | None = None
     date_to:    str | None = None
     meeting_ids: list[str] = []
+    knesset:    int | None = None
 
 
 class BrowseSearchRequest(BaseModel):
@@ -1175,10 +1265,11 @@ def _validated_browse_filters(filters: BrowseFilterRequest | None) -> BrowseFilt
         date_to=valid.iso_date(filters.date_to, "date_to"),
         meeting_ids=[valid.meeting_id(m, "meeting_ids") for m in valid.list_param(filters.meeting_ids, "meeting_ids")
                      if m],
+        knesset=valid.protocol_knesset_num(filters.knesset),
     )
 
 
-_meta_cache: dict[str, Any] = {}
+_meta_cache: dict[int | None, tuple[float, dict]] = {}
 _meta_lock = threading.Lock()
 
 
@@ -1187,37 +1278,38 @@ def forget_meta_cache() -> None:
         _meta_cache.clear()
 
 
-def _meta_payload() -> dict:
-    """Committees, MKs and parties for the filter dropdowns, cached per process for WEB_META_CACHE_SECONDS
+def browse_knesset_nums(knesset: int | None) -> tuple[int, ...]:
+    """The reading tab's Knesset filter: one Knesset, or every processed Knesset when none is chosen."""
+    return (knesset,) if knesset else tuple(config.PROTOCOL_KNESSET_NUMS)
+
+
+def _meta_payload(knesset: int | None) -> dict:
+    """Committees, MKs and parties of the Knesset (every processed Knesset for None) for the filter
+    dropdowns, plus the Knessets to choose from; cached per process and Knesset for WEB_META_CACHE_SECONDS
     (only successful answers are cached)."""
-    from utils import knesset_db
-
     with _meta_lock:
-        if _meta_cache and _meta_cache["expires_monotonic"] > time.monotonic():
-            return _meta_cache["payload"]
-        committees = knesset_db.get_all_committees(25)
-        mks = knesset_db.get_all_mks(25)
-        parties = knesset_db.get_all_parties(25)
-
-        def _mk_name(m: dict) -> str:
-            first = (m.get("mk_individual_first_name") or "").strip()
-            last  = (m.get("mk_individual_name")       or "").strip()
-            return f"{first} {last}".strip() or last or first
-
-        payload = {
-            "committees": [c["Name"] for c in committees],
-            "mks":        sorted({_mk_name(m) for m in mks if _mk_name(m)}),
-            "parties":    [p["party"] for p in parties],
-        }
-        _meta_cache.update(payload=payload, expires_monotonic=time.monotonic() + config.WEB_META_CACHE_SECONDS)
+        cached = _meta_cache.get(knesset)
+        if cached and cached[0] > time.monotonic():
+            return cached[1]
+        conn = store.connect(interrupt_after_seconds=config.DB_QUERY_TIMEOUT_SECONDS)
+        try:
+            filter_lists = store.browse_filter_lists(conn, browse_knesset_nums(knesset))
+        finally:
+            conn.close()
+        payload = {**filter_lists, "knessets": list(config.PROTOCOL_KNESSET_NUMS)}
+        _meta_cache[knesset] = (time.monotonic() + config.WEB_META_CACHE_SECONDS, payload)
         return payload
 
 
 @app.get("/api/meta")
-def get_meta():
-    """Return committees, MKs, and parties for filter dropdowns."""
+def get_meta(knesset: int | None = None):
+    """Committees, MKs and parties for the reading tab's filter dropdowns, of one Knesset or of all."""
+    knesset = valid.protocol_knesset_num(knesset)
+    if not store.exists():
+        print(f"[meta] {store.db_path()} missing; run scripts/build_knesset_db.py", flush=True)
+        return JSONResponse({"error": META_UNAVAILABLE_MESSAGE}, status_code=503)
     try:
-        return _meta_payload()
+        return _meta_payload(knesset)
     except Exception as exc:
         print(f"[meta] loading filter lists failed: {type(exc).__name__}: {exc}", flush=True)
         return JSONResponse({"error": META_UNAVAILABLE_MESSAGE}, status_code=503)
@@ -1280,8 +1372,7 @@ def _resolve_participant_filters(filters: BrowseFilterRequest) -> tuple[list[str
     return mk_ids, guest_name
 
 
-def _browse_search_meetings(query: str, sort: str, filters: BrowseFilterRequest, top_k: int,
-                            knesset_num: int) -> list[dict]:
+def _browse_search_meetings(query: str, sort: str, filters: BrowseFilterRequest, top_k: int) -> list[dict]:
     """
     Candidate meetings from the structural filters, then either FTS over their
     speeches (query given; one row per meeting, best speech as excerpt, score
@@ -1289,10 +1380,11 @@ def _browse_search_meetings(query: str, sort: str, filters: BrowseFilterRequest,
     first summary topic as excerpt, score 0). Raises _QueryTimedOut past DB_QUERY_TIMEOUT_SECONDS.
     """
     mk_ids, guest_name = _resolve_participant_filters(filters)
+    knesset_nums = browse_knesset_nums(filters.knesset)
     conn = _connect_for_query()
     try:
         candidate_meeting_ids = store.query_candidate_meeting_ids(
-            conn, knesset_num,
+            conn, knesset_nums,
             committees=[c.replace("_", " ").strip() for c in filters.committees] or None,
             date_from=filters.date_from or None, date_to=filters.date_to or None,
             mk_ids=mk_ids or None, parties=list(filters.parties) or None, guest_name=guest_name,
@@ -1301,7 +1393,7 @@ def _browse_search_meetings(query: str, sort: str, filters: BrowseFilterRequest,
             candidate_meeting_ids = [m for m in filters.meeting_ids
                                      if candidate_meeting_ids is None or m in set(candidate_meeting_ids)]
         if not query:
-            rows = store.recent_meetings(conn, knesset_num, limit=top_k,
+            rows = store.recent_meetings(conn, knesset_nums, limit=top_k,
                                          candidate_meeting_ids=candidate_meeting_ids)
             first_topics = store.first_topic_by_meeting(conn, [r["meeting_id"] for r in rows])
             for r in rows:
@@ -1312,7 +1404,7 @@ def _browse_search_meetings(query: str, sort: str, filters: BrowseFilterRequest,
             if not match:
                 return []
             try:
-                rows = store.meetings_by_best_speech(conn, match, knesset_num, limit=top_k, sort=sort,
+                rows = store.meetings_by_best_speech(conn, match, knesset_nums, limit=top_k, sort=sort,
                                                      candidate_meeting_ids=candidate_meeting_ids,
                                                      exact_match=_fts_exact_match(query))
             except sqlite3.Error as exc:
@@ -1376,7 +1468,7 @@ def browse_search(req: BrowseSearchRequest, request: Request):
     settings = request.app.state.settings
     top_k = max(1, min(req.top_k or settings.TOP_K_BROWSE, _MAX_TOP_K))
     try:
-        meetings_out = _browse_search_meetings(query, sort, filters, top_k, knesset_num=25)
+        meetings_out = _browse_search_meetings(query, sort, filters, top_k)
     except _QueryTimedOut:
         return JSONResponse({"error": QUERY_TIMEOUT_MESSAGE}, status_code=503)
 

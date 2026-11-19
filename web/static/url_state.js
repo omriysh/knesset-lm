@@ -2,11 +2,14 @@
  * url_state.js — the page URL as shareable state.
  *
  *   /research                      → research tab
- *   /protocols?q=&committee=&mk=&party=&guest=&from=&to=&meeting=&speech=&offset=&length=
+ *   /protocols?q=&knesset=&committee=&mk=&party=&guest=&from=&to=&meeting=&speech=&offset=&length=
  *                                  → reading tab: the search and filters, the open meeting, a speech in it,
  *                                    and a character range in that speech (src/utils/source_links.py
  *                                    builds the same links for the API)
- *   /                              → the default tab, URL left as is until the user moves
+ *   /chat                          → in-your-chat tab (connect the MCP)
+ *   /subjects…                     → subjects tab (subjects.js)
+ *   /about[/prompts|support|privacy|terms][?lang=en] → the help dialog over home (app.js)
+ *   /                              → the home tab, URL left as is until the user moves
  *
  * The reading tab's state lives in _protocolUrlState; browser.js / tabs.js update it through
  * updateProtocolUrl, and the address bar always shows it, so copying the address shares the view.
@@ -16,16 +19,21 @@
 
 const PROTOCOLS_PATH = '/protocols';
 const RESEARCH_PATH  = '/research';
-const CHAT_PATH      = '/';
+const PROFILES_PATH  = '/profiles';
+const CHAT_PATH      = '/chat';
+const GAME_PATH      = '/game';
+const ABOUT_PATH     = '/about';
+const HOME_PATH      = '/';
 
 const _LIST_FILTER_PARAMS = { committee: 'committees', mk: 'mks', party: 'parties' };
 const _MEETING_ID_RE  = /^p?\d{1,12}$/;
 const _SMALL_INT_RE   = /^\d{1,7}$/;
 const _ISO_DATE_RE    = /^\d{4}-\d{2}-\d{2}$/;
+const _KNESSET_NUM_RE = /^\d{1,3}$/;
 const _SHARE_INCLUDES_SEARCH_KEY = 'shareIncludesSearch';
 
 function emptyProtocolFilters() {
-  return { committees: [], mks: [], parties: [], guest: null, date_from: null, date_to: null };
+  return { knesset: null, committees: [], mks: [], parties: [], guest: null, date_from: null, date_to: null };
 }
 
 let _protocolUrlState = {
@@ -40,6 +48,7 @@ function readProtocolUrl(search = location.search) {
   for (const [param, key] of Object.entries(_LIST_FILTER_PARAMS)) {
     filters[key] = params.getAll(param).map(v => v.trim()).filter(Boolean);
   }
+  filters.knesset   = _KNESSET_NUM_RE.test(params.get('knesset') || '') ? Number(params.get('knesset')) : null;
   filters.guest     = (params.get('guest') || '').trim() || null;
   filters.date_from = _ISO_DATE_RE.test(params.get('from') || '') ? params.get('from') : null;
   filters.date_to   = _ISO_DATE_RE.test(params.get('to') || '')   ? params.get('to')   : null;
@@ -61,7 +70,7 @@ function readProtocolUrl(search = location.search) {
 
 function hasProtocolSearch(state) {
   const f = state.filters;
-  return !!(state.query || f.committees.length || f.mks.length || f.parties.length
+  return !!(state.query || f.knesset || f.committees.length || f.mks.length || f.parties.length
             || f.guest || f.date_from || f.date_to);
 }
 
@@ -69,6 +78,7 @@ function protocolPath(state, includeSearch = true) {
   const params = new URLSearchParams();
   if (includeSearch) {
     if (state.query) params.set('q', state.query);
+    if (state.filters.knesset) params.set('knesset', state.filters.knesset);
     for (const [param, key] of Object.entries(_LIST_FILTER_PARAMS)) {
       (state.filters[key] || []).forEach(v => params.append(param, v));
     }
@@ -122,7 +132,11 @@ let _activeTab = null;
 function setActiveTab(name, { writeUrl, push }) {
   _activeTab = name;
   if (!writeUrl) return;
-  if (name === 'chat') _writeUrl(CHAT_PATH, push);
+  if (name === 'home') _writeUrl(HOME_PATH, push);
+  else if (name === 'chat') _writeUrl(CHAT_PATH, push);
+  else if (name === 'game') _writeUrl(GAME_PATH, push);
+  else if (name === 'profiles') _writeUrl(profilesCurrentPath(), push);
+  else if (name === 'subjects') _writeUrl(subjectsCurrentPath(), push);
   else _writeUrl(name === 'research' ? RESEARCH_PATH : protocolPath(_protocolUrlState), push);
 }
 
